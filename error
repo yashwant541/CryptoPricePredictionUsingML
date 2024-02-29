@@ -1,0 +1,47 @@
+---------------------------------------------------------------------------
+TypeError                                 Traceback (most recent call last)
+<ipython-input-13-ff978ee166ff> in <module>
+      1 # this line enable to run the script but also import it as a module (without run)
+      2 if __name__ == '__main__':
+----> 3     run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
+
+<ipython-input-12-21e258b3d185> in run_text_analytics_chats(path, file_name)
+     44         print(df_clean['GIA_keywords_match'].value_counts())
+     45         print("CHECK CHECK CHECK CHECK CHECK")
+---> 46         log, keywords_match_summary, exclusion_summary = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded,
+     47                                                                              chat_file=chat_file_name)
+     48         print("Done with chat_file_stats_log")
+
+<ipython-input-10-2f53c0c09a10> in chat_file_stats_log(df_clean, df_excluded, chat_file)
+     28     print(df_clean.head())
+     29     # keywords match summary
+---> 30     keywords_match_summary = df_clean['GIA_keywords_match'].value_counts()
+     31 
+     32     # exclusions summary
+
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\base.py in value_counts(self, normalize, sort, ascending, bins, dropna)
+   1243         dtype: int64
+   1244         """
+-> 1245         result = value_counts(
+   1246             self,
+   1247             sort=sort,
+
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\algorithms.py in value_counts(values, sort, ascending, normalize, bins, dropna)
+    771 
+    772         else:
+--> 773             keys, counts = _value_counts_arraylike(values, dropna)
+    774 
+    775             result = Series(counts, index=keys, name=name)
+
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\algorithms.py in _value_counts_arraylike(values, dropna)
+    816         # TODO: handle uint8
+    817         f = getattr(htable, f"value_count_{ndtype}")
+--> 818         keys, counts = f(values, dropna)
+    819 
+    820         mask = isna(values)
+
+pandas\_libs\hashtable_func_helper.pxi in pandas._libs.hashtable.value_count_object()
+
+pandas\_libs\hashtable_func_helper.pxi in pandas._libs.hashtable.value_count_object()
+
+TypeError: data type 'object' not understood
