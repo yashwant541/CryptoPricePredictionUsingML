@@ -1,40 +1,34 @@
----------------------------------------------------------------------------
-TypeError                                 Traceback (most recent call last)
-<ipython-input-13-ff978ee166ff> in <module>
-      1 # this line enable to run the script but also import it as a module (without run)
-      2 if __name__ == '__main__':
-----> 3     run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
+def chat_file_stats_log(df_clean: pd.DataFrame, df_excluded: pd.DataFrame, chat_file: str) -> Tuple[dict, pd.Series, pd.Series]:
+    """
+    For a given chat log, generate summary information:
+    - log: key file information, Python libraries versions and number of rows at different stages
+    - keywords in chat log summary
+    - lines excluded from chat log (from data cleaning) summary
 
-<ipython-input-12-21e258b3d185> in run_text_analytics_chats(path, file_name)
-     42         print("Done with lexicon_matching")
-     43         # keywords_match_summary = df_clean['GIA_keywords_match'].value_counts()
----> 44         print(df_clean['GIA_keywords_match'].value_counts())
-     45         print("CHECK CHECK CHECK CHECK CHECK")
-     46         log, keywords_match_summary, exclusion_summary = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded,
+    Args:
+        df_clean (): chat log after data cleaning.
+        df_excluded (): lines excluded from chat log due to data cleaning.
+        chat_file (): name of the chat file.
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\base.py in value_counts(self, normalize, sort, ascending, bins, dropna)
-   1243         dtype: int64
-   1244         """
--> 1245         result = value_counts(
-   1246             self,
-   1247             sort=sort,
+    Returns:
+        log, keywords_match_summary, exclusions_summary
+    """
+    # create a log with key information about Python libraries and number of rows at different stages
+    log = {'file_name': chat_file,
+           'Script_run_date': str(date.today()),
+           'Python_version_&_Libraries': system_info(("Pandas",)),
+           'Total_rows_in_raw_file': len(df_clean) + len(df_excluded),
+           'Total_rows_excluded_due_to_cleaning': len(df_excluded),
+           'Total_rows_after_data_cleaning': len(df_clean),
+           'Nb_rows_with_a_match_from_lexicon': df_clean['GIA_keywords_match_flag'].sum(),
+           'Nb_cases_to_investigate': df_clean['GIA_group_case'].nunique(dropna=True)}
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\algorithms.py in value_counts(values, sort, ascending, normalize, bins, dropna)
-    771 
-    772         else:
---> 773             keys, counts = _value_counts_arraylike(values, dropna)
-    774 
-    775             result = Series(counts, index=keys, name=name)
+    # keywords match summary
+    # Convert the data type to string and handle missing values
+    df_clean['GIA_keywords_match'] = df_clean['GIA_keywords_match'].astype(str).replace('nan', np.nan)
+    keywords_match_summary = df_clean['GIA_keywords_match'].value_counts()
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\algorithms.py in _value_counts_arraylike(values, dropna)
-    816         # TODO: handle uint8
-    817         f = getattr(htable, f"value_count_{ndtype}")
---> 818         keys, counts = f(values, dropna)
-    819 
-    820         mask = isna(values)
+    # exclusions summary
+    exclusions_summary = df_excluded.loc[:, [col for col in df_excluded.columns if "excl" in col]].sum(axis=0).sort_values(ascending=False)
 
-pandas\_libs\hashtable_func_helper.pxi in pandas._libs.hashtable.value_count_object()
-
-pandas\_libs\hashtable_func_helper.pxi in pandas._libs.hashtable.value_count_object()
-
-TypeError: data type 'object' not understood
+    return log, keywords_match_summary, exclusions_summary
