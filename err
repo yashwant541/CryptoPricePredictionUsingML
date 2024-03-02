@@ -1,0 +1,5 @@
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 430, in run_text_analytics_chats
+    consolidated_log['Nb_cases_to_investigate'].append(df_clean['GIA_group_case'].nunique(dropna=True))
+
+AttributeError: 'str' object has no attribute 'append'
