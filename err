@@ -1,55 +1,37 @@
-@function_timer
-def run_text_analytics_chats(path: str = None, file_name: str = None) -> None:
-    """
-    Function to run the entire DA test for keywords analytics.
+Traceback (most recent call last):
 
-     Args:
-        file_name : name of the user input file
-        path : location of the user_parameters file.
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\internals\construction.py", line 564, in _list_to_arrays
+    columns = _validate_or_indexify_columns(content, columns)
 
-    Returns:
-        None
-    """
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\internals\construction.py", line 688, in _validate_or_indexify_columns
+    raise AssertionError(
 
-    # read input data
-    user_parameters, keywords_lexicon, cleaning_rules = input_data(path, file_name)
+AssertionError: 1 columns passed, passed data had 12 columns
 
-    # create the list of chat log files to process
-    files_list = os.listdir(user_parameters['chat_folder_path'])
 
-    # Initialise a list to store consolidated log data
-    consolidated_logs = []
+The above exception was the direct cause of the following exception:
 
-    # process each chat file
-    for chat_file_name in files_list:
-        # warning to inform user about the processing progress
-        print(f"Processing file: {chat_file_name}")
+Traceback (most recent call last):
 
-        if user_parameters['file_type'] == 'B':
-            df = read_bbg_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name)
-        elif user_parameters['file_type'] == 'S':
-            df = read_skype_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name,
-                                      skype_column=user_parameters['skype_column_name'])
-        else:
-            sys.exit('The file_type parameter is not properly set')
+  File "C:\Users\2011747\Downloads\untitled0.py", line 431, in <module>
+    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
 
-        df_clean, df_excluded = flag_lines_to_exclude(df=df, exclusions_table=cleaning_rules)
-        df_clean = lexicon_matching(df=df_clean, lexicon=keywords_lexicon, user_parameters=user_parameters)
-        log, _, _ = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded, chat_file=chat_file_name)
+  File "C:\Users\2011747\Downloads\untitled0.py", line 81, in wrapper
+    result = func(*args, **kwargs)
 
-        # Add 'File_name' to the log dictionary
-        log['File_name'] = chat_file_name
-
-        # Append the log dictionary to the consolidated logs list
-        consolidated_logs.append(log)
-
-    # Create a DataFrame from the consolidated logs list
-    consolidated_logs_df = pd.DataFrame(consolidated_logs)
-
-    # Save the consolidated log to an output file
-    consolidated_logs_df.to_excel(os.path.join(user_parameters['output_path'], 'consolidated_logs.xlsx'), index=False)
-
-    # Save the list of files at the output root folder
-    file_log = {'File_Name': files_list}
+  File "C:\Users\2011747\Downloads\untitled0.py", line 424, in run_text_analytics_chats
     pd.DataFrame.from_dict(file_log, orient='index', columns=['File_Name']).reset_index().to_csv(
-        os.path.join(user_parameters['output_path'], 'file_list.csv'), index=False, encoding='utf-8-sig')
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\frame.py", line 1309, in from_dict
+    return cls(data, index=index, columns=columns, dtype=dtype)
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\frame.py", line 509, in __init__
+    arrays, columns = to_arrays(data, columns, dtype=dtype)
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\internals\construction.py", line 524, in to_arrays
+    return _list_to_arrays(data, columns, coerce_float=coerce_float, dtype=dtype)
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\internals\construction.py", line 567, in _list_to_arrays
+    raise ValueError(e) from e
+
+ValueError: 1 columns passed, passed data had 12 columns
