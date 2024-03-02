@@ -1,5 +1,5 @@
-
-  File "C:\Users\2011747\Downloads\untitled0.py", line 430, in run_text_analytics_chats
-    consolidated_log['Nb_cases_to_investigate'].append(df_clean['GIA_group_case'].nunique(dropna=True))
-
-AttributeError: 'str' object has no attribute 'append'
+# Initialize a dictionary to store consolidated log data
+consolidated_log = {'Script_run_date': [], 'Python_version_&_Libraries': [],
+                    'Total_rows_in_raw_file': [], 'Total_rows_excluded_due_to_cleaning': [],
+                    'Total_rows_after_data_cleaning': [], 'Nb_rows_with_a_match_from_lexicon': [],
+                    'Nb_cases_to_investigate': []}
