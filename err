@@ -1,5 +1,55 @@
-# Initialize a dictionary to store consolidated log data
-consolidated_log = {'Script_run_date': [], 'Python_version_&_Libraries': [],
-                    'Total_rows_in_raw_file': [], 'Total_rows_excluded_due_to_cleaning': [],
-                    'Total_rows_after_data_cleaning': [], 'Nb_rows_with_a_match_from_lexicon': [],
-                    'Nb_cases_to_investigate': []}
+@function_timer
+def run_text_analytics_chats(path: str = None, file_name: str = None) -> None:
+    """
+    Function to run the entire DA test for keywords analytics.
+
+     Args:
+        file_name : name of the user input file
+        path : location of the user_parameters file.
+
+    Returns:
+        None
+    """
+
+    # read input data
+    user_parameters, keywords_lexicon, cleaning_rules = input_data(path, file_name)
+
+    # create the list of chat log files to process
+    files_list = os.listdir(user_parameters['chat_folder_path'])
+
+    # Initialise a list to store consolidated log data
+    consolidated_logs = []
+
+    # process each chat file
+    for chat_file_name in files_list:
+        # warning to inform user about the processing progress
+        print(f"Processing file: {chat_file_name}")
+
+        if user_parameters['file_type'] == 'B':
+            df = read_bbg_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name)
+        elif user_parameters['file_type'] == 'S':
+            df = read_skype_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name,
+                                      skype_column=user_parameters['skype_column_name'])
+        else:
+            sys.exit('The file_type parameter is not properly set')
+
+        df_clean, df_excluded = flag_lines_to_exclude(df=df, exclusions_table=cleaning_rules)
+        df_clean = lexicon_matching(df=df_clean, lexicon=keywords_lexicon, user_parameters=user_parameters)
+        log, _, _ = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded, chat_file=chat_file_name)
+
+        # Add 'File_name' to the log dictionary
+        log['File_name'] = chat_file_name
+
+        # Append the log dictionary to the consolidated logs list
+        consolidated_logs.append(log)
+
+    # Create a DataFrame from the consolidated logs list
+    consolidated_logs_df = pd.DataFrame(consolidated_logs)
+
+    # Save the consolidated log to an output file
+    consolidated_logs_df.to_excel(os.path.join(user_parameters['output_path'], 'consolidated_logs.xlsx'), index=False)
+
+    # Save the list of files at the output root folder
+    file_log = {'File_Name': files_list}
+    pd.DataFrame.from_dict(file_log, orient='index', columns=['File_Name']).reset_index().to_csv(
+        os.path.join(user_parameters['output_path'], 'file_list.csv'), index=False, encoding='utf-8-sig')
