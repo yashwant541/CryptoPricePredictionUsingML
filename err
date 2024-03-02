@@ -1,11 +1,85 @@
+def save_final_processed_files(user_parameters: dict, df_clean: pd.DataFrame, df_excluded: pd.DataFrame, file_name: str,
+                               file_number: int, log: dict, keywords_match_summary: pd.Series,
+                               exclusions_summary: pd.Series) -> None:
+    """
+    Save the different output files (lines to investigate, clean chat log, excluded lines, log and summary table).
+    Args:
+        user_parameters (): user parameters.
+        df_clean (): chat log after data cleaning.
+        df_excluded (): excluded chat log lines (following data cleaning).
+        file_name (): name of the chat log.
+        file_number (): file number in the file processing.
+        log (): script log.
+        keywords_match_summary (): summary table on keywords in lexicon found in the chat log.
+        exclusions_summary (): summary table about excluded lines.
+
+    Returns:
+        None
+    """
+    # location where to save output files
+    file_path = os.path.join(user_parameters['output_path'], str(file_number))
+
+    # for each chat file, create a new folder (file names are too long to be used as folder names)
+    try:
+        os.mkdir(file_path)
+    except FileExistsError:  # if folder already exists
+        pass
+
+    # save excluded lines
+    df_excluded.to_excel(f"{file_path}//{file_name}-EXCLUDED.xlsx")
+
+    # save clean filtered df
+    df_clean.to_excel(f"{file_path}//{file_name}-CLEAN.xlsx")
+
+    # save exceptions to investigate (flagged by case number, ignore all the cleaning columns for clarity)
+    m = ~df_clean['GIA_group_case'].isnull()
+    df_clean.loc[m, [col for col in df_clean.columns if "excl_" not in col]].to_excel(
+        f"{file_path}//{file_name}-TO_INVESTIGATE.xlsx")
+
+    # save log, keywords_match_summary, and exclusions_summary into a single Excel file
+    with pd.ExcelWriter(f"{file_path}//{file_name}-SUMMARY.xlsx") as writer:
+        pd.DataFrame.from_dict(log, orient='index', columns=['File_Name']).reset_index().to_excel(writer,
+                                                                                                  sheet_name='Log',
+                                                                                                  index=False)
+        keywords_match_summary.to_excel(writer, header=['Keywords_match'], sheet_name='Keywords_summary')
+        exclusions_summary.to_excel(writer, header=['Exclusion_rules'], sheet_name='Exclusions_summary')
+
+    # Append the log to a separate file for later use
+    log_df = pd.DataFrame.from_dict(log, orient='index', columns=['File_Name']).reset_index()
+    log_df.to_csv(os.path.join(user_parameters['output_path'], 'summary_logs.csv'), mode='a', header=False, index=False)
+
+
+def append_summary_logs(output_path: str, file_log: dict):
+    """
+    Append summary logs from each chat into a single file.
+
+    Args:
+        output_path: path where the summary logs will be saved.
+        file_log: dictionary containing file number and file name.
+
+    Returns:
+        None
+    """
+    appended_summary = pd.DataFrame()
+
+    for file_number, file_name in file_log.items():
+        summary_file_path = os.path.join(output_path, str(file_number), f"{file_name}-SUMMARY.xlsx")
+        summary_df = pd.read_excel(summary_file_path, sheet_name='Log')
+        summary_df['filename'] = file_name
+        appended_summary = pd.concat([appended_summary, summary_df])
+
+    # Save the appended summary log
+    appended_summary.to_excel(os.path.join(output_path, 'appended_summary_log.xlsx'), index=False)
+
+
 @function_timer
 def run_text_analytics_chats(path: str = None, file_name: str = None) -> None:
     """
     Function to run the entire DA test for keywords analytics.
 
-     Args:
-        file_name : name of the user input file
-        path : location of the user_parameters file.
+    Args:
+        file_name: name of the user input file
+        path: location of the user_parameters file.
 
     Returns:
         None
@@ -17,39 +91,45 @@ def run_text_analytics_chats(path: str = None, file_name: str = None) -> None:
     # create the list of chat log files to process
     files_list = os.listdir(user_parameters['chat_folder_path'])
 
-    # initialize an empty DataFrame to store the logs
-    consolidated_log_df = pd.DataFrame()
+    # initialise file log number and log used to save file names with number
+    file_number = 1
+    file_log: dict = {}  # key - file number -> value - file name
 
     # process each chat file
     for chat_file_name in files_list:
         # warning to inform user about the processing progress
-        print(f"file {chat_file_name} processing has started")
+        print(f"file {file_number} (out of {len(files_list)}) processing has started (file name: {chat_file_name})")
+
+        file_log[file_number] = chat_file_name
 
         if user_parameters['file_type'] == 'B':
             df = read_bbg_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name)
         elif user_parameters['file_type'] == 'S':
+            print("Insider User Parameters - Skype")
             df = read_skype_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name,
                                       skype_column=user_parameters['skype_column_name'])
         else:
             sys.exit('The file_type parameter is not properly set')
-
+        print("Done with user parameters - Skype")
         df_clean, df_excluded = flag_lines_to_exclude(df=df, exclusions_table=cleaning_rules)
+        print("Done with flag_lines_to_exclude")
         df_clean = lexicon_matching(df=df_clean, lexicon=keywords_lexicon, user_parameters=user_parameters)
-        log, _, _ = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded, chat_file=chat_file_name)
-
-        # append filename as a new column 'filename' in the log
-        log['filename'] = chat_file_name
-
-        # convert the dictionary log to a DataFrame and append it to consolidated_log_df
-        consolidated_log_df = consolidated_log_df.append(pd.DataFrame.from_dict(log, orient='index').transpose())
-
+        print("Done with lexicon_matching")
+        log, keywords_match_summary, exclusion_summary = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded,
+                                                                             chat_file=chat_file_name)
+        print("Done with chat_file_stats_log")
+        save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded,
+                                   file_name=chat_file_name, file_number=file_number, log=log,
+                                   keywords_match_summary=keywords_match_summary, exclusions_summary=exclusion_summary)
+        print("Done with save_final_processed_files")
         # warning to inform user about the processing progress
-        print(f"file {chat_file_name} has been processed")
+        print(f"file {file_number} (out of {len(files_list)}) has been processed (file name: {chat_file_name})")
+        file_number += 1
 
-    # Save the consolidated log to a CSV file
-    consolidated_log_df.to_csv(os.path.join(user_parameters['output_path'], 'consolidated_log.csv'), index=False, encoding='utf-8-sig')
+    # Save the list of files at the output root folder
+    pd.DataFrame.from_dict(file_log, orient='index', columns=['File_Name']).reset_index().to_csv(
+        os.path.join(user_parameters['output_path'], 'file_list.csv'), index=False, encoding='utf-8-sig')
 
+    # Append summary logs from each chat into a single file
+    append_summary_logs(user_parameters['output_path'], file_log)
 
-# this line enables running the script but also importing it as a module (without run)
-if __name__ == '__main__':
-    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
