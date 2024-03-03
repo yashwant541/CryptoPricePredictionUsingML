@@ -1,28 +1,41 @@
-Traceback (most recent call last):
+def chat_file_stats_log(df_clean: pd.DataFrame, df_excluded: pd.DataFrame, chat_file: str) -> Tuple[dict, pd.Series,
+                                                                                                pd.Series,
+                                                                                                pd.DataFrame]:
+    """
+    For a given chat log, generate summary information:
+    - log: key file information, Python libraries versions and number of rows at different stages
+    - keywords in chat log summary
+    - lines excluded from chat log (from data cleaning) summary
+    - same keywords summary
 
-  File "C:\Users\2011747\Downloads\untitled0.py", line 489, in <module>
-    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
+    Args:
+        df_clean (): chat log after data cleaning.
+        df_excluded (): lines excluded from chat log due to data cleaning.
+        chat_file (): name of the chat file.
 
-  File "C:\Users\2011747\Downloads\untitled0.py", line 81, in wrapper
-    result = func(*args, **kwargs)
+    Returns:
+        log, keywords_match_summary, exclusions_summary, same_keywords_summary
+    """
+    # create a log with key information about Python libraries and the number of rows at different stages
+    log = {'file_name': chat_file,
+           'Script_run_date': str(date.today()),
+           'Python_version_&_Libraries': system_info(("Pandas",)),
+           'Total_rows_in_raw_file': len(df_clean) + len(df_excluded),
+           'Total_rows_excluded_due_to_cleaning': len(df_excluded),
+           'Total_rows_after_data_cleaning': len(df_clean),
+           'Nb_rows_with_a_match_from_lexicon': df_clean['GIA_keywords_match_flag'].sum(),
+           'Nb_cases_to_investigate': df_clean['GIA_group_case'].nunique(dropna=True)}
 
-  File "C:\Users\2011747\Downloads\untitled0.py", line 469, in run_text_analytics_chats
-    log, keywords_match_summary, exclusion_summary = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded,
-
-  File "C:\Users\2011747\Downloads\untitled0.py", line 316, in chat_file_stats_log
+    # keywords match summary
+    # Convert 'GIA_keywords_match' column to string data type
+    df_clean['GIA_keywords_match'] = df_clean['GIA_keywords_match'].astype(str)
     keywords_match_summary = df_clean['GIA_keywords_match'].value_counts()
 
-  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\base.py", line 1245, in value_counts
-    result = value_counts(
+    # same keywords summary
+    same_keywords_summary = summarize_same_keywords(df_clean['GIA_keywords_match'])
 
-  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\algorithms.py", line 773, in value_counts
-    keys, counts = _value_counts_arraylike(values, dropna)
+    # exclusions summary
+    exclusions_summary = df_excluded.loc[:, [col for col in df_excluded.columns if "excl" in col]].sum(
+        axis=0).sort_values(ascending=False)
 
-  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\algorithms.py", line 818, in _value_counts_arraylike
-    keys, counts = f(values, dropna)
-
-  File "pandas\_libs\hashtable_func_helper.pxi", line 342, in pandas._libs.hashtable.value_count_object
-
-  File "pandas\_libs\hashtable_func_helper.pxi", line 354, in pandas._libs.hashtable.value_count_object
-
-TypeError: data type 'object' not understood
+    return log, keywords_match_summary, exclusions_summary, same_keywords_summary
