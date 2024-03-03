@@ -1,7 +1,9 @@
 def save_final_processed_files(user_parameters: dict, df_clean: pd.DataFrame, df_excluded: pd.DataFrame, same_keywords_summary: pd.DataFrame):
     # Check if 'Output_Path' key is present, otherwise set a default path
     output_path = user_parameters.get('Output_Path', '.')
-    file_name = user_parameters['File_name']
+    
+    # Print the keys in the user_parameters dictionary
+    print("Keys in user_parameters:", user_parameters.keys())
     
     # Combine the 'Same_keywords' and 'Same_keywords_list' columns
     same_keywords_summary['Same_keywords_list'] = same_keywords_summary.index
