@@ -1,12 +1,1 @@
-Traceback (most recent call last):
-
-  File "C:\Users\2011747\Downloads\untitled0.py", line 475, in <module>
-    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
-
-  File "C:\Users\2011747\Downloads\untitled0.py", line 82, in wrapper
-    result = func(*args, **kwargs)
-
-  File "C:\Users\2011747\Downloads\untitled0.py", line 457, in run_text_analytics_chats
-    save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded,
-
-TypeError: save_final_processed_files() got an unexpected keyword argument 'file_name'
+save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded, same_keywords_summary=same_keywords_summary)
