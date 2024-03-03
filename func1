@@ -1,0 +1,55 @@
+@function_timer
+def run_text_analytics_chats(path: str = None, file_name: str = None) -> None:
+    """
+    Function to run the entire DA test for keywords analytics.
+
+     Args:
+        file_name : name of the user input file
+        path : location of the user_parameters file.
+
+    Returns:
+        None
+    """
+
+    # read input data
+    user_parameters, keywords_lexicon, cleaning_rules = input_data(path, file_name)
+
+    # create the list of chat log files to process
+    files_list = os.listdir(user_parameters['chat_folder_path'])
+
+    # initialize an empty DataFrame to store the logs
+    consolidated_log_df = pd.DataFrame()
+
+    # process each chat file
+    for chat_file_name in files_list:
+        # warning to inform user about the processing progress
+        print(f"file {chat_file_name} processing has started")
+
+        if user_parameters['file_type'] == 'B':
+            df = read_bbg_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name)
+        elif user_parameters['file_type'] == 'S':
+            df = read_skype_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name,
+                                      skype_column=user_parameters['skype_column_name'])
+        else:
+            sys.exit('The file_type parameter is not properly set')
+
+        df_clean, df_excluded = flag_lines_to_exclude(df=df, exclusions_table=cleaning_rules)
+        df_clean = lexicon_matching(df=df_clean, lexicon=keywords_lexicon, user_parameters=user_parameters)
+        log, _, _ = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded, chat_file=chat_file_name)
+
+        # append filename as a new column 'filename' in the log
+        log['filename'] = chat_file_name
+
+        # convert the dictionary log to a DataFrame and append it to consolidated_log_df
+        consolidated_log_df = consolidated_log_df.append(pd.DataFrame.from_dict(log, orient='index').transpose())
+
+        # warning to inform user about the processing progress
+        print(f"file {chat_file_name} has been processed")
+
+    # Save the consolidated log to a CSV file
+    consolidated_log_df.to_csv(os.path.join(user_parameters['output_path'], 'consolidated_log.csv'), index=False, encoding='utf-8-sig')
+
+
+# this line enables running the script but also importing it as a module (without run)
+if __name__ == '__main__':
+    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
