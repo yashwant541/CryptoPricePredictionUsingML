@@ -1,0 +1,28 @@
+Traceback (most recent call last):
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 489, in <module>
+    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 81, in wrapper
+    result = func(*args, **kwargs)
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 469, in run_text_analytics_chats
+    log, keywords_match_summary, exclusion_summary = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded,
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 316, in chat_file_stats_log
+    keywords_match_summary = df_clean['GIA_keywords_match'].value_counts()
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\base.py", line 1245, in value_counts
+    result = value_counts(
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\algorithms.py", line 773, in value_counts
+    keys, counts = _value_counts_arraylike(values, dropna)
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\algorithms.py", line 818, in _value_counts_arraylike
+    keys, counts = f(values, dropna)
+
+  File "pandas\_libs\hashtable_func_helper.pxi", line 342, in pandas._libs.hashtable.value_count_object
+
+  File "pandas\_libs\hashtable_func_helper.pxi", line 354, in pandas._libs.hashtable.value_count_object
+
+TypeError: data type 'object' not understood
