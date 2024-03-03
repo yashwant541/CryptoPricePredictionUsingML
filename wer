@@ -1,6 +1,30 @@
 Traceback (most recent call last):
 
-  File "C:\Users\2011747\Downloads\untitled0.py", line 406, in <module>
-    def append_summary_logs(logs_list: List[dict]) -> pd.DataFrame:
+  File "C:\Users\2011747\Downloads\untitled0.py", line 498, in <module>
+    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
 
-NameError: name 'List' is not defined
+  File "C:\Users\2011747\Downloads\untitled0.py", line 82, in wrapper
+    result = func(*args, **kwargs)
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 480, in run_text_analytics_chats
+    save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded,
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 404, in save_final_processed_files
+    same_keywords_summary.to_excel(writer, header=['Same_keywords'], sheet_name='Same_Keywords_summary')
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\generic.py", line 2026, in to_excel
+    formatter.write(
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\formats\excel.py", line 734, in write
+    writer.write_cells(
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\excel\_xlsxwriter.py", line 212, in write_cells
+    for cell in cells:
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\formats\excel.py", line 688, in get_formatted_cells
+    for cell in itertools.chain(self._format_header(), self._format_body()):
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\formats\excel.py", line 516, in _format_header_regular
+    raise ValueError(
+
+ValueError: Writing 2 cols but got 1 aliases
