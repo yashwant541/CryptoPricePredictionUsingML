@@ -1,12 +1,66 @@
-Traceback (most recent call last):
+@function_timer
+def run_text_analytics_chats(path: str = None, file_name: str = None) -> None:
+    """
+    Function to run the entire DA test for keywords analytics.
 
-  File "C:\Users\2011747\Downloads\untitled0.py", line 492, in <module>
+     Args:
+        file_name : name of the user input file
+        path : location of the user_parameters file.
+
+    Returns:
+        None
+    """
+
+    # read input data
+    user_parameters, keywords_lexicon, cleaning_rules = input_data(path, file_name)
+
+    # create the list of chat log files to process
+    files_list = os.listdir(user_parameters['chat_folder_path'])
+
+    # initialise file log number and log used to save file names with number
+    file_number = 1
+    file_log: dict = {}  # key - file number -> value - file name
+
+    # process each chat file
+    for chat_file_name in files_list:
+        # warning to inform user about the processing progress
+        print(f"file {file_number} (out of {len(files_list)}) processing has started (file name: {chat_file_name})")
+
+        file_log[file_number] = chat_file_name
+
+        if user_parameters['file_type'] == 'B':
+            df = read_bbg_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name)
+        elif user_parameters['file_type'] == 'S':
+            print("Insider User Parameters - Skype")
+            df = read_skype_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name,
+                                      skype_column=user_parameters['skype_column_name'])
+        else:
+            sys.exit('The file_type parameter is not properly set')
+        print("Done with user parameters - Skype")
+        df_clean, df_excluded = flag_lines_to_exclude(df=df, exclusions_table=cleaning_rules)
+        print("Done with flag_lines_to_exclude")
+        df_clean = lexicon_matching(df=df_clean, lexicon=keywords_lexicon, user_parameters=user_parameters)
+        print("Done with lexicon_matching")
+
+        # Corrected function call
+        log, keywords_match_summary, exclusion_summary, same_keywords_summary = chat_file_stats_log(
+            df_clean=df_clean, df_excluded=df_excluded, chat_file=chat_file_name)
+
+        print("Done with chat_file_stats_log")
+        save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded,
+                                   file_name=chat_file_name, file_number=file_number, log=log,
+                                   keywords_match_summary=keywords_match_summary, exclusions_summary=exclusion_summary,
+                                   same_keywords_summary=same_keywords_summary)
+        print("Done with chat_file_stats_log")
+        # warning to inform the user about the processing progress
+        print(f"file {file_number} (out of {len(files_list)}) has been processed (file name: {chat_file_name})")
+        file_number += 1
+
+        # save the list of files at the output root folder
+        pd.DataFrame.from_dict(file_log, orient='index', columns=['File_Name']).reset_index().to_csv(
+            f"{user_parameters['output_path']}\\file_list.csv", index=False, encoding='utf-8-sig')
+
+
+# this line enable to run the script but also import it as a module (without run)
+if __name__ == '__main__':
     run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
-
-  File "C:\Users\2011747\Downloads\untitled0.py", line 81, in wrapper
-    result = func(*args, **kwargs)
-
-  File "C:\Users\2011747\Downloads\untitled0.py", line 472, in run_text_analytics_chats
-    log, keywords_match_summary, exclusion_summary = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded,
-
-ValueError: too many values to unpack (expected 3)
