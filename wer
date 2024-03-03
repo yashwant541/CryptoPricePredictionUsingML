@@ -1,1 +1,21 @@
-same_keywords_summary.reset_index().to_excel(writer, columns=['Same_keywords', 'Same_keywords_list'], sheet_name='Same_Keywords_summary', index=False)
+Traceback (most recent call last):
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 498, in <module>
+    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 82, in wrapper
+    result = func(*args, **kwargs)
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 480, in run_text_analytics_chats
+    save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded,
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 404, in save_final_processed_files
+    same_keywords_summary.reset_index().to_excel(writer, columns=['Same_keywords', 'Same_keywords_list'], sheet_name='Same_Keywords_summary', index=False)
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\generic.py", line 2015, in to_excel
+    formatter = ExcelFormatter(
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\formats\excel.py", line 405, in __init__
+    raise KeyError("Not all names specified in 'columns' are found")
+
+KeyError: "Not all names specified in 'columns' are found"
