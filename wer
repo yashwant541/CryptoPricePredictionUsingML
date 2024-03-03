@@ -1,1 +1,21 @@
-save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded, same_keywords_summary=same_keywords_summary)
+Traceback (most recent call last):
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 472, in <module>
+    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 82, in wrapper
+    result = func(*args, **kwargs)
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 457, in run_text_analytics_chats
+    save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded, same_keywords_summary=same_keywords_summary)
+
+  File "C:\Users\2011747\Downloads\untitled0.py", line 379, in save_final_processed_files
+    same_keywords_summary.to_excel(writer, header=True, columns=['Same_keywords', 'Same_keywords_list'], sheet_name='Same_Keywords_summary', index=False)
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\generic.py", line 2015, in to_excel
+    formatter = ExcelFormatter(
+
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\formats\excel.py", line 405, in __init__
+    raise KeyError("Not all names specified in 'columns' are found")
+
+KeyError: "Not all names specified in 'columns' are found"
