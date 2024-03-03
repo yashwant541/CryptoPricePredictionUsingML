@@ -1,26 +1,12 @@
-from typing import List
+Traceback (most recent call last):
 
-def save_final_processed_files(user_parameters: dict, df_clean: pd.DataFrame, df_excluded: pd.DataFrame, same_keywords_summary: pd.DataFrame) -> None:
-    output_path = user_parameters.get('output_path', 'output_files')
-    os.makedirs(output_path, exist_ok=True)
+  File "C:\Users\2011747\Downloads\untitled0.py", line 475, in <module>
+    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
 
-    # Save the cleaned and excluded DataFrames to Excel
-    cleaned_file_path = os.path.join(output_path, 'cleaned_data.xlsx')
-    excluded_file_path = os.path.join(output_path, 'excluded_data.xlsx')
+  File "C:\Users\2011747\Downloads\untitled0.py", line 82, in wrapper
+    result = func(*args, **kwargs)
 
-    with pd.ExcelWriter(cleaned_file_path, engine='xlsxwriter') as writer:
-        df_clean.to_excel(writer, sheet_name='Cleaned_Data', index=False)
+  File "C:\Users\2011747\Downloads\untitled0.py", line 457, in run_text_analytics_chats
+    save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded,
 
-    with pd.ExcelWriter(excluded_file_path, engine='xlsxwriter') as writer:
-        df_excluded.to_excel(writer, sheet_name='Excluded_Data', index=False)
-
-    # Save the same_keywords_summary DataFrame to Excel
-    same_keywords_summary.reset_index(inplace=True)
-    if 'Same_keywords' not in same_keywords_summary.columns:
-        same_keywords_summary.rename(columns={'Keywords_match': 'Same_keywords'}, inplace=True)
-
-    summary_file_path = os.path.join(output_path, 'same_keywords_summary.xlsx')
-    with pd.ExcelWriter(summary_file_path, engine='xlsxwriter') as writer:
-        same_keywords_summary.to_excel(writer, header=True, columns=['Same_keywords', 'Same_keywords_list'], sheet_name='Same_Keywords_summary', index=False)
-
-    print(f"Processed files saved to: {output_path}")
+TypeError: save_final_processed_files() got an unexpected keyword argument 'file_name'
