@@ -131,4 +131,15 @@ def run_text_analytics_chats(path: str = None, file_name: str = None) -> None:
                                    keywords_match_summary=keywords_match_summary, exclusions_summary=exclusion_summary,
                                    filename=chat_file_name)  # Pass filename here
 
-       
+        # warning to inform user about the processing progress
+        print(f"file {file_number} (out of {len(files_list)}) has been processed (file name: {chat_file_name})")
+        file_number += 1
+
+        # save the list of files at the output root folder
+        pd.DataFrame.from_dict(file_log, orient='index', columns=['File_Name']).reset_index().to_csv(
+            f"{user_parameters['output_path']}\\file_list.csv", index=False, encoding='utf-8-sig')
+
+
+# this line enable to run the script but also import it as a module (without run)
+if __name__ == '__main__':
+    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
