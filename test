@@ -27,6 +27,10 @@ def chat_file_stats_log(df_clean: pd.DataFrame, df_excluded: pd.DataFrame, chat_
         'Nb_cases_to_investigate': df_clean['GIA_group_case'].nunique(dropna=True)
     }
 
+    # Convert the log dictionary into a DataFrame and transpose it
+    log_df = pd.DataFrame(log, index=[0]).T.reset_index()
+    log_df.columns = ['Parameter', 'Value']
+
     # keywords match summary
     # Filter out NaN values and flatten the list of keywords
     keywords_match_summary = df_clean['GIA_keywords_match'].dropna().explode().value_counts()
@@ -35,4 +39,4 @@ def chat_file_stats_log(df_clean: pd.DataFrame, df_excluded: pd.DataFrame, chat_
     exclusions_summary = df_excluded.loc[:, [col for col in df_excluded.columns if "excl" in col]].sum(
         axis=0).sort_values(ascending=False)
 
-    return log, keywords_match_summary, exclusions_summary
+    return log_df, keywords_match_summary, exclusions_summary
