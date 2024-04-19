@@ -1,42 +1,20 @@
-def chat_file_stats_log(df_clean: pd.DataFrame, df_excluded: pd.DataFrame, chat_file: str, filename: str) -> Tuple[dict, pd.Series, pd.Series]:
-    """
-    For a given chat log, generate summary information:
-    - log: key file information, Python libraries versions and number of rows at different stages
-    - keywords in chat log summary
-    - lines excluded from chat log (from data cleaning) summary
+runfile('C:/Users/2011747/Downloads/untitled1.py', wdir='C:/Users/2011747/Downloads')
+file 1 (out of 12) processing has started (file name: AnjliKaushik.Bajaria@sc.com.xlsx)
+Traceback (most recent call last):
 
-    Args:
-        df_clean (): chat log after data cleaning.
-        df_excluded (): lines excluded from chat log due to data cleaning.
-        chat_file (): name of the chat file.
-        filename (): name of the processed file.
+  File "C:\Users\2011747\Downloads\untitled1.py", line 426, in <module>
+    run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
 
-    Returns:
-        log, keywords_match_summary, exclusions_summary
-    """
-    # Create a dictionary for log information
-    log = {
-        'file_name': chat_file,
-        'Processed_File_Name': filename,
-        'Script_run_date': str(date.today()),
-        'Python_version_&_Libraries': system_info(("Pandas",)),
-        'Total_rows_in_raw_file': len(df_clean) + len(df_excluded),
-        'Total_rows_excluded_due_to_cleaning': len(df_excluded),
-        'Total_rows_after_data_cleaning': len(df_clean),
-        'Nb_rows_with_a_match_from_lexicon': df_clean['GIA_keywords_match_flag'].sum(),
-        'Nb_cases_to_investigate': df_clean['GIA_group_case'].nunique(dropna=True)
-    }
+  File "C:\Users\2011747\Downloads\untitled1.py", line 81, in wrapper
+    result = func(*args, **kwargs)
 
-    # Convert the log dictionary into a DataFrame and transpose it
-    log_df = pd.DataFrame(log, index=[0]).T.reset_index()
-    log_df.columns = ['Parameter', 'Value']
+  File "C:\Users\2011747\Downloads\untitled1.py", line 410, in run_text_analytics_chats
+    save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded,
 
-    # keywords match summary
-    # Filter out NaN values and flatten the list of keywords
-    keywords_match_summary = df_clean['GIA_keywords_match'].dropna().explode().value_counts()
+  File "C:\Users\2011747\Downloads\untitled1.py", line 361, in save_final_processed_files
+    pd.DataFrame.from_dict(log, orient='index', columns=['File_Name']).reset_index().to_excel(writer,
 
-    # exclusions summary
-    exclusions_summary = df_excluded.loc[:, [col for col in df_excluded.columns if "excl" in col]].sum(
-        axis=0).sort_values(ascending=False)
+  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\frame.py", line 1299, in from_dict
+    if isinstance(list(data.values())[0], (Series, dict)):
 
-    return log_df, keywords_match_summary, exclusions_summary
+TypeError: 'numpy.ndarray' object is not callable
