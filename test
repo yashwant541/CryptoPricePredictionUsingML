@@ -1,20 +1,105 @@
-runfile('C:/Users/2011747/Downloads/untitled1.py', wdir='C:/Users/2011747/Downloads')
-file 1 (out of 12) processing has started (file name: AnjliKaushik.Bajaria@sc.com.xlsx)
-Traceback (most recent call last):
+def save_final_processed_files(user_parameters: dict, df_clean: pd.DataFrame, df_excluded: pd.DataFrame, file_name: str,
+                               file_number: int, log_df: pd.DataFrame, keywords_match_summary: pd.Series,
+                               exclusions_summary: pd.Series, filename: str) -> None:
+    """
+    Save the different output files (lines to investigate, clean chat log, excluded lines, log and summary table).
+    Args:
+        user_parameters (): user parameters.
+        df_clean (): chat log after data cleaning.
+        df_excluded (): excluded chat log lines (following data cleaning).
+        file_name (): name of the chat log.
+        file_number (): file number in the file processing.
+        log_df (): script log as DataFrame.
+        keywords_match_summary (): summary table on keywords in lexicon found in the chat log.
+        exclusions_summary (): summary table about excluded lines.
+        filename (): name of the processed file.
 
-  File "C:\Users\2011747\Downloads\untitled1.py", line 426, in <module>
+    Returns:
+        None
+    """
+    # location where to save output files
+    file_path = os.path.join(user_parameters['output_path'], str(file_number))
+
+    # for each chat file, create a new folder (file names are too long to be used as folder names)
+    try:
+        os.mkdir(file_path)
+    except FileExistsError:  # if folder already exists
+        pass
+
+    # save excluded lines
+    df_excluded.to_excel(f"{file_path}//{filename}-EXCLUDED.xlsx")
+
+    # save clean filtered df
+    df_clean.to_excel(f"{file_path}//{filename}-CLEAN.xlsx")
+
+    # save exceptions to investigate (flagged by case number, ignore all the cleaning columns for clarity)
+    m = ~df_clean['GIA_group_case'].isnull()
+    df_clean.loc[m, [col for col in df_clean.columns if "excl_" not in col]].to_excel(
+        f"{file_path}//{filename}-TO_INVESTIGATE.xlsx")
+
+    # save log, keywords_match_summary, and exclusions_summary into a single Excel file
+    with pd.ExcelWriter(f"{file_path}//{filename}-SUMMARY.xlsx") as writer:
+        log_df.to_excel(writer, header=False, sheet_name='Log')
+        keywords_match_summary.to_excel(writer, header=['Keywords_match'], sheet_name='Keywords_summary')
+        exclusions_summary.to_excel(writer, header=['Exclusion_rules'], sheet_name='Exclusions_summary')
+
+
+@function_timer
+def run_text_analytics_chats(path: str = None, file_name: str = None) -> None:
+    """
+    Function to run the entire DA test for keywords analytics.
+
+     Args:
+        file_name : name of the user input file
+        path : location of the user_parameters file.
+
+    Returns:
+        None
+    """
+
+    # read input data
+    user_parameters, keywords_lexicon, cleaning_rules = input_data(path, file_name)
+
+    # create the list of chat log files to process
+    files_list = os.listdir(user_parameters['chat_folder_path'])
+
+    # initialise file log number and log used to save file names with number
+    file_number = 1
+    file_log: dict = {}  # key - file number -> value - file name
+
+    # process each chat file
+    for chat_file_name in files_list:
+        # warning to inform user about the processing progress
+        print(f"file {file_number} (out of {len(files_list)}) processing has started (file name: {chat_file_name})")
+
+        file_log[file_number] = chat_file_name
+
+        if user_parameters['file_type'] == 'B':
+            df = read_bbg_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name)
+        elif user_parameters['file_type'] == 'S':
+            df = read_skype_chat_file(path=user_parameters['chat_folder_path'], file_name=chat_file_name,
+                                      skype_column=user_parameters['skype_column_name'])
+        else:
+            sys.exit('The file_type parameter is not properly set')
+
+        df_clean, df_excluded = flag_lines_to_exclude(df=df, exclusions_table=cleaning_rules)
+        df_clean = lexicon_matching(df=df_clean, lexicon=keywords_lexicon, user_parameters=user_parameters)
+        log_df, keywords_match_summary, exclusion_summary = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded,
+                                                                             chat_file=chat_file_name, filename=chat_file_name)
+        save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded,
+                                   file_name=chat_file_name, file_number=file_number, log_df=log_df,
+                                   keywords_match_summary=keywords_match_summary, exclusions_summary=exclusion_summary,
+                                   filename=chat_file_name)
+
+        # warning to inform user about the processing progress
+        print(f"file {file_number} (out of {len(files_list)}) has been processed (file name: {chat_file_name})")
+        file_number += 1
+
+        # save the list of files at the output root folder
+        pd.DataFrame.from_dict(file_log, orient='index', columns=['File_Name']).reset_index().to_csv(
+            f"{user_parameters['output_path']}\\file_list.csv", index=False, encoding='utf-8-sig')
+
+
+# this line enable to run the script but also import it as a module (without run)
+if __name__ == '__main__':
     run_text_analytics_chats(path=user_parameter_path, file_name=user_file)
-
-  File "C:\Users\2011747\Downloads\untitled1.py", line 81, in wrapper
-    result = func(*args, **kwargs)
-
-  File "C:\Users\2011747\Downloads\untitled1.py", line 410, in run_text_analytics_chats
-    save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded,
-
-  File "C:\Users\2011747\Downloads\untitled1.py", line 361, in save_final_processed_files
-    pd.DataFrame.from_dict(log, orient='index', columns=['File_Name']).reset_index().to_excel(writer,
-
-  File "C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\frame.py", line 1299, in from_dict
-    if isinstance(list(data.values())[0], (Series, dict)):
-
-TypeError: 'numpy.ndarray' object is not callable
