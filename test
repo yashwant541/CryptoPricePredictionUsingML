@@ -2,7 +2,7 @@ import pandas as pd
 from typing import Tuple
 from datetime import date
 
-def chat_file_stats_log(df_clean: pd.DataFrame, df_excluded: pd.DataFrame, chat_file: str, filename: str) -> Tuple[dict, pd.Series, pd.Series]:
+def chat_file_stats_log(df_clean: pd.DataFrame, df_excluded: pd.DataFrame, chat_file: str, filename: str) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
     """
     For a given chat log, generate summary information:
     - log: key file information, Python libraries versions and number of rows at different stages
@@ -32,8 +32,7 @@ def chat_file_stats_log(df_clean: pd.DataFrame, df_excluded: pd.DataFrame, chat_
     }
 
     # Convert the log dictionary into a DataFrame and transpose it
-    log_df = pd.DataFrame.from_dict(log, orient='index').reset_index()
-    log_df.columns = ['Parameter', 'Value']
+    log_df = pd.DataFrame.from_dict(log, orient='index').T
 
     # keywords match summary
     # Filter out NaN values and flatten the list of keywords
