@@ -37,9 +37,13 @@ def chat_file_stats_log(df_clean: pd.DataFrame, df_excluded: pd.DataFrame, chat_
     # keywords match summary
     # Filter out NaN values and flatten the list of keywords
     keywords_match_summary = df_clean['GIA_keywords_match'].dropna().explode().value_counts()
+    keywords_match_summary = pd.DataFrame(keywords_match_summary)
+    keywords_match_summary['file_name'] = chat_file
 
     # exclusions summary
     exclusions_summary = df_excluded.loc[:, [col for col in df_excluded.columns if "excl" in col]].sum(
         axis=0).sort_values(ascending=False)
+    exclusions_summary = pd.DataFrame(exclusions_summary)
+    exclusions_summary['file_name'] = chat_file
 
     return log_df, keywords_match_summary, exclusions_summary
