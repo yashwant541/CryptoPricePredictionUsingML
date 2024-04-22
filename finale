@@ -1,0 +1,61 @@
+import pandas as pd
+import os
+import re
+
+def determine_data_type(value):
+    # Function to determine data type
+    if pd.isnull(value):
+        return "null"
+    elif re.match(r'^\d+$', str(value)):
+        return "number"
+    elif re.match(r'^\d+\.?\d*$', str(value)):
+        return "number"
+    elif re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', str(value)):
+        return "email"
+    else:
+        return "text"
+
+def check_data_quality(file_path):
+    # Read the file using os module
+    with open(file_path, 'r', encoding="utf-8") as file:
+        df = pd.read_csv(file)
+
+    # Prepare log txt file
+    log_file_path = os.path.splitext(file_path)[0] + "_log.txt"
+    with open(log_file_path, "w") as log_file:
+        # Log total count of duplicate rows
+        duplicate_rows = df.duplicated().sum()
+        log_file.write(f"Total Count of Duplicate Rows: {duplicate_rows}\n")
+        log_file.write(f"Total Rows: {len(df)}\n")
+
+    # Determine majority data type for each column
+    majority_data_types = {}
+    for col in df.columns:
+        data_types = df[col].apply(determine_data_type)
+        majority_data_type = data_types.mode().iloc[0]
+        majority_data_types[col] = majority_data_type
+
+    # Prepare csv file for data type mismatches and null values
+    dtype_mismatches = []
+    for idx, row in df.iterrows():
+        for col, val in row.items():
+            majority_dtype = majority_data_types[col]
+            if pd.isnull(val):
+                description = f"The field {col} row value is null"
+                dtype_mismatches.append((idx, col, description))
+            else:
+                current_dtype = determine_data_type(val)
+                if current_dtype != majority_dtype:
+                    description = f"The field {col} is a mismatch. Majority data type: {majority_dtype}"
+                    dtype_mismatches.append((idx+1, col, description))
+
+    # Save data type mismatch analysis to a CSV file
+    dtype_mismatch_df = pd.DataFrame(dtype_mismatches, columns=["RowNumber", "Column", "Description"])
+    dtype_mismatch_csv_file_path = os.path.splitext(file_path)[0] + "_datatype_mismatches.csv"
+    dtype_mismatch_df.to_csv(dtype_mismatch_csv_file_path, index=False)
+
+# Define the file path here
+file_path = r"C:\Users\2011747\Documents\Audits\Test Run\FM Sales\input\Client Income Data\Client income data in Sales Credit Portal Q1 2024.csv"
+
+# Call the function with the defined file path
+check_data_quality(file_path)
