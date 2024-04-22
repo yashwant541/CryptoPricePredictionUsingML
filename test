@@ -1,49 +1,48 @@
-import pandas as pd
-from typing import Tuple
-from datetime import date
-
-def chat_file_stats_log(df_clean: pd.DataFrame, df_excluded: pd.DataFrame, chat_file: str, filename: str) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
+def save_final_processed_files(user_parameters: dict, df_clean: pd.DataFrame, df_excluded: pd.DataFrame, file_name: str,
+                               file_number: int, log_df: pd.DataFrame, keywords_match_summary: pd.Series,
+                               exclusions_summary: pd.Series, filename: str) -> None:
     """
-    For a given chat log, generate summary information:
-    - log: key file information, Python libraries versions and number of rows at different stages
-    - keywords in chat log summary
-    - lines excluded from chat log (from data cleaning) summary
-
+    Save the different output files (lines to investigate, clean chat log, excluded lines, log and summary table).
     Args:
+        user_parameters (): user parameters.
         df_clean (): chat log after data cleaning.
-        df_excluded (): lines excluded from chat log due to data cleaning.
-        chat_file (): name of the chat file.
+        df_excluded (): excluded chat log lines (following data cleaning).
+        file_name (): name of the chat log.
+        file_number (): file number in the file processing.
+        log_df (): script log as DataFrame.
+        keywords_match_summary (): summary table on keywords in lexicon found in the chat log.
+        exclusions_summary (): summary table about excluded lines.
         filename (): name of the processed file.
 
     Returns:
-        log, keywords_match_summary, exclusions_summary
+        None
     """
-    # Create a dictionary for log information
-    log = {
-        'file_name': chat_file,
-        'Processed_File_Name': filename,
-        'Script_run_date': str(date.today()),
-        'Python_version_&_Libraries': system_info(("Pandas",)),
-        'Total_rows_in_raw_file': len(df_clean) + len(df_excluded),
-        'Total_rows_excluded_due_to_cleaning': len(df_excluded),
-        'Total_rows_after_data_cleaning': len(df_clean),
-        'Nb_rows_with_a_match_from_lexicon': df_clean['GIA_keywords_match_flag'].sum(),
-        'Nb_cases_to_investigate': df_clean['GIA_group_case'].nunique(dropna=True)
-    }
+    # location where to save output files
+    file_path = os.path.join(user_parameters['output_path'], str(file_number))
 
-    # Convert the log dictionary into a DataFrame and transpose it
-    log_df = pd.DataFrame.from_dict(log, orient='index').T
+    # for each chat file, create a new folder (file names are too long to be used as folder names)
+    try:
+        os.mkdir(file_path)
+    except FileExistsError:  # if folder already exists
+        pass
 
-    # keywords match summary
-    # Filter out NaN values and flatten the list of keywords
-    keywords_match_summary = df_clean['GIA_keywords_match'].dropna().explode().value_counts()
-    keywords_match_summary = pd.DataFrame(keywords_match_summary)
-    keywords_match_summary['file_name'] = chat_file
+    # save excluded lines
+    df_excluded.to_excel(f"{file_path}//{filename}-EXCLUDED.xlsx")
 
-    # exclusions summary
-    exclusions_summary = df_excluded.loc[:, [col for col in df_excluded.columns if "excl" in col]].sum(
-        axis=0).sort_values(ascending=False)
-    exclusions_summary = pd.DataFrame(exclusions_summary)
-    exclusions_summary['file_name'] = chat_file
+    # save clean filtered df
+    df_clean.to_excel(f"{file_path}//{filename}-CLEAN.xlsx")
 
-    return log_df, keywords_match_summary, exclusions_summary
+    # save exceptions to investigate (flagged by case number, ignore all the cleaning columns for clarity)
+    m = ~df_clean['GIA_group_case'].isnull()
+    df_clean.loc[m, [col for col in df_clean.columns if "excl_" not in col]].to_excel(
+        f"{file_path}//{filename}-TO_INVESTIGATE.xlsx")
+
+    # save log, keywords_match_summary, and exclusions_summary into a single Excel file
+    with pd.ExcelWriter(f"{file_path}//{filename}-SUMMARY.xlsx") as writer:
+        log_df.to_excel(writer, header=True, sheet_name='Log')
+        keywords_match_summary.to_excel(writer, header=['Keywords_match', 'file_name'], sheet_name='Keywords_summary')
+        exclusions_summary.to_excel(writer, header=['Exclusion_rules', 'file_name'], sheet_name='Exclusions_summary')
+
+    # Save consolidated exclusions summary
+    exclusions_summary_consolidated = pd.DataFrame(exclusions_summary.groupby('Exclusion_rules').sum())
+    exclusions_summary_consolidated.to_excel(f"{user_parameters['output_path']}/Exclusions_Summary_Consolidated.xlsx")
