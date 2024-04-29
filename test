@@ -8,16 +8,10 @@ def consolidate_lexicons(keywords_match_summary: pd.Series) -> pd.DataFrame:
     Returns:
         Consolidated DataFrame.
     """
-    # Convert lexicons to lowercase
-    keywords_match_summary.index = keywords_match_summary.index.str.lower()
-
-    # Group by lowercase lexicon and sum up the counts
-    consolidated_summary = keywords_match_summary.groupby(keywords_match_summary.index).sum()
+    # Group by lexicon and sum up the counts
+    consolidated_summary = keywords_match_summary.groupby(keywords_match_summary.index, sort=False).sum()
 
     # Reset index to make lexicons a column again
     consolidated_summary = consolidated_summary.reset_index()
-
-    # Concatenate lexicons with the same count into a single string
-    consolidated_summary['Lexicon'] = consolidated_summary.apply(lambda row: ', '.join(row['Lexicon']), axis=1)
 
     return consolidated_summary
