@@ -17,7 +17,7 @@ def consolidate_lexicons(keywords_match_summary: pd.Series) -> pd.DataFrame:
     # Reset index to make lexicons a column again
     consolidated_summary = consolidated_summary.reset_index()
 
-    # Rename columns
-    consolidated_summary.columns = ['Lexicon', 'Count']
+    # Concatenate lexicons with the same count into a single string
+    consolidated_summary['Lexicon'] = consolidated_summary.apply(lambda row: ', '.join(row['Lexicon']), axis=1)
 
     return consolidated_summary
