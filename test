@@ -1,48 +1,23 @@
-def save_final_processed_files(user_parameters: dict, df_clean: pd.DataFrame, df_excluded: pd.DataFrame, file_name: str,
-                               file_number: int, log_df: pd.DataFrame, keywords_match_summary: pd.Series,
-                               exclusions_summary: pd.Series, filename: str) -> None:
+def consolidate_lexicons(keywords_match_summary: pd.Series) -> pd.DataFrame:
     """
-    Save the different output files (lines to investigate, clean chat log, excluded lines, log and summary table).
+    Consolidate the lexicons in the keywords_match_summary DataFrame.
+
     Args:
-        user_parameters (): user parameters.
-        df_clean (): chat log after data cleaning.
-        df_excluded (): excluded chat log lines (following data cleaning).
-        file_name (): name of the chat log.
-        file_number (): file number in the file processing.
-        log_df (): script log as DataFrame.
-        keywords_match_summary (): summary table on keywords in lexicon found in the chat log.
-        exclusions_summary (): summary table about excluded lines.
-        filename (): name of the processed file.
+        keywords_match_summary: Summary of keywords found in the chat logs.
 
     Returns:
-        None
+        Consolidated DataFrame.
     """
-    # location where to save output files
-    file_path = os.path.join(user_parameters['output_path'], str(file_number))
+    # Convert lexicons to lowercase
+    keywords_match_summary.index = keywords_match_summary.index.str.lower()
 
-    # for each chat file, create a new folder (file names are too long to be used as folder names)
-    try:
-        os.mkdir(file_path)
-    except FileExistsError:  # if folder already exists
-        pass
+    # Group by lowercase lexicon and sum up the counts
+    consolidated_summary = keywords_match_summary.groupby(keywords_match_summary.index).sum()
 
-    # save excluded lines
-    df_excluded.to_excel(f"{file_path}//{filename}-EXCLUDED.xlsx")
+    # Reset index to make lexicons a column again
+    consolidated_summary = consolidated_summary.reset_index()
 
-    # save clean filtered df
-    df_clean.to_excel(f"{file_path}//{filename}-CLEAN.xlsx")
+    # Rename columns
+    consolidated_summary.columns = ['Lexicon', 'Count']
 
-    # save exceptions to investigate (flagged by case number, ignore all the cleaning columns for clarity)
-    m = ~df_clean['GIA_group_case'].isnull()
-    df_clean.loc[m, [col for col in df_clean.columns if "excl_" not in col]].to_excel(
-        f"{file_path}//{filename}-TO_INVESTIGATE.xlsx")
-
-    # save log, keywords_match_summary, and exclusions_summary into a single Excel file
-    with pd.ExcelWriter(f"{file_path}//{filename}-SUMMARY.xlsx") as writer:
-        log_df.to_excel(writer, header=True, sheet_name='Log')
-        keywords_match_summary.to_excel(writer, header=['Keywords_match', 'file_name'], sheet_name='Keywords_summary')
-        exclusions_summary.to_excel(writer, header=['Exclusion_rules', 'file_name'], sheet_name='Exclusions_summary')
-
-    # Save consolidated exclusions summary
-    exclusions_summary_consolidated = pd.DataFrame(exclusions_summary.groupby('Exclusion_rules').sum())
-    exclusions_summary_consolidated.to_excel(f"{user_parameters['output_path']}/Exclusions_Summary_Consolidated.xlsx")
+    return consolidated_summary
