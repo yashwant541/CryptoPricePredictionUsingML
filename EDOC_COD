@@ -1,0 +1,150 @@
+This script appears to be a comprehensive workflow for performing data quality checks and generating reports on financial sales data. Let me outline the main steps:
+
+Read and Clean Data:
+Reads input files specified in a mapping dataframe (mapping_df) and cleans them.
+Slices, cleans, and prepares dataframes for analysis.
+Generate Additional Data:
+Generates a dataframe (excluded_clientincome_df) containing excluded client income data (zeros and nulls).
+Appends rows from the SSDR GIA manual file to the product category dataframe.
+Perform Data Quality Checks:
+Calls various functions (generate_dqc_ip, generate_dqc_ip_join, generate_duplicated_records_report, generate_critical_checks) to perform data quality checks on different aspects of the data, such as row counts, duplicate values, and critical fields during joins.
+Generate Summary Reports:
+Calls the return_df_key_frequency_greater_than_one function to generate summary reports for specific key fields with a frequency greater than one in various dataframes.
+Save Output Files:
+Saves output files based on a mapping dataframe (mapping_df) specifying the output file names and types.
+Run the Workflow:
+The runfmsalesall function serves as the master function that orchestrates the entire workflow.
+Overall, this script automates the process of data cleaning, quality checking, and report generation for financial sales data. It's a structured approach to ensure data integrity and reliability.
+
+This code seems to be part of a data processing pipeline for handling various types of input files related to financial trading data. Let's document it part by part.
+Section 1: Importing Libraries and Setting Paths
+python
+Copy code
+import pandas as pd import os import numpy as np import xlrd from datetime import datetime 
+The code starts by importing necessary libraries such as pandas, os, numpy, xlrd, and datetime.
+python
+Copy code
+mapping_file_path = r'C:\Users\2011747\Documents\Audits\Test Run\FM Sales\Mapping File.csv' output_folder_path = r'C:\Users\2011747\Documents\Audits\Test Run\FM Sales\output' output_dict = {} 
+Here, paths for a mapping file and an output folder are specified. An empty dictionary output_dict is initialized, likely for storing processed data.
+Section 2: Function to Read Input Files
+python
+Copy code
+def readallinputs(mapping_df, dfs): """ Function to read the inputs. Parameters ---------- mapping_df : Dataframe object DataFrame containing mapping information. dfs : Dictionary Dictionary to store DataFrames. Returns ------- dfs : Dictionary Dictionary with input files stored as values. """ 
+This function reads input files based on mapping information provided in a DataFrame mapping_df. It iterates through each row of the mapping DataFrame and reads files based on their types (specified in the "File_Type" column). It populates the dictionary dfs with DataFrames, using filenames as keys.
+Section 3: Function to Clean and Slice Input Files
+Function: slicecleanproductcategoryfile
+python
+Copy code
+def slicecleanproductcategoryfile(file): """ Function to process the input file. Parameters ---------- file : Dataframe object DataFrame representing the input file. Returns ------- file : Dataframe object Processed DataFrame. """ 
+This function processes the input file related to product categories. It selects specific columns from the DataFrame, replaces NaN values with 'blank', and returns the processed DataFrame.
+Function: slicecleansabrefile
+python
+Copy code
+def slicecleansabrefile(file): """ Function to process the input file. Parameters ---------- file : Dataframe object DataFrame representing the input file. Returns ------- file : Dataframe object Processed DataFrame. """ 
+This function processes the input file related to Sabre data. It selects specific columns, handles missing values and duplicates, and returns the processed DataFrame.
+Function: slicecleanmurexfile
+python
+Copy code
+def slicecleanmurexfile(file): """ Function to process the input file. Parameters ---------- file : Dataframe object DataFrame representing the input file. Returns ------- file : Dataframe object Processed DataFrame. """ 
+This function processes the input file related to Murex data. It performs similar operations as the previous functions and returns the processed DataFrame.
+These functions clean and slice input files to prepare them for further analysis or processing.
+
+
+Function: slicecleaneaffile
+This function processes the input file related to EAF (External Account Funding). It selects specific columns, handles missing values, and modifies date formats. The function also keeps the latest date rows based on the "Source" column for each unique "SCI_LE_ID" value.
+Function: slicecleancgfile
+This function processes the input file related to CG (Credit Grade). It selects specific columns, converts date formats, replaces missing values, and keeps only the first instance of each unique "Aa Le Id" after sorting by the "Aa Approved Date".
+Function: slicecleanclientincomefile
+This function processes the input file related to client income data. It replaces missing values with zero, converts numerical columns to string type, and filters out rows where both "First_Trade_ID" and "trade id" are zeros.
+Function: generate_excluded_clientincomefile
+This function generates an excluded client income file by filtering out rows where both "First_Trade_ID" and "trade id" are non-zero.
+Function: cross_ssdr_prodcat
+This function joins the SSDR (Sabre and Murex) files with the product category files based on common columns. It cleans the resulting DataFrames by removing null values and keeping the latest date rows.
+Function: cross_ci_cg_eaf_df
+This function joins the client income data with CG and then with EAF based on common columns.
+Function: cleanssdr_productcategory_df
+This function processes the SSDR_ProductCategory merge output DataFrame by cleaning and filtering rows based on specified criteria.
+Function: cross_cicgeaf_sabreprodcat
+This function cross-joins the (Client Income + CG + EAF) merge with the (Sabre + Product Category) merge and handles cascading for null values.
+Function: cross_cicgeafsabrprodcat_murprod
+This function cross-joins the (Client Income + CG + EAF + Sabre + Product Category) merge with the (Murex + Product Category) merge and handles cascading for null values. It also appends an excluded client income DataFrame to the final merged DataFrame and stores it in the output_dict dictionary under the key "FM_Sales_Final".
+These functions collectively process and merge various input files related to financial data, performing data cleaning and joining operations to generate a final DataFrame for FM Sales data.
+
+
+1. Function generate_dqc_ip
+Purpose:
+This function produces Data Quality Checks (DQC) for input files, including row count and duplicate values count.
+Parameters:
+product_category: Dataframe object - Dataframe containing product category information.
+sabre: Dataframe object - Dataframe containing Sabre data.
+murex: Dataframe object - Dataframe containing Murex data.
+cg: Dataframe object - Dataframe containing CG data.
+eaf: Dataframe object - Dataframe containing EAF data.
+client_income_data: Dataframe object - Dataframe containing client income data.
+Returns:
+None
+2. Function generate_dqc_ip_join
+Purpose:
+This function produces Data Quality Checks (DQC) for joined dataframes, including row count and duplicate values count.
+Parameters:
+sabre_product_category_df: Dataframe object - Dataframe resulting from joining Sabre and product category data.
+murex_product_category_df: Dataframe object - Dataframe resulting from joining Murex and product category data.
+client_income_cg_df: Dataframe object - Dataframe resulting from joining client income and CG data.
+client_income_cg_eaf_df: Dataframe object - Dataframe resulting from joining client income and EAF data.
+client_income_cg_eaf_sabre_product_category_df: Dataframe object - Dataframe resulting from joining client income, EAF, and Sabre product category data.
+client_income_cg_eaf_sabre_product_category_murex_product_category_df: Dataframe object - Dataframe resulting from joining client income, EAF, Sabre product category, and Murex product category data.
+Returns:
+None
+3. Function generate_duplicated_records_report
+Purpose:
+This function produces a report on duplicated records in input dataframes.
+Parameters:
+product_category: Dataframe object - Dataframe containing product category information.
+sabre: Dataframe object - Dataframe containing Sabre data.
+murex: Dataframe object - Dataframe containing Murex data.
+cg: Dataframe object - Dataframe containing CG data.
+eaf: Dataframe object - Dataframe containing EAF data.
+client_income_data: Dataframe object - Dataframe containing client income data.
+Returns:
+None
+4. Function generate_critical_checks
+Purpose:
+This function produces Data Quality Checks (DQC) for critical fields during joins, including row count, duplicate key ID count, and Null Key ID count.
+Parameters:
+product_category: Dataframe object - Dataframe containing product category information.
+sabre: Dataframe object - Dataframe containing Sabre data.
+murex: Dataframe object - Dataframe containing Murex data.
+cg: Dataframe object - Dataframe containing CG data.
+eaf: Dataframe object - Dataframe containing EAF data.
+client_income_data: Dataframe object - Dataframe containing client income data.
+sabre_product_category_df: Dataframe object - Dataframe resulting from joining Sabre and product category data.
+murex_product_category_df: Dataframe object - Dataframe resulting from joining Murex and product category data.
+client_income_cg_df: Dataframe object - Dataframe resulting from joining client income and CG data.
+client_income_cg_eaf_df: Dataframe object - Dataframe resulting from joining client income and EAF data.
+client_income_cg_eaf_sabre_product_category_df: Dataframe object - Dataframe resulting from joining client income, EAF, and Sabre product category data.
+client_income_cg_eaf_sabre_product_category_murex_product_category_df: Dataframe object - Dataframe resulting from joining client income, EAF, Sabre product category, and Murex product category data.
+Returns:
+None
+5. Function return_df_key_frequency_greater_than_one
+Purpose:
+This function generates a summary of key fields in a dataframe where the frequency of individual values of that field is greater than one.
+Parameters:
+df: Dataframe object - The dataframe for which the summary is generated.
+key_id: Dataframe object - The key field/column in the dataframe for which the frequency is checked.
+Returns:
+summary: Dataframe object - A summary dataframe containing the key field and the count of occurrences for each value where the count is greater than one.
+6. Function saveoutputfiles
+Purpose:
+This function saves output files based on a mapping dataframe that specifies the filenames and types.
+Parameters:
+mapping_df: Dataframe object - A dataframe containing information about output files, including filenames and types.
+Returns:
+None
+7. Function runfmsalesall
+Purpose:
+This function serves as the master function that orchestrates the entire workflow for processing financial sales data.
+Parameters:
+None
+Returns:
+None
+
