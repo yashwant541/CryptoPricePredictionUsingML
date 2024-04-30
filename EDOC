@@ -1,0 +1,831 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Dec 14 15:48:21 2023
+
+@author: 2011747
+"""
+################################################################################################################
+################################################################################################################
+################################################################################################################
+# This Python Script is automating excel processes and calculations involved.
+# The script involves data cleaning and data processing.
+# Here we are testing the quality of files and in between dataframes.
+# This Script involves the data prepping and the deep tests within the files.
+################################################################################################################
+################################################################################################################
+################################################################################################################
+
+#%load_ext autoreload
+#%autoreload 2
+import pandas as pd
+import os
+import numpy as np
+import xlrd
+from datetime import datetime
+
+
+mapping_file_path = r'C:\Users\2011747\Documents\Audits\Test Run\FM Sales\Mapping File.csv'
+output_folder_path = r'C:\Users\2011747\Documents\Audits\Test Run\FM Sales\output'
+output_dict = {}
+
+# ## Read Input Files
+## Keeping the reading and cleaning different since this makes the testing easier.
+def readallinputs(mapping_df, dfs):
+    """
+    Function to read the inputs.
+
+    Parameters
+    ----------
+    mapping_df : Dataframe object
+    dfs : Dictionary
+
+    Returns: the input files stored in the dictionary.
+    -------
+    dfs : Dictionary (Key, Value)
+
+    """
+    for index, row in mapping_df.iterrows():
+        if row['File_Type'] == "Input":
+            filename = row['Filename']
+            folder_path = row['Path']
+            print(filename)
+
+            os.chdir(folder_path)
+            file_list = os.listdir()
+            files_to_read = file_list
+
+            for file in files_to_read:
+                file_path = os.path.join(folder_path, file)
+
+                if filename == "Product_Category":
+                    df = pd.read_excel(file_path, skiprows=range(1,11))
+                    dfs[filename] = df
+                elif filename == "Murex":
+                    df = pd.read_csv(file_path, low_memory = False)
+                    dfs[filename] = df
+                elif filename == "Sabre":
+                    df = pd.read_csv(file_path, low_memory = False)
+                    dfs[filename] = df
+                elif filename == "EAF":
+                    df = pd.read_excel(file_path)
+                    dfs[filename] = df
+                elif filename == "CG":
+                    #df = pd.read_csv(file_path)
+                    df = pd.read_excel(file_path, engine = 'pyxlsb')
+                    dfs[filename] = df
+                elif filename == "Client_Income":
+                    df = pd.read_excel(file_path)
+                    dfs[filename] = df
+                elif filename == "SSDR_GIA":
+                    df = pd.read_csv(file_path)
+                    dfs[filename] = df                
+                else:
+                    print("********** File Name Unknown **********")
+    return dfs
+
+######################################################################################################
+######################################################################################################
+######################################################################################################
+# Cleaning and Slicing the readin file dataframes.
+
+def slicecleanproductcategoryfile(file):
+    """
+    Function to process the input file.
+
+    Parameters
+    ----------
+    file : Dataframe object
+
+    Returns
+    -------
+    file : Dataframe object
+
+    """
+    file = file[['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy','ISDA Taxonomy', 'Product Categorisation', 'Creation Date', 'Last Modified Date']]
+    #Replace blank/NaN with the text 'blank'    
+    file[['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy','ISDA Taxonomy']] = file[['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy',
+                                             'ISDA Taxonomy']].fillna('blank')
+    return file
+
+def slicecleansabrefile(file):
+    """
+    Function to process the input file.
+
+    Parameters
+    ----------
+    file : Dataframe object
+
+    Returns
+    -------
+    file : Dataframe object
+
+    """
+    file = file[['External_Trade_Id', 'Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type', 'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy']]
+    #Replacing the Sabre rows where External ID is Null with zeros.
+    file['External_Trade_Id'] = file['External_Trade_Id'].fillna(0).astype(str)
+    # Keeping the non null ID rows.
+    file = file[file['External_Trade_Id']!='0']
+    # Removing the duplicates row wise if there is.
+    file = file.drop_duplicates()
+    # Removing the rows where the key columns are all null.
+    # QQ - Ask bonnie like do we keep these rows where product category fields are all null.
+    file = file.dropna(subset=['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type',
+                                 'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy'], how='all')
+    #Replace blank/NaN with the text 'blank'
+    file[['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type', 'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy']] = file[['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type',
+                                            'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy']].fillna('blank')
+    return file
+
+def slicecleanmurexfile(file):
+    """
+    Function to process the input file.
+
+    Parameters
+    ----------
+    file : Dataframe object
+
+    Returns
+    -------
+    file : Dataframe object
+
+    """
+    file = file[['Trade_Id', 'Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type', 'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy']]
+    #Replacing the Sabre rows where External ID is Null with zeros.
+    file['Trade_Id'] = file['Trade_Id'].fillna(0).astype(str)
+    # This was required since the merged data had column row headers.
+    file = file[file['Trade_Id']!='Trade_Id']
+    # Keeping the non null ID rows.
+    file = file[file['Trade_Id']!='0']
+    # Removing the duplicates row wise if there is.
+    file = file.drop_duplicates()
+    # Removing the rows where the key columns are all null.
+    # QQ - Ask bonnie like do we keep these rows where product category fields are all null.
+    file = file.dropna(subset=['Instrument_Common.CFI_Code','Instrument_Common.Itradeable_Instrument_Type',
+                                 'Trade_Strategy','Instrument_Common.ISDA_Taxonomy'], how='all')
+    #Replace blank/NaN with the text 'blank'
+    file[['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type', 'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy']] = file[['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type',
+                                            'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy']].fillna('blank')
+    return file
+
+def slicecleaneaffile(file):
+    """
+    Function to process the input file.
+
+    Parameters
+    ----------
+    file : Dataframe object
+
+    Returns
+    -------
+    file : Dataframe object
+
+    """
+    file = file[['SCI_LE_ID', 'Approved_Category', 'Servicing Designation Country', 'Source']]
+    # Select only non missing Approved category
+    file = file[~file['Approved_Category'].isna()]
+    #Replacing null IDs with zero value.
+    file['SCI_LE_ID'] = file['SCI_LE_ID'].fillna(0).apply(str)
+    
+    #Changing the date format for the Source Date.
+    # Logic - Here we are trying to keep the latest row IDs - latest Source dates.
+    file['Source'] = pd.to_datetime(file['Source'], format='%Y%m%d')
+    latest_date_indices = file.groupby('SCI_LE_ID')['Source'].idxmax()
+    filtered_file = file.loc[latest_date_indices]
+    file = filtered_file.copy(deep=True)
+    
+    file = file.reset_index()
+    file = file[['SCI_LE_ID', 'Approved_Category', 'Servicing Designation Country']]
+    return file
+
+def slicecleancgfile(file):
+    """
+    Function to process the input file.
+
+    Parameters
+    ----------
+    file : Dataframe object
+
+    Returns
+    -------
+    file : Dataframe object
+
+    """
+    file = file[['Aa Le Id', 'Aa Approved Date', 'Aa Credit Grade']]
+    
+    # Start of CG data modification : 
+    #     1. convert Approved_date from string to date format
+    #     2. Replace "Aa Le Id", any missing values with zero and convert "Aa Le Id" as int
+    #     3. Sort "Aa Le Id" by "Approved Date" and take only the first instance for each "Aa Le Id"
+    file['Aa Approved Date'] = file['Aa Approved Date'].apply(lambda x : xlrd.xldate_as_datetime(int(x), 0))
+    file['Aa Le Id'] = file['Aa Le Id'].fillna(0).apply(str)
+    file = file[['Aa Le Id', 'Aa Approved Date', 'Aa Credit Grade']].sort_values(['Aa Le Id', 'Aa Approved Date']).drop_duplicates(subset = ['Aa Le Id'] , keep='first')
+    file.reset_index(inplace=True, drop=True)
+    
+    return file
+
+def slicecleanclientincomefile(file):
+    """
+    Function to process the input file.
+
+    Parameters
+    ----------
+    file : Dataframe object
+
+    Returns
+    -------
+    file : Dataframe object
+
+    """
+    # Data cleaning for client income data, to replace any missing values with zero
+    # and convert them as string for column "Trade ID"
+    file['trade id'] = file['trade id'].fillna(0).apply(int).apply(str)
+    file['le id'] = file['le id'].fillna(0).apply(str)
+    file['First_Trade_ID'] = file['First_Trade_ID'].fillna(0).apply(float).apply(int).apply(str)
+    #ClientIncome = ClientIncome[(ClientIncome['trade id']!='0')]
+    file = file[(file['First_Trade_ID']!='0')|(file['trade id']!='0')]
+    return file
+
+def generate_excluded_clientincomefile(file):
+    """
+    Function to process the input file.
+
+    Parameters
+    ----------
+    file : Dataframe object
+
+    Returns
+    -------
+    file : Dataframe object
+
+    """
+    file['trade id'] = file['trade id'].fillna(0).apply(int).apply(str)
+    file['le id'] = file['le id'].fillna(0).apply(str)
+    file['First_Trade_ID'] = file['First_Trade_ID'].fillna(0).apply(float).apply(int).apply(str)
+    filterA = (file['First_Trade_ID']=='0')&(file['trade id']=='0')
+    file = file[filterA]
+    new_columns = pd.DataFrame({'Aa Le Id', 'Aa Approved Date', 'Aa Credit Grade', 'SCI_LE_ID', 'Approved_Category', 'Servicing Designation Country', 'External_Trade_Id', 'CFI Code', 'Itradeable Instrument Type', 'Trade Strategy', 'ISDA Taxonomy', 'Product Categorisation'})
+    file = pd.concat([file, new_columns], axis=1)
+    return file
+
+def cross_ssdr_prodcat(sabre, murex, product_category):
+    """
+    Function to join the SSDR files individually with the product
+    category files.
+
+    Parameters
+    ----------
+    sabre : Dataframe object
+    murex : Dataframe object
+    product_category : Dataframe object
+
+    Returns
+    -------
+    sabre_product_category_df : Dataframe object
+    murex_product_category_df : Dataframe object
+
+    """
+    sabre_product_category_df = pd.merge(sabre, product_category,
+                                     left_on = ['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type',
+                                                'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy'],
+                                     right_on = ['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy',
+                                                 'ISDA Taxonomy'],
+                                     how='left')    
+    ####################################################################################################################    
+    murex_product_category_df = pd.merge(murex, product_category,
+                                         left_on = ['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type',
+                                                    'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy'],
+                                         right_on = ['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy',
+                                                     'ISDA Taxonomy'],
+                                         how='left')
+    ####################################################################################################################
+    ## Clean the Sabre Product Category dataframe and the Murex Category dataframe ##
+    ## Remove the rows where CFI_Code, Itradeable_Instrument_Type,Trade_Strategy, ISDA_Taxonomy are null
+    ## Keep the latest date row in Product Category Based on Last Modified Date.
+    
+    sabre_product_category_df = sabre_product_category_df[['External_Trade_Id', 'CFI Code', 'Itradeable Instrument Type',
+                                                           'Trade Strategy', 'ISDA Taxonomy','Product Categorisation',
+                                                           'Creation Date', 'Last Modified Date']]
+    murex_product_category_df = murex_product_category_df[['Trade_Id', 'CFI Code', 'Itradeable Instrument Type', 'Trade Strategy',
+                                                           'ISDA Taxonomy', 'Product Categorisation', 'Creation Date', 
+                                                           'Last Modified Date']]
+    # This function keeps the latest dates and non null four key IDs as mentioned in the comment for fuction.
+    sabre_product_category_df = cleanssdr_productcategory_df(sabre_product_category_df, 'External_Trade_Id')
+    murex_product_category_df = cleanssdr_productcategory_df(murex_product_category_df, 'Trade_Id')
+    
+    sabre_product_category_df = sabre_product_category_df[['External_Trade_Id', 'CFI Code', 'Itradeable Instrument Type',
+                                                           'Trade Strategy', 'ISDA Taxonomy','Product Categorisation']]
+    murex_product_category_df = murex_product_category_df[['Trade_Id', 'CFI Code', 'Itradeable Instrument Type', 'Trade Strategy',
+                                                           'ISDA Taxonomy', 'Product Categorisation']]
+    
+    return sabre_product_category_df, murex_product_category_df
+
+def cross_ci_cg_eaf_df(client_income_data, cg, eaf):
+    """
+    FUnction to join client income data with CG and then with EAF.
+
+    Parameters
+    ----------
+    client_income_data : Dataframe object
+    cg : Dataframe object
+    eaf : Dataframe object
+
+    Returns
+    -------
+    client_income_cg_df : Dataframe object
+    client_income_cg_eaf_df : Dataframe object
+
+    """
+    client_income_cg_df = pd.merge(client_income_data, cg,
+                               left_on = ['le id'],
+                               right_on = ['Aa Le Id'],
+                               how = 'left')
+    ####################################################################################################################
+    client_income_cg_eaf_df = pd.merge(client_income_cg_df, eaf,
+                               left_on = ['le id'],
+                               right_on = ['SCI_LE_ID'],
+                               how = 'left')
+    return client_income_cg_df, client_income_cg_eaf_df
+
+def cleanssdr_productcategory_df(df, keyid):
+    """
+    Function to process the SSDR_ProductCategory merge and clean
+    the output dataframe.
+
+    Parameters
+    ----------
+    df : Dataframe object
+    keyid : Dataframe object
+
+    Returns
+    -------
+    result_df : Dataframe object
+
+    """
+    df['Creation Date'] = pd.to_datetime(df['Creation Date'])
+    df['Last Modified Date'] = pd.to_datetime(df['Last Modified Date'])
+    
+    # This is to drop rows where all these four below columns are all null at the same time.
+    groupby_columns = ['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy','ISDA Taxonomy']
+    df = df.dropna(subset=groupby_columns, how= 'all')
+
+    df['CFI Code'] = df['CFI Code'].fillna(0).apply(str)
+    df['Itradeable Instrument Type'] = df['Itradeable Instrument Type'].fillna(0).apply(str)
+    df['Trade Strategy'] = df['Trade Strategy'].fillna(0).apply(str)
+    df['ISDA Taxonomy'] = df['ISDA Taxonomy'].fillna(0).apply(str)
+    
+    # This is to drop rows where all these four below columns are all null at the same time.
+    null_mask = df[['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy','ISDA Taxonomy']].isnull().all(axis=1)
+    # This is to keep the only latest 'Last Modified Date' Values. Otherwise remove the duplicate rows.
+    max_date_rows = df[~null_mask].sort_values(by='Last Modified Date').groupby(keyid).tail(1)
+    #Merge Non Null and Latest date rows.
+    result_df = pd.concat([df[null_mask], max_date_rows])
+    
+    return result_df
+
+def cross_cicgeaf_sabreprodcat(client_income_cg_eaf_df, sabre_product_category_df):
+    """
+    Function to cross the (Client Income + CG + EAF) Merge with
+    (Sabre + Product Category) Merge.
+
+    Parameters
+    ----------
+    client_income_cg_eaf_df : Dataframe object
+    sabre_product_category_df : Dataframe object
+
+    Returns
+    -------
+    client_income_cg_eaf_sabre_product_category_df : Dataframe object
+
+    """
+    client_income_cg_eaf_sabre_product_category_df_a = pd.merge(client_income_cg_eaf_df, sabre_product_category_df,
+                               left_on = ['trade id'],
+                               right_on = ['External_Trade_Id'],
+                               how = 'left')
+    # Cascade for External Trade ID is null.
+    no_match_mask_aa = client_income_cg_eaf_sabre_product_category_df_a['External_Trade_Id'].isnull()
+    columns_to_remove_aa = ['External_Trade_Id', 'CFI Code',
+                            'Itradeable Instrument Type', 'Trade Strategy', 'ISDA Taxonomy','Product Categorisation']
+    client_income_cg_eaf_sabre_product_category_df_a_copy = client_income_cg_eaf_sabre_product_category_df_a.copy(deep=True)
+    client_income_cg_eaf_sabre_product_category_df_a_copy = client_income_cg_eaf_sabre_product_category_df_a_copy.drop(columns=columns_to_remove_aa)
+    client_income_cg_eaf_sabre_product_category_df_b = pd.merge(client_income_cg_eaf_sabre_product_category_df_a_copy[no_match_mask_aa],
+                                                                sabre_product_category_df,
+                                                                left_on = ['First_Trade_ID'],
+                                                                right_on = ['External_Trade_Id'],
+                                                                how = 'left')
+    filtered_client_income_cg_eaf_sabre_product_category_df_a = client_income_cg_eaf_sabre_product_category_df_a[client_income_cg_eaf_sabre_product_category_df_a['External_Trade_Id'].notnull()]
+    client_income_cg_eaf_sabre_product_category_df = pd.concat([filtered_client_income_cg_eaf_sabre_product_category_df_a, client_income_cg_eaf_sabre_product_category_df_b], ignore_index=True)
+    return client_income_cg_eaf_sabre_product_category_df
+
+def cross_cicgeafsabrprodcat_murprod(client_income_cg_eaf_sabre_product_category_df, murex_product_category_df, excluded_clientincome_df):
+    """
+    Function to cross the (Client Income + CG + EAF + Sabre + Product Category)
+    Merge with
+    (Murex + Product Category) Merge.
+
+    Parameters
+    ----------
+    client_income_cg_eaf_sabre_product_category_df : Dataframe object
+    murex_product_category_df : Dataframe object
+
+    Returns
+    -------
+    client_income_cg_eaf_sabre_product_category_murex_product_category_df : Dataframe object
+
+    """
+    # Cascade for External Trade ID is null.
+    no_match_mask_bb = client_income_cg_eaf_sabre_product_category_df['External_Trade_Id'].isnull()
+    columns_to_remove_bb = ['External_Trade_Id', 'CFI Code',
+                            'Itradeable Instrument Type', 'Trade Strategy', 'ISDA Taxonomy', 'Product Categorisation']
+    client_income_cg_eaf_sabre_product_category_df_copy = client_income_cg_eaf_sabre_product_category_df.copy(deep=True)
+    client_income_cg_eaf_sabre_product_category_df_copy = client_income_cg_eaf_sabre_product_category_df_copy.drop(columns=columns_to_remove_bb)
+    ####################################################################################################################
+    client_income_cg_eaf_sabre_product_category_murex_product_category_df_a = pd.merge(client_income_cg_eaf_sabre_product_category_df_copy,
+                                                                                     murex_product_category_df,
+                                                                                     left_on = ['trade id'],
+                                                                                     right_on = ['Trade_Id'],
+                                                                                     how = 'left')
+    # Cascade for Trade ID is null.
+    no_match_mask_cc = client_income_cg_eaf_sabre_product_category_murex_product_category_df_a['Trade_Id'].isnull()
+    columns_to_remove_cc = ['Trade_Id', 'CFI Code',
+                            'Itradeable Instrument Type', 'Trade Strategy', 'ISDA Taxonomy', 'Product Categorisation']
+    client_income_cg_eaf_sabre_product_category_murex_product_category_df_a_copy = client_income_cg_eaf_sabre_product_category_murex_product_category_df_a.copy(deep=True)
+
+    client_income_cg_eaf_sabre_product_category_murex_product_category_df_a_copy = client_income_cg_eaf_sabre_product_category_murex_product_category_df_a_copy.drop(columns=columns_to_remove_cc)
+    client_income_cg_eaf_sabre_product_category_murex_product_category_df_b = pd.merge(client_income_cg_eaf_sabre_product_category_murex_product_category_df_a_copy[no_match_mask_cc],
+                                                                murex_product_category_df,
+                               left_on = ['First_Trade_ID'],
+                               right_on = ['Trade_Id'],
+                               how = 'left')
+    filtered_client_income_cg_eaf_sabre_product_category_murex_product_category_df_a = client_income_cg_eaf_sabre_product_category_murex_product_category_df_a[client_income_cg_eaf_sabre_product_category_murex_product_category_df_a['Trade_Id'].notnull()]
+    client_income_cg_eaf_sabre_product_category_murex_product_category_df = pd.concat([filtered_client_income_cg_eaf_sabre_product_category_murex_product_category_df_a, client_income_cg_eaf_sabre_product_category_murex_product_category_df_b], ignore_index=True)
+    client_income_cg_eaf_sabre_product_category_murex_product_category_df.drop(columns=['Aa Le Id', 'SCI_LE_ID', 'Trade_Id'], inplace=True)
+    fm_sales_finale_df = client_income_cg_eaf_sabre_product_category_murex_product_category_df.append(excluded_clientincome_df)
+    output_dict['FM_Sales_Final'] = fm_sales_finale_df
+   
+    return client_income_cg_eaf_sabre_product_category_murex_product_category_df
+
+
+# ## Testing - III - All fields - NA
+def generate_dqc_ip(product_category, sabre, murex, cg, eaf, client_income_data):
+    """Function to produce Data Quality Checks
+    
+
+    Parameters
+    ----------
+    product_category : Dataframe object
+    sabre : Dataframe object
+    murex : Dataframe object
+    cg : Dataframe object
+    eaf : Dataframe object
+    client_income_data : Dataframe object
+
+    Returns
+    -------
+    None.
+
+    """
+    dqc_ip_column_names = ['File Name', 'Row Count', 'Duplicates count']
+    dqc_ip = pd.DataFrame(columns=dqc_ip_column_names)
+    to_append = {'File Name': ['Product Category', 'Sabre', 'Murex', 'CG', 'EAF', 'Client Income'],
+                 'Row Count': [len(product_category), len(sabre), len(murex), len(cg), len(eaf), len(client_income_data)],
+                 'Duplicates count': [len(product_category[product_category.duplicated()]),
+                                      len(sabre[sabre.duplicated()]),
+                                      len(murex[murex.duplicated()]),
+                                      len(cg[cg.duplicated()]),
+                                      len(eaf[eaf.duplicated()]),
+                                      len(client_income_data[client_income_data.duplicated()])]
+                }
+    dqc_ip = dqc_ip.append(pd.DataFrame(to_append),ignore_index=True)
+    #dqc_ip.to_csv(r'C:\Users\2011747\Documents\Audits\FM_Sales\FM Sales Cube analytics - CFI logic\OP\DQC_IP.csv', index=False)
+    output_dict['generate_dqc_ip'] = dqc_ip
+    ################################################################################################################
+def generate_dqc_ip_join(sabre_product_category_df, murex_product_category_df, client_income_cg_df, client_income_cg_eaf_df, client_income_cg_eaf_sabre_product_category_df, client_income_cg_eaf_sabre_product_category_murex_product_category_df):    
+    """
+    Function to produce Data Quality Checks
+
+    Parameters
+    ----------
+    sabre_product_category_df : Dataframe object
+    murex_product_category_df : Dataframe object
+    client_income_cg_df : Dataframe object
+    client_income_cg_eaf_df : Dataframe object
+    client_income_cg_eaf_sabre_product_category_df : Dataframe object
+    client_income_cg_eaf_sabre_product_category_murex_product_category_df : Dataframe object
+
+    Returns
+    -------
+    None.
+
+    """
+    ## This DQC Test checks the row count and after duplicate values in the middle dataframes.    
+    dqc_join_ip_column_names = ['Join DF', 'Row Count', 'Duplicates count']
+    dqc_join_ip = pd.DataFrame(columns=dqc_join_ip_column_names)    
+    join_to_append = {'Join DF': ['Sabre_Product_Category_DF', 
+                                  'Murex_Product_Category_DF', 
+                                  'Client_Income_CG_DF', 
+                                  'Client_Income_CG_EAF_DF', 
+                                  'Client_Income_CG_EAF_Sabre_Product_Category_DF', 
+                                  'Client_Income_CG_EAF_Sabre_Product_Category_Murex_Product_Category_DF'],
+                 'Row Count': [len(sabre_product_category_df),
+                               len(murex_product_category_df),
+                               len(client_income_cg_df),
+                               len(client_income_cg_eaf_df),
+                               len(client_income_cg_eaf_sabre_product_category_df),
+                               len(client_income_cg_eaf_sabre_product_category_murex_product_category_df)],
+                 'Duplicates count': [len(sabre_product_category_df[sabre_product_category_df.duplicated()]),
+                                      len(murex_product_category_df[murex_product_category_df.duplicated()]),
+                                      len(client_income_cg_df[client_income_cg_df.duplicated()]),
+                                      len(client_income_cg_eaf_df[client_income_cg_eaf_df.duplicated()]),
+                                      len(client_income_cg_eaf_sabre_product_category_df[client_income_cg_eaf_sabre_product_category_df.duplicated()]),
+                                      len(client_income_cg_eaf_sabre_product_category_murex_product_category_df[client_income_cg_eaf_sabre_product_category_murex_product_category_df.duplicated()])]
+                }
+    dqc_join_ip = dqc_join_ip.append(pd.DataFrame(join_to_append),ignore_index=True)
+    dqc_join_ip.to_csv(r'C:\Users\2011747\Documents\Audits\FM_Sales\FM Sales Cube analytics - CFI logic\OP\DQC_IP_JOIN.csv', index=False)
+    output_dict['generate_dqc_ip_join'] = dqc_join_ip
+    
+    
+def generate_duplicated_records_report(product_category, sabre, murex, cg, eaf, client_income_data):
+    """
+    Function to produce Data Quality Checks
+
+    Parameters
+    ----------
+    product_category : Dataframe object
+    sabre : Dataframe object
+    murex : Dataframe object
+    cg : Dataframe object
+    eaf : Dataframe object
+    client_income_data : Dataframe object
+
+    Returns
+    -------
+    None.
+
+    """
+    product_category_duplicated_df = product_category[product_category.duplicated()]
+    sabre_duplicated_df = sabre[sabre.duplicated()]
+    murex_duplicated_df = murex[murex.duplicated()]
+    cg_duplicated_df = cg[cg.duplicated()]
+    eaf_duplicated_df = eaf[eaf.duplicated()]
+    client_income_duplicated_df = client_income_data[client_income_data.duplicated()]   
+    output_dict['product_category_duplicated'] = product_category_duplicated_df
+    output_dict['sabre_duplicated'] = sabre_duplicated_df
+    output_dict['murex_duplicated'] = murex_duplicated_df
+    output_dict['cg_duplicated'] = cg_duplicated_df
+    output_dict['eaf_duplicated'] = eaf_duplicated_df
+    output_dict['client_income_duplicated'] = client_income_duplicated_df
+    
+def generate_critical_checks(product_category, sabre, murex, cg, eaf, client_income_data, sabre_product_category_df, murex_product_category_df, client_income_cg_df, client_income_cg_eaf_df, client_income_cg_eaf_sabre_product_category_df, client_income_cg_eaf_sabre_product_category_murex_product_category_df):
+    """
+    Function to produce Data Quality Checks
+
+    Parameters
+    ----------
+    product_category : Dataframe object
+    sabre : Dataframe object
+    murex : Dataframe object
+    cg : Dataframe object
+    eaf : Dataframe object
+    client_income_data : Dataframe object
+    sabre_product_category_df : Dataframe object
+    murex_product_category_df : Dataframe object
+    client_income_cg_df : Dataframe object
+    client_income_cg_eaf_df : Dataframe object
+    client_income_cg_eaf_sabre_product_category_df : Dataframe object
+    client_income_cg_eaf_sabre_product_category_murex_product_category_df : Dataframe object
+
+    Returns
+    -------
+    None.
+
+    """
+    # ## Testing II - Critical Field Checks
+    
+    ## This DQC Test checks the row count, number of duplicate key ID count, and Null Key ID count during the joins.
+    
+    #dqc_join_field_column_names = []
+    dqc_join_field = pd.DataFrame()    
+    joinfield_to_append = {'Join DF': ['Sabre_Product_Category_DF', 
+                                  'Murex_Product_Category_DF', 
+                                  'Client_Income_CG_DF', 
+                                  'Client_Income_CG_EAF_DF', 
+                                  'Client_Income_CG_EAF_Sabre_Product_Category_DF', 
+                                  'Client_Income_CG_EAF_Sabre_Product_Category_Murex_Product_Category_DF'],
+                           'Join Type': ['left', 
+                                         'left', 
+                                         'left', 
+                                         'left', 
+                                         'left', 
+                                         'left'],
+                           'Row Count': [len(sabre_product_category_df),
+                                         len(murex_product_category_df),
+                                         len(client_income_cg_df),
+                                         len(client_income_cg_eaf_df),
+                                         len(client_income_cg_eaf_sabre_product_category_df),
+                                         len(client_income_cg_eaf_sabre_product_category_murex_product_category_df)],
+                           'Left table': ['Sabre', 
+                                          'Murex', 
+                                          'Client_Income', 
+                                          'Client_Income_CG', 
+                                          'Client_Income_CG_EAF',
+                                          'Client_Income_CG_EAF_Sabre_Product_Category'],
+                           'Left Join Key Fields': ["['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type','Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy']", 
+                                                    "['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type','Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy']", 
+                                                    "['le id']", 
+                                                    "['le id']", 
+                                                    "['First_Trade_ID']", 
+                                                    "['trade id']"],
+                           'Left Join Key Fields Duplicate Counts': [len(sabre[sabre.duplicated(subset=['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type', 'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy'])]),
+                                                                     len(murex[murex.duplicated(subset=['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type', 'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy'])]),
+                                                                     len(client_income_data[client_income_data.duplicated(subset=['le id'])]),
+                                                                     len(client_income_cg_df[client_income_cg_df.duplicated(subset=['le id'])]),
+                                                                     len(client_income_cg_eaf_df[client_income_cg_eaf_df.duplicated(subset=['First_Trade_ID'])]),
+                                                                     len(client_income_cg_eaf_sabre_product_category_df[client_income_cg_eaf_sabre_product_category_df.duplicated(subset=['trade id'])])],
+                           'Left Join Key Fields Null Counts': [sabre[['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type', 'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy']].isnull().all(axis=1).sum(),
+                                                                murex[['Instrument_Common.CFI_Code', 'Instrument_Common.Itradeable_Instrument_Type', 'Trade_Strategy', 'Instrument_Common.ISDA_Taxonomy']].isnull().all(axis=1).sum(),
+                                                                client_income_data['le id'].isna().sum(),
+                                                                client_income_cg_df['le id'].isna().sum(),
+                                                                client_income_cg_eaf_df['First_Trade_ID'].isna().sum(),
+                                                                client_income_cg_eaf_sabre_product_category_df['trade id'].isna().sum()
+                                                               ],
+                           'Right table': ['Product_Category', 
+                                           'Product_Category', 
+                                           'CG', 
+                                           'EAF', 
+                                           'Sabre_Product_Category', 
+                                           'Murex_Product_Category'],
+                           'Right Join Key Fields': ["['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy','ISDA Taxonomy']", 
+                                                     "['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy','ISDA Taxonomy']", 
+                                                     "['Aa Le Id']", 
+                                                     "['SCI_LE_ID']", 
+                                                     "['External_Trade_Id']", 
+                                                     "['Trade_Id']"],
+                           'Right Join Key Fields Duplicate Counts': [len(product_category[product_category.duplicated(subset=['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy','ISDA Taxonomy'])]),
+                                                                      len(product_category[product_category.duplicated(subset=['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy','ISDA Taxonomy'])]),
+                                                                      len(cg[cg.duplicated(subset=['Aa Le Id'])]),
+                                                                      len(eaf[eaf.duplicated(subset=['SCI_LE_ID'])]),
+                                                                      len(sabre_product_category_df[sabre_product_category_df.duplicated(subset=['External_Trade_Id'])]),
+                                                                      len(murex_product_category_df[murex_product_category_df.duplicated(subset=['Trade_Id'])])],
+                           'Right Join Key Fields Null Counts': [product_category[['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy','ISDA Taxonomy']].isnull().all(axis=1).sum(),
+                                                                 product_category[['CFI Code', 'Itradeable Instrument Type', 'Trade Strategy','ISDA Taxonomy']].isnull().all(axis=1).sum(),
+                                                                 cg['Aa Le Id'].isna().sum(),
+                                                                 eaf['SCI_LE_ID'].isna().sum(),
+                                                                 sabre_product_category_df['External_Trade_Id'].isna().sum(),
+                                                                 murex_product_category_df['Trade_Id'].isna().sum()
+                                                                ]
+                }
+    dqc_join_field = dqc_join_field.append(pd.DataFrame(joinfield_to_append),ignore_index=True)
+    #dqc_join_field.to_csv(r'C:\Users\2011747\Documents\Audits\FM_Sales\FM Sales Cube analytics - CFI logic\OP\dqc_join_field.csv', index=False)
+    output_dict['dqc_join_field'] = dqc_join_field
+    
+# ## Testing IV - Data Quality Checks - Summary
+# This function prepps the DQC for the KEY IDs where frequency of individual value of that field >1.
+
+def return_df_key_frequency_greater_than_one(df, key_id):
+    """
+    Function to produce Data Quality Checks
+
+    Parameters
+    ----------
+    df : Dataframe object
+    key_id : Dataframe object
+
+    Returns
+    -------
+    summary : Dataframe object
+
+    """
+    key_id_counts = df[key_id].value_counts()
+    key_ids_to_summary = key_id_counts[key_id_counts>1].index
+    filtered_df = df[df[key_id].isin(key_ids_to_summary)]
+    summary = filtered_df.groupby(key_id).apply(lambda group: group[key_id].count())
+    summary = pd.DataFrame(summary).reset_index()
+    summary.rename(columns={0:'Count'}, inplace=True)
+    return summary
+
+def saveoutputfiles(mapping_df):
+    """
+    Function to output save output files.
+
+    Parameters
+    ----------
+    mapping_df : TYPE
+        DESCRIPTION.
+
+    Returns
+    -------
+    None.
+
+    """
+    for index, row in mapping_df.iterrows():
+        if row['File_Type'] == "Output":
+            output_file_name = row['Filename']
+            #output_file_path = row['Path']
+            if output_file_name == 'FM_Sales_Final': subfolder_name = 'FM_Sales_Final'
+            else : subfolder_name = 'DQC'
+            
+            subfolder_path = os.path.join(output_folder_path, subfolder_name)
+            
+            if not os.path.exists(subfolder_path):
+                os.makedirs(subfolder_path)
+                
+            output_file_path = os.path.join(subfolder_path, output_file_name)
+
+            df_to_save = output_dict[output_file_name]
+            df_to_save.to_csv(output_file_path, index= False)
+    print("********** All output files saved to the subfolders path. **********")
+    
+    
+def runfmsalesall():
+    """
+    Master Function
+
+    Returns
+    -------
+    None.
+
+    """
+
+    # ## Readin and Cleanin
+    
+    mapping_df = pd.read_csv(mapping_file_path)
+    dfs= {}
+    
+    #Reading the files
+    dfs = readallinputs(mapping_df, dfs)
+    product_category_df = dfs['Product_Category']
+    murex_df = dfs['Murex']
+    sabre_df = dfs['Sabre']
+    eaf_df = dfs['EAF']
+    cg_df = dfs['CG']
+    clientincome_df = dfs['Client_Income']
+    
+    #Reading the SSDR GIA Manual file
+    ssdr_gia_df = dfs['SSDR_GIA']
+    
+    # Setting the row header and removing the header row from data - [Product Category]
+    product_category_df.columns = product_category_df.iloc[0]
+    product_category_df = product_category_df.drop(0)
+    product_category_df.reset_index(drop=True, inplace=True)
+    
+    # Slice and Clean - the dataframes
+    product_category = slicecleanproductcategoryfile(product_category_df)
+    murex = slicecleanmurexfile(murex_df)
+    sabre = slicecleansabrefile(sabre_df)
+    eaf = slicecleaneaffile(eaf_df)
+    cg = slicecleancgfile(cg_df)
+    client_income_data = slicecleanclientincomefile(clientincome_df)
+
+#   client_income_data.to_csv(r'C:\Users\2011747\Documents\Audits\FM_Sales\EXCEPTIONS Q1 FY24\client_income_data.csv')
+    
+    # Generating client income excluded rows - Zeros and nulls.
+    excluded_clientincome_df = generate_excluded_clientincomefile(clientincome_df)
+
+    #Append the RulesEngine Rows with Manual GIA rows for Product Category.
+    product_category = product_category.append(ssdr_gia_df)
+    
+    sabre_product_category_df, murex_product_category_df = cross_ssdr_prodcat(sabre, murex, product_category)
+    client_income_cg_df, client_income_cg_eaf_df = cross_ci_cg_eaf_df(client_income_data, cg, eaf)
+    client_income_cg_eaf_sabre_product_category_df = cross_cicgeaf_sabreprodcat(client_income_cg_eaf_df, sabre_product_category_df)
+    client_income_cg_eaf_sabre_product_category_murex_product_category_df = cross_cicgeafsabrprodcat_murprod(client_income_cg_eaf_sabre_product_category_df, murex_product_category_df, excluded_clientincome_df)
+    
+#    client_income_cg_eaf_df.to_csv(r'C:\Users\2011747\Documents\Audits\FM_Sales\EXCEPTIONS Q1 FY24\client_income_cg_eaf_df.csv')
+#    client_income_cg_eaf_sabre_product_category_df.to_csv(r'C:\Users\2011747\Documents\Audits\FM_Sales\EXCEPTIONS Q1 FY24\client_income_cg_eaf_sabre_product_category_df.csv')
+#    client_income_cg_eaf_sabre_product_category_murex_product_category_df.to_csv(r'C:\Users\2011747\Documents\Audits\FM_Sales\EXCEPTIONS Q1 FY24\client_income_cg_eaf_sabre_product_category_murex_product_category_df.csv')
+    
+    
+    ####################################################################################################################
+    ####################################################################################################################
+    ####################################################################################################################
+    ####################################################################################################################    
+    # ## Testing
+    # ## Testing I - Complete File Checks
+    ## This DQC Test checks the row count and after duplicate values in the input files. 
+    generate_dqc_ip(product_category, sabre, murex, cg, eaf, client_income_data)
+    generate_dqc_ip_join(sabre_product_category_df, murex_product_category_df, client_income_cg_df, client_income_cg_eaf_df, client_income_cg_eaf_sabre_product_category_df, client_income_cg_eaf_sabre_product_category_murex_product_category_df)
+    generate_duplicated_records_report(product_category, sabre, murex, cg, eaf, client_income_data)
+    generate_critical_checks(product_category, sabre, murex, cg, eaf, client_income_data, sabre_product_category_df, murex_product_category_df, client_income_cg_df, client_income_cg_eaf_df, client_income_cg_eaf_sabre_product_category_df, client_income_cg_eaf_sabre_product_category_murex_product_category_df)
+    ################################################################################################################
+    
+    summary_eaf_df = return_df_key_frequency_greater_than_one(eaf, 'SCI_LE_ID')
+    summary_cg_df = return_df_key_frequency_greater_than_one(cg, 'Aa Le Id')    
+    summary_client_income_cg_eaf_df_trade_id = return_df_key_frequency_greater_than_one(client_income_cg_eaf_df, 'trade id')
+    summary_client_income_cg_eaf_df_first_trade_id = return_df_key_frequency_greater_than_one(client_income_cg_eaf_df, 'First_Trade_ID')    
+    summary_murex_product_category_df = return_df_key_frequency_greater_than_one(murex_product_category_df, 'Trade_Id')
+    summary_sabre_product_category_df = return_df_key_frequency_greater_than_one(sabre_product_category_df, 'External_Trade_Id')    
+    ################################################################################################################    
+    
+    output_dict['summary_eaf_df'] = summary_eaf_df
+    output_dict['summary_cg_df'] = summary_cg_df
+    output_dict['summary_client_income_cg_eaf_df_trade_id'] = summary_client_income_cg_eaf_df_trade_id
+    output_dict['summary_client_income_cg_eaf_df_first_trade_id'] = summary_client_income_cg_eaf_df_first_trade_id
+    output_dict['summary_murex_product_category_df'] = summary_murex_product_category_df
+    output_dict['summary_sabre_product_category_df'] = summary_sabre_product_category_df
+    ################################################################################################################
+    saveoutputfiles(mapping_df)
+    ######################### END OF CODE #################################
+    
+# this line enable to run the script but also import it as a module (without run)
+if __name__ == '__main__':
+    runfmsalesall()    
+    
