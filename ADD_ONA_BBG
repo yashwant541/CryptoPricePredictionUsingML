@@ -1,48 +1,34 @@
-def flag_lines_to_exclude(df: pd.DataFrame, exclusions_table: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def read_bbg_chat_file(path: str, file_name: str) -> pd.DataFrame:
     """
-    For each regular expression listed in the exclusion rule, create a column to flag any match in the chat log.
-    Null/empty strings are also flagged (additional rules added by the script).
-
-    Notes
-        The first column of the dataframe is the one used as an input for the screening.
+    Load BBG chat log (txt file) into a dataframe.
+    Text file is read line by line.
+    Remove all whitespace characters (newlines and spaces) from the end of each line.
 
     Args:
-        df : chat log.
-        exclusions_table : exclusion rules to verify.
+        path : file location.
+        file_name : file name (extension included).
 
     Returns:
-        df_clean: chat log after data cleaning
-        df_excluded: lines excluded from the chat log due to data cleaning
+        Dataframe
     """
+    with open(f'{path}\\{file_name}', 'r', encoding='UTF-8') as file:
+        lines = [line.rstrip() for line in file]
 
-    if len(exclusions_table) == 0:
-        df_clean = df
-        df_excluded = pd.DataFrame(columns=list(df_clean.columns))
+    # Create a list to store the message numbers
+    message_numbers = []
 
-    else:
-        # create an exclusion rules dictionary
-        exclusions_rules = dict(zip(exclusions_table['Label'], exclusions_table['Regex']))
+    # Extract message numbers and chat text from each line
+    for line in lines:
+        match = re.search(r"MESSAGE#\s*:\s*(\d+)", line)
+        if match:
+            message_numbers.append(int(match.group(1)))
+        else:
+            message_numbers.append(None)  # If no message number found, append None
 
-        # for each rule, create a Boolean column flagging any match
-        for label, regular_expression in exclusions_rules.items():
-            df[f'excl_{label}'] = df.iloc[:, 0].str.contains(regular_expression, regex=True)
+    # Create DataFrame with chat text and message numbers
+    df = pd.DataFrame({'chat': lines, 'message_number': message_numbers}, dtype=str)
 
-        # flag empty strings and null
-        df[f'excl_null'] = (df.iloc[:, 0] == '') | (df.iloc[:, 0].isnull())
+    # extract dates (for information only)
+    df['GIA_date_from_chat'] = df.iloc[:, 0].str.extract("^(\d{2}\/\d{2}\/\d{4})")  # date format: DD/MM/YYYY
 
-        # flag duplicated lines (first duplicate is flagged as False, any duplicate is flagged as True
-        df['excl_duplicates'] = df.iloc[:, 0].duplicated(keep='first')
-
-        # flag all the rows to be excluded (True if any exclusion column is True)
-        df['exclusion_flag'] = df[[col for col in df.columns if 'excl_' in col]].any(axis=1)
-
-        # Add message number as a column to the excluded DataFrame
-        df_excluded = df.loc[df['exclusion_flag']].copy()  # Extract excluded lines
-        df_excluded['MESSAGE_NUMBER'] = df_excluded['chat'].str.extract(r"MESSAGE#:\s*(\d+)")  # Extract message number
-
-        # clean the chat logs by excluding flagged lines
-        m = df['exclusion_flag']
-        df_excluded = df_excluded.copy()
-        df_clean = df.loc[~m].copy()
-
-    return df_clean, df_excluded
+    return df
