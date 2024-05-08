@@ -1,0 +1,48 @@
+def flag_lines_to_exclude(df: pd.DataFrame, exclusions_table: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    For each regular expression listed in the exclusion rule, create a column to flag any match in the chat log.
+    Null/empty strings are also flagged (additional rules added by the script).
+
+    Notes
+        The first column of the dataframe is the one used as an input for the screening.
+
+    Args:
+        df : chat log.
+        exclusions_table : exclusion rules to verify.
+
+    Returns:
+        df_clean: chat log after data cleaning
+        df_excluded: lines excluded from the chat log due to data cleaning
+    """
+
+    if len(exclusions_table) == 0:
+        df_clean = df
+        df_excluded = pd.DataFrame(columns=list(df_clean.columns))
+
+    else:
+        # create an exclusion rules dictionary
+        exclusions_rules = dict(zip(exclusions_table['Label'], exclusions_table['Regex']))
+
+        # for each rule, create a Boolean column flagging any match
+        for label, regular_expression in exclusions_rules.items():
+            df[f'excl_{label}'] = df.iloc[:, 0].str.contains(regular_expression, regex=True)
+
+        # flag empty strings and null
+        df[f'excl_null'] = (df.iloc[:, 0] == '') | (df.iloc[:, 0].isnull())
+
+        # flag duplicated lines (first duplicate is flagged as False, any duplicate is flagged as True
+        df['excl_duplicates'] = df.iloc[:, 0].duplicated(keep='first')
+
+        # flag all the rows to be excluded (True if any exclusion column is True)
+        df['exclusion_flag'] = df[[col for col in df.columns if 'excl_' in col]].any(axis=1)
+
+        # Add message number as a column to the excluded DataFrame
+        df_excluded = df.loc[df['exclusion_flag']].copy()  # Extract excluded lines
+        df_excluded['MESSAGE_NUMBER'] = df_excluded['chat'].str.extract(r"MESSAGE#:\s*(\d+)")  # Extract message number
+
+        # clean the chat logs by excluding flagged lines
+        m = df['exclusion_flag']
+        df_excluded = df_excluded.copy()
+        df_clean = df.loc[~m].copy()
+
+    return df_clean, df_excluded
