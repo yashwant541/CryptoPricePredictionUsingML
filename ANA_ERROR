@@ -1,0 +1,19 @@
+Traceback (most recent call last):
+  File "C:\ProgramData\Anaconda3\lib\site-packages\qtpy\__init__.py", line 204, in <module>
+    from PySide import __version__ as PYSIDE_VERSION  # analysis:ignore
+ModuleNotFoundError: No module named 'PySide'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\ProgramData\Anaconda3\Scripts\spyder-script.py", line 10, in <module>
+    sys.exit(main())
+  File "C:\ProgramData\Anaconda3\lib\site-packages\spyder\app\start.py", line 201, in main
+    from spyder.app import mainwindow
+  File "C:\ProgramData\Anaconda3\lib\site-packages\spyder\app\mainwindow.py", line 53, in <module>
+    requirements.check_qt()
+  File "C:\ProgramData\Anaconda3\lib\site-packages\spyder\requirements.py", line 41, in check_qt
+    import qtpy
+  File "C:\ProgramData\Anaconda3\lib\site-packages\qtpy\__init__.py", line 210, in <module>
+    raise PythonQtError('No Qt bindings could be found')
+qtpy.PythonQtError: No Qt bindings could be found
