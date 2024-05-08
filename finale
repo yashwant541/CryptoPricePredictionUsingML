@@ -319,6 +319,28 @@ def chat_file_stats_log(df_clean: pd.DataFrame, df_excluded: pd.DataFrame, chat_
 
     return log_df, keywords_match_summary, exclusions_summary
 
+def consolidate_lexicons(keywords_match_summary: pd.Series) -> pd.DataFrame:
+    """
+    Consolidate the lexicons in the keywords_match_summary DataFrame.
+
+    Args:
+        keywords_match_summary: Summary of keywords found in the chat logs.
+
+    Returns:
+        Consolidated DataFrame.
+    """
+    # Convert lexicons to lowercase for grouping
+    keywords_match_summary_lower = keywords_match_summary.index.str.lower()
+
+    # Group by lowercase lexicon and sum up the counts
+    consolidated_summary = keywords_match_summary.groupby(keywords_match_summary_lower).sum()
+
+    # Reset index to make lexicons a column again and restore original case
+    consolidated_summary['Lexicon'] = keywords_match_summary.groupby(keywords_match_summary_lower, sort=False).apply(lambda x: x.index)
+    consolidated_summary = consolidated_summary.reset_index(drop=True)
+
+    return consolidated_summary
+
 def save_final_processed_files(user_parameters: dict, df_clean: pd.DataFrame, df_excluded: pd.DataFrame, file_name: str,
                                file_number: int, log_df: pd.DataFrame, keywords_match_summary: pd.Series,
                                exclusions_summary: pd.Series, filename: str) -> None:
@@ -405,12 +427,16 @@ def run_text_analytics_chats(path: str = None, file_name: str = None) -> None:
 
         df_clean, df_excluded = flag_lines_to_exclude(df=df, exclusions_table=cleaning_rules)
         df_clean = lexicon_matching(df=df_clean, lexicon=keywords_lexicon, user_parameters=user_parameters)
-        df_clean.to_csv(r"C:\Users\2011747\Documents\Audits\FM_Chat_Analytics_tool_110523\FM_Chat_Analytics_tool\output\123.csv")
         log_df, keywords_match_summary, exclusion_summary = chat_file_stats_log(df_clean=df_clean, df_excluded=df_excluded,
                                                                              chat_file=chat_file_name, filename=chat_file_name)
+
+        # Consolidate lexicons in keywords_match_summary
+        consolidated_summary = consolidate_lexicons(keywords_match_summary)
+
+        # Save consolidated summary to Excel file
         save_final_processed_files(user_parameters=user_parameters, df_clean=df_clean, df_excluded=df_excluded,
                                    file_name=chat_file_name, file_number=file_number, log_df=log_df,
-                                   keywords_match_summary=keywords_match_summary, exclusions_summary=exclusion_summary,
+                                   keywords_match_summary=consolidated_summary, exclusions_summary=exclusion_summary,
                                    filename=chat_file_name)
 
         # warning to inform user about the processing progress
