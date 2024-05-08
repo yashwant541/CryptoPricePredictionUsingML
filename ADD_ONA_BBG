@@ -15,18 +15,15 @@ def read_bbg_chat_file(path: str, file_name: str) -> pd.DataFrame:
         lines = [line.rstrip() for line in file]
 
     # Initialize variables
-    message_number = None
+    current_message_number = None
     message_numbers = []
 
     # Extract message numbers and chat text from each line
     for line in lines:
         match = re.search(r"MESSAGE#\s*:\s*(\d+)", line)
         if match:
-            message_number = int(match.group(1))
-        else:
-            # If message number is None, set it to -1 (to indicate no message number found)
-            message_number = -1 if message_number is None else message_number
-        message_numbers.append(message_number)
+            current_message_number = int(match.group(1))
+        message_numbers.append(current_message_number)
 
     # Create DataFrame with chat text and message numbers
     df = pd.DataFrame({'chat': lines, 'message_number': message_numbers}, dtype=str)
