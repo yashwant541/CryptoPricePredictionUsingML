@@ -20,9 +20,12 @@ def read_bbg_chat_file(path: str, file_name: str) -> pd.DataFrame:
 
     # Extract message numbers and chat text from each line
     for line in lines:
-        match = re.match(r"MESSAGE#\s*:\s*([0-9]+)", line)
-        if match:
-            current_message_number = int(match.group(1))
+        if line.startswith("Message#: "):
+            current_message_number = int(line.split(":")[1].strip())
+        elif line.startswith("======Begin Message======"):
+            current_message_number = None  # Reset message number at the start of each message
+        elif line.startswith("======End Message======"):
+            current_message_number = None  # Reset message number at the end of each message
         message_numbers.append(current_message_number)
 
     # Create DataFrame with chat text and message numbers
