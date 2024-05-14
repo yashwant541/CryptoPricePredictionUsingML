@@ -1,0 +1,40 @@
+import pandas as pd
+
+# Assuming you have DataFrames A, B, and C (or D) already defined
+
+# Merge A with B based on matching IDs (ID_a with ID_c and ID_b with ID_d)
+merged_AB_c = pd.merge(A, B, left_on='ID_a', right_on='ID_c', how='left')
+merged_AB_d = pd.merge(A, B, left_on='ID_a', right_on='ID_d', how='left')
+
+merged_AB = pd.concat([merged_AB_c, merged_AB_d], ignore_index=True)
+
+merged_AB_c = pd.merge(A, B, left_on='ID_b', right_on='ID_c', how='left')
+merged_AB_d = pd.merge(A, B, left_on='ID_b', right_on='ID_d', how='left')
+
+merged_AB = pd.concat([merged_AB, merged_AB_c, merged_AB_d], ignore_index=True)
+
+# Merge A with C (or D) based on matching IDs (ID_a with ID_c and ID_b with ID_d)
+merged_ABC_c = pd.merge(merged_AB, C, left_on='ID_a', right_on='ID_c', how='left')
+merged_ABC_d = pd.merge(merged_AB, C, left_on='ID_a', right_on='ID_d', how='left')
+
+merged_ABC = pd.concat([merged_ABC_c, merged_ABC_d], ignore_index=True)
+
+merged_ABC_c = pd.merge(merged_AB, C, left_on='ID_b', right_on='ID_c', how='left')
+merged_ABC_d = pd.merge(merged_AB, C, left_on='ID_b', right_on='ID_d', how='left')
+
+merged_ABC = pd.concat([merged_ABC, merged_ABC_c, merged_ABC_d], ignore_index=True)
+
+# Now, let's handle the Rating columns from B and C (or D)
+# If there are non-null values in Rating_C, use them; otherwise, use Rating_B
+merged_ABC['Rating'] = merged_ABC.apply(lambda row: row['Rating_C'] if pd.notnull(row['Rating_C']) else row['Rating_B'], axis=1)
+
+# Drop the intermediate Rating columns
+merged_ABC.drop(columns=['Rating_B', 'Rating_C'], inplace=True)
+
+# Now merged_ABC contains the Rating column from B or C (or D), based on matching IDs
+
+# Ensure row count of A is intact
+merged_ABC = merged_ABC.combine_first(A)
+
+# Ensure that if ID_a or ID_b were originally null in A, they remain null in the merged DataFrame
+merged_ABC.loc[A['ID_a'].isnull() | A['ID_b'].isnull(), ['ID_a', 'ID_b']] = None
