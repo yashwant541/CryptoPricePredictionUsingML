@@ -1,52 +1,105 @@
-Create a virtual environment:
-bash
-Copy code
-# Create a new directory for your project
-mkdir my_project
-cd my_project
+import os
+import tkinter as tk
+from tkinter import filedialog
+import pandas as pd
 
-# Create a virtual environment
-python3 -m venv myenv
+def combine_files():
+    folder_path = folder_path_entry.get()
 
-# Activate the virtual environment
-# On Windows
-myenv\Scripts\activate
-# On Unix or MacOS
-source myenv/bin/activate
-Install Cython and any other dependencies:
-bash
-Copy code
-pip install Cython
-Write your Python program: Create your Python program in a file, let's call it program.py.
+    # Check if the provided folder path is valid
+    if not os.path.isdir(folder_path):
+        result_label.config(text="Invalid folder path.", fg="red")
+        return
 
-Write a setup script: Create a setup.py file as described earlier.
+    output_file = output_file_entry.get()  # Get the output file name from the entry
 
-from setuptools import setup
-from Cython.Build import cythonize
+    # Get a list of all files in the folder
+    files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
 
-setup(
-    ext_modules=cythonize("program.py"),
-    options={"build_exe": {"includes": ["your_dependencies_if_any"]}}
-)
+    # Initialize an empty list to store DataFrame objects
+    dfs = []
 
+    # Iterate over each file
+    for file in files:
+        file_path = os.path.join(folder_path, file)  # Correctly construct file path
+        # Check if the file is CSV or XLSX
+        if file.endswith('.csv'):
+            try:
+                df = pd.read_csv(file_path)
+                df.insert(0, 'Source', file)
+                dfs.append(df)
+            except Exception as e:
+                result_label.config(text=f"Error reading CSV file '{file}': {e}", fg="red")
+                continue
+        elif file.endswith('.xlsx'):
+            try:
+                df = pd.read_excel(file_path)
+                df.insert(0, 'Source', file)
+                dfs.append(df)
+            except Exception as e:
+                result_label.config(text=f"Error reading XLSX file '{file}': {e}", fg="red")
+                continue
+        else:
+            result_label.config(text=f"Skipping file '{file}': Unsupported file format.", fg="orange")
+            continue
 
+    if not dfs:
+        result_label.config(text="No valid files found in the folder.", fg="orange")
+        return
 
+    # Concatenate all DataFrames in the list
+    combined_data = pd.concat(dfs, ignore_index=True)
 
+    # Write combined data to a new file
+    combined_file_path = os.path.join(output_folder_path_entry.get(), output_file)  # Construct output file path
+    combined_data.to_csv(combined_file_path, index=False)
+    result_label.config(text="Combined data saved to: " + combined_file_path, fg="green")
 
-Convert your Python code to Cython code: Save your Python code with a .pyx extension and add type annotations if desired.
+# Create the main window
+root = tk.Tk()
+root.title("Combine Files")
 
-Build the executable:
+# Function to open folder dialog and set folder path
+def browse_folder():
+    folder_path = filedialog.askdirectory()
+    folder_path_entry.delete(0, tk.END)
+    folder_path_entry.insert(0, folder_path)
 
-bash
-Copy code
-python setup.py build_exe
-Test your executable:
-bash
-Copy code
-cd dist
-./program.exe  # Or program.exe on Windows
-Deactivate the virtual environment:
-bash
-Copy code
-deactivate
-By following these steps within a virtual environment, you ensure that your project dependencies are kept separate from other Python projects on your system.
+# Function to open file dialog and set output file path
+def browse_output_folder():
+    output_folder_path = filedialog.askdirectory()
+    output_folder_path_entry.delete(0, tk.END)
+    output_folder_path_entry.insert(0, output_folder_path)
+
+# Create and place widgets
+folder_path_label = tk.Label(root, text="Folder Path:")
+folder_path_label.grid(row=0, column=0, padx=5, pady=5)
+
+folder_path_entry = tk.Entry(root, width=50)
+folder_path_entry.grid(row=0, column=1, padx=5, pady=5)
+
+browse_button = tk.Button(root, text="Browse", command=browse_folder)
+browse_button.grid(row=0, column=2, padx=5, pady=5)
+
+output_folder_path_label = tk.Label(root, text="Output Folder Path:")
+output_folder_path_label.grid(row=1, column=0, padx=5, pady=5)
+
+output_folder_path_entry = tk.Entry(root, width=50)
+output_folder_path_entry.grid(row=1, column=1, padx=5, pady=5)
+
+browse_output_button = tk.Button(root, text="Browse", command=browse_output_folder)
+browse_output_button.grid(row=1, column=2, padx=5, pady=5)
+
+output_file_label = tk.Label(root, text="Output File Name:")
+output_file_label.grid(row=2, column=0, padx=5, pady=5)
+
+output_file_entry = tk.Entry(root, width=50)
+output_file_entry.grid(row=2, column=1, padx=5, pady=5)
+
+combine_button = tk.Button(root, text="Combine", command=combine_files)
+combine_button.grid(row=3, column=1, padx=5, pady=5)
+
+result_label = tk.Label(root, text="")
+result_label.grid(row=4, column=0, columnspan=3, padx=5, pady=5)
+
+root.mainloop()
