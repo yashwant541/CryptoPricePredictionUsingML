@@ -1,4 +1,10 @@
 import pandas as pd
+import numpy as np
+import openpyxl
+
+# Patch openpyxl to use numpy.float64 instead of the deprecated numpy.float
+if hasattr(np, 'float'):
+    np.float = np.float64
 
 # Function to split rows based on comma-separated values in the first column
 def split_rows(input_file, output_file):
