@@ -1,25 +1,78 @@
-import pandas as pd
+---------------------------------------------------------------------------
+XLRDError                                 Traceback (most recent call last)
+<ipython-input-1-05a6d903c8ac> in <module>
+     23 
+     24 # Call the function with the specified input and output file paths
+---> 25 split_rows(input_file, output_file)
 
-# Function to split rows based on comma-separated values in the first column
-def split_rows(input_file, output_file):
-    # Read the input Excel file
-    df = pd.read_excel(input_file)
+<ipython-input-1-05a6d903c8ac> in split_rows(input_file, output_file)
+      4 def split_rows(input_file, output_file):
+      5     # Read the input Excel file
+----> 6     df = pd.read_excel(input_file)
+      7 
+      8     # Get the name of the first column
 
-    # Get the name of the first column
-    first_column = df.columns[0]
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\util\_decorators.py in wrapper(*args, **kwargs)
+    294                 )
+    295                 warnings.warn(msg, FutureWarning, stacklevel=stacklevel)
+--> 296             return func(*args, **kwargs)
+    297 
+    298         return wrapper
 
-    # Explode the first column by splitting comma-separated values into multiple rows
-    df = df.assign(**{first_column: df[first_column].str.split(',')}).explode(first_column).reset_index(drop=True)
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\excel\_base.py in read_excel(io, sheet_name, header, names, index_col, usecols, squeeze, dtype, engine, converters, true_values, false_values, skiprows, nrows, na_values, keep_default_na, na_filter, verbose, parse_dates, date_parser, thousands, comment, skipfooter, convert_float, mangle_dupe_cols)
+    302 
+    303     if not isinstance(io, ExcelFile):
+--> 304         io = ExcelFile(io, engine=engine)
+    305     elif engine and engine != io.engine:
+    306         raise ValueError(
 
-    # Strip any leading or trailing whitespace from the first column values
-    df[first_column] = df[first_column].str.strip()
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\excel\_base.py in __init__(self, path_or_buffer, engine)
+    865         self._io = stringify_path(path_or_buffer)
+    866 
+--> 867         self._reader = self._engines[engine](self._io)
+    868 
+    869     def __fspath__(self):
 
-    # Write the resulting DataFrame to an output Excel file
-    df.to_excel(output_file, index=False)
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\excel\_xlrd.py in __init__(self, filepath_or_buffer)
+     20         err_msg = "Install xlrd >= 1.0.0 for Excel support"
+     21         import_optional_dependency("xlrd", extra=err_msg)
+---> 22         super().__init__(filepath_or_buffer)
+     23 
+     24     @property
 
-# Input and output file paths
-input_file = 'input.xlsx'
-output_file = 'output.xlsx'
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\excel\_base.py in __init__(self, filepath_or_buffer)
+    351             self.book = self.load_workbook(filepath_or_buffer)
+    352         elif isinstance(filepath_or_buffer, str):
+--> 353             self.book = self.load_workbook(filepath_or_buffer)
+    354         elif isinstance(filepath_or_buffer, bytes):
+    355             self.book = self.load_workbook(BytesIO(filepath_or_buffer))
 
-# Call the function with the specified input and output file paths
-split_rows(input_file, output_file)
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\excel\_xlrd.py in load_workbook(self, filepath_or_buffer)
+     35             return open_workbook(file_contents=data)
+     36         else:
+---> 37             return open_workbook(filepath_or_buffer)
+     38 
+     39     @property
+
+C:\ProgramData\Anaconda3\lib\site-packages\xlrd\__init__.py in open_workbook(filename, logfile, verbosity, use_mmap, file_contents, encoding_override, formatting_info, on_demand, ragged_rows)
+    146 
+    147     from . import book
+--> 148     bk = book.open_workbook_xls(
+    149         filename=filename,
+    150         logfile=logfile,
+
+C:\ProgramData\Anaconda3\lib\site-packages\xlrd\book.py in open_workbook_xls(filename, logfile, verbosity, use_mmap, file_contents, encoding_override, formatting_info, on_demand, ragged_rows)
+     80     bk = Book()
+     81     try:
+---> 82         bk.biff2_8_load(
+     83             filename=filename, file_contents=file_contents,
+     84             logfile=logfile, verbosity=verbosity, use_mmap=use_mmap,
+
+C:\ProgramData\Anaconda3\lib\site-packages\xlrd\book.py in biff2_8_load(self, filename, file_contents, logfile, verbosity, use_mmap, encoding_override, formatting_info, on_demand, ragged_rows)
+    637                     if self.mem: break
+    638                 else:
+--> 639                     raise XLRDError("Can't find workbook in OLE2 compound document")
+    640             else:
+    641                 for qname in ['Workbook', 'Book']:
+
+XLRDError: Can't find workbook in OLE2 compound document
