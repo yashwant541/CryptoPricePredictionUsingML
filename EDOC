@@ -1,100 +1,25 @@
----------------------------------------------------------------------------
-AttributeError                            Traceback (most recent call last)
-<ipython-input-2-ba71357fafeb> in <module>
-     23 
-     24 # Call the function with the specified input and output file paths
----> 25 split_rows(input_file, output_file)
+import pandas as pd
 
-<ipython-input-2-ba71357fafeb> in split_rows(input_file, output_file)
-      4 def split_rows(input_file, output_file):
-      5     # Read the input Excel file using the openpyxl engine
-----> 6     df = pd.read_excel(input_file, engine='openpyxl')
-      7 
-      8     # Get the name of the first column
+# Function to split rows based on comma-separated values in the first column
+def split_rows(input_file, output_file):
+    # Read the input Excel file using the openpyxl engine
+    df = pd.read_excel(input_file, engine='openpyxl')
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\util\_decorators.py in wrapper(*args, **kwargs)
-    294                 )
-    295                 warnings.warn(msg, FutureWarning, stacklevel=stacklevel)
---> 296             return func(*args, **kwargs)
-    297 
-    298         return wrapper
+    # Get the name of the first column
+    first_column = df.columns[0]
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\excel\_base.py in read_excel(io, sheet_name, header, names, index_col, usecols, squeeze, dtype, engine, converters, true_values, false_values, skiprows, nrows, na_values, keep_default_na, na_filter, verbose, parse_dates, date_parser, thousands, comment, skipfooter, convert_float, mangle_dupe_cols)
-    302 
-    303     if not isinstance(io, ExcelFile):
---> 304         io = ExcelFile(io, engine=engine)
-    305     elif engine and engine != io.engine:
-    306         raise ValueError(
+    # Explode the first column by splitting comma-separated values into multiple rows
+    df = df.assign(**{first_column: df[first_column].str.split(',')}).explode(first_column).reset_index(drop=True)
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\excel\_base.py in __init__(self, path_or_buffer, engine)
-    865         self._io = stringify_path(path_or_buffer)
-    866 
---> 867         self._reader = self._engines[engine](self._io)
-    868 
-    869     def __fspath__(self):
+    # Strip any leading or trailing whitespace from the first column values
+    df[first_column] = df[first_column].str.strip()
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\excel\_openpyxl.py in __init__(self, filepath_or_buffer)
-    477             Object to be parsed.
-    478         """
---> 479         import_optional_dependency("openpyxl")
-    480         super().__init__(filepath_or_buffer)
-    481 
+    # Write the resulting DataFrame to an output Excel file
+    df.to_excel(output_file, index=False)
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\compat\_optional.py in import_optional_dependency(name, extra, raise_on_missing, on_version)
-    105     )
-    106     try:
---> 107         module = importlib.import_module(name)
-    108     except ImportError:
-    109         if raise_on_missing:
+# Input and output file paths
+input_file = 'input.xlsx'
+output_file = 'output.xlsx'
 
-C:\ProgramData\Anaconda3\lib\importlib\__init__.py in import_module(name, package)
-    125                 break
-    126             level += 1
---> 127     return _bootstrap._gcd_import(name[level:], package, level)
-    128 
-    129 
-
-C:\ProgramData\Anaconda3\lib\importlib\_bootstrap.py in _gcd_import(name, package, level)
-
-C:\ProgramData\Anaconda3\lib\importlib\_bootstrap.py in _find_and_load(name, import_)
-
-C:\ProgramData\Anaconda3\lib\importlib\_bootstrap.py in _find_and_load_unlocked(name, import_)
-
-C:\ProgramData\Anaconda3\lib\importlib\_bootstrap.py in _load_unlocked(spec)
-
-C:\ProgramData\Anaconda3\lib\importlib\_bootstrap_external.py in exec_module(self, module)
-
-C:\ProgramData\Anaconda3\lib\importlib\_bootstrap.py in _call_with_frames_removed(f, *args, **kwds)
-
-C:\ProgramData\Anaconda3\lib\site-packages\openpyxl\__init__.py in <module>
-      2 
-      3 
-----> 4 from openpyxl.compat.numbers import NUMPY, PANDAS
-      5 from openpyxl.xml import DEFUSEDXML, LXML
-      6 from openpyxl.workbook import Workbook
-
-C:\ProgramData\Anaconda3\lib\site-packages\openpyxl\compat\__init__.py in <module>
-      1 # Copyright (c) 2010-2020 openpyxl
-      2 
-----> 3 from .numbers import NUMERIC_TYPES
-      4 from .strings import safe_string
-      5 
-
-C:\ProgramData\Anaconda3\lib\site-packages\openpyxl\compat\numbers.py in <module>
-     39                                      numpy.float32,
-     40                                      numpy.float64,
----> 41                                      numpy.float,
-     42                                      numpy.bool_,
-     43                                      numpy.floating,
-
-~\AppData\Roaming\Python\Python38\site-packages\numpy\__init__.py in __getattr__(attr)
-    303 
-    304         if attr in __former_attrs__:
---> 305             raise AttributeError(__former_attrs__[attr])
-    306 
-    307         # Importing Tester requires importing all of UnitTest which is not a
-
-AttributeError: module 'numpy' has no attribute 'float'.
-`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
-The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
-    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+# Call the function with the specified input and output file paths
+split_rows(input_file, output_file)
