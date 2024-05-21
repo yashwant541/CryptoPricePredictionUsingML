@@ -1,31 +1,41 @@
-import pandas as pd
-import numpy as np
-import openpyxl
+---------------------------------------------------------------------------
+AttributeError                            Traceback (most recent call last)
+<ipython-input-6-139f7f9ea437> in <module>
+      1 import pandas as pd
+      2 import numpy as np
+----> 3 import openpyxl
+      4 
+      5 # Patch openpyxl to use numpy.float64 instead of the deprecated numpy.float
 
-# Patch openpyxl to use numpy.float64 instead of the deprecated numpy.float
-if hasattr(np, 'float'):
-    np.float = np.float64
+C:\ProgramData\Anaconda3\lib\site-packages\openpyxl\__init__.py in <module>
+      2 
+      3 
+----> 4 from openpyxl.compat.numbers import NUMPY, PANDAS
+      5 from openpyxl.xml import DEFUSEDXML, LXML
+      6 from openpyxl.workbook import Workbook
 
-# Function to split rows based on comma-separated values in the first column
-def split_rows(input_file, output_file):
-    # Read the input Excel file using the openpyxl engine
-    df = pd.read_excel(input_file, engine='openpyxl')
+C:\ProgramData\Anaconda3\lib\site-packages\openpyxl\compat\__init__.py in <module>
+      1 # Copyright (c) 2010-2020 openpyxl
+      2 
+----> 3 from .numbers import NUMERIC_TYPES
+      4 from .strings import safe_string
+      5 
 
-    # Get the name of the first column
-    first_column = df.columns[0]
+C:\ProgramData\Anaconda3\lib\site-packages\openpyxl\compat\numbers.py in <module>
+     39                                      numpy.float32,
+     40                                      numpy.float64,
+---> 41                                      numpy.float,
+     42                                      numpy.bool_,
+     43                                      numpy.floating,
 
-    # Explode the first column by splitting comma-separated values into multiple rows
-    df = df.assign(**{first_column: df[first_column].str.split(',')}).explode(first_column).reset_index(drop=True)
+~\AppData\Roaming\Python\Python38\site-packages\numpy\__init__.py in __getattr__(attr)
+    303 
+    304         if attr in __former_attrs__:
+--> 305             raise AttributeError(__former_attrs__[attr])
+    306 
+    307         # Importing Tester requires importing all of UnitTest which is not a
 
-    # Strip any leading or trailing whitespace from the first column values
-    df[first_column] = df[first_column].str.strip()
-
-    # Write the resulting DataFrame to an output Excel file
-    df.to_excel(output_file, index=False)
-
-# Input and output file paths
-input_file = 'input.xlsx'
-output_file = 'output.xlsx'
-
-# Call the function with the specified input and output file paths
-split_rows(input_file, output_file)
+AttributeError: module 'numpy' has no attribute 'float'.
+`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
