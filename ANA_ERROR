@@ -1,11 +1,9 @@
 import pandas as pd
 import re
 
-# Sample DataFrame
-data = {
-    'text': ['OLD FOX Is A brat', 'HELLO WORLD Cool Example', 'FOO BAR Something new', 'SAMPLE Case To Check']
-}
-df = pd.DataFrame(data)
+# Read the CSV file into a DataFrame
+input_file = 'input.csv'
+df = pd.read_csv(input_file)
 
 # Function to split text
 def split_text(text):
@@ -14,7 +12,11 @@ def split_text(text):
         return match.groups()
     return text, ''  # Default case if no match is found
 
-# Apply the function and create new columns
-df[['UPPERCASE', 'CamelCase_or_lowercase']] = df['text'].apply(split_text).apply(pd.Series)
+# Apply the function to the 'Country' column and create new columns
+df[['UPPERCASE', 'CamelCase_or_lowercase']] = df['Country'].apply(split_text).apply(pd.Series)
 
-print(df)
+# Save the resulting DataFrame to a new CSV file
+output_file = 'output.csv'
+df.to_csv(output_file, index=False)
+
+print(f"Processed DataFrame saved to {output_file}")
