@@ -1,37 +1,22 @@
-def read_bbg_chat_file(path: str, file_name: str) -> pd.DataFrame:
-    """
-    Load BBG chat log (txt file) into a dataframe.
-    Text file is read line by line.
-    Remove all whitespace characters (newlines and spaces) from the end of each line.
+import pandas as pd
+import re
 
-    Args:
-        path : file location.
-        file_name : file name (extension included).
+# Read the CSV file into a DataFrame
+input_file = 'input.csv'
+df = pd.read_csv(input_file)
 
-    Returns:
-        Dataframe
-    """
-    with open(f'{path}\\{file_name}', 'r', encoding='UTF-8') as file:
-        lines = [line.rstrip() for line in file]
+# Function to split text
+def split_text(text):
+    match = re.match(r'((?:[A-Z]+(?:\s+|$))+)(.*)', text)
+    if match:
+        return match.groups()
+    return text, ''  # Default case if no match is found
 
-    # Initialize variables
-    current_message_number = None
-    message_numbers = []
+# Apply the function to the 'Country' column and create new columns
+df[['UPPERCASE', 'CamelCase_or_lowercase']] = df['Country'].apply(split_text).apply(pd.Series)
 
-    # Extract message numbers and chat text from each line
-    for line in lines:
-        if line.startswith("Message#: "):
-            current_message_number = int(line.split(":")[1].strip())
-        elif line.startswith("======Begin Message======"):
-            current_message_number = None  # Reset message number at the start of each message
-        elif line.startswith("======End Message======"):
-            current_message_number = None  # Reset message number at the end of each message
-        message_numbers.append(current_message_number)
+# Save the resulting DataFrame to a new CSV file
+output_file = 'output.csv'
+df.to_csv(output_file, index=False)
 
-    # Create DataFrame with chat text and message numbers
-    df = pd.DataFrame({'chat': lines, 'message_number': message_numbers}, dtype=str)
-
-    # extract dates (for information only)
-    df['GIA_date_from_chat'] = df.iloc[:, 0].str.extract("^(\d{2}\/\d{2}\/\d{4})")  # date format: DD/MM/YYYY
-
-    return df
+print(f"Processed DataFrame saved to {output_file}")
