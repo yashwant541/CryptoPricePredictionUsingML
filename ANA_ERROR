@@ -1,19 +1,20 @@
-Traceback (most recent call last):
-  File "C:\ProgramData\Anaconda3\lib\site-packages\qtpy\__init__.py", line 204, in <module>
-    from PySide import __version__ as PYSIDE_VERSION  # analysis:ignore
-ModuleNotFoundError: No module named 'PySide'
+import pandas as pd
+import re
 
-During handling of the above exception, another exception occurred:
+# Sample DataFrame
+data = {
+    'text': ['OLD FOX Is A brat', 'HELLO WORLD Cool Example', 'FOO BAR Something new', 'SAMPLE Case To Check']
+}
+df = pd.DataFrame(data)
 
-Traceback (most recent call last):
-  File "C:\ProgramData\Anaconda3\Scripts\spyder-script.py", line 10, in <module>
-    sys.exit(main())
-  File "C:\ProgramData\Anaconda3\lib\site-packages\spyder\app\start.py", line 201, in main
-    from spyder.app import mainwindow
-  File "C:\ProgramData\Anaconda3\lib\site-packages\spyder\app\mainwindow.py", line 53, in <module>
-    requirements.check_qt()
-  File "C:\ProgramData\Anaconda3\lib\site-packages\spyder\requirements.py", line 41, in check_qt
-    import qtpy
-  File "C:\ProgramData\Anaconda3\lib\site-packages\qtpy\__init__.py", line 210, in <module>
-    raise PythonQtError('No Qt bindings could be found')
-qtpy.PythonQtError: No Qt bindings could be found
+# Function to split text
+def split_text(text):
+    match = re.match(r'((?:[A-Z]+(?:\s+|$))+)(.*)', text)
+    if match:
+        return match.groups()
+    return text, ''  # Default case if no match is found
+
+# Apply the function and create new columns
+df[['UPPERCASE', 'CamelCase_or_lowercase']] = df['text'].apply(split_text).apply(pd.Series)
+
+print(df)
