@@ -1,195 +1,67 @@
-Afghanistan - AF
-Albania - AL
-Algeria - DZ
-Andorra - AD
-Angola - AO
-Antigua and Barbuda - AG
-Argentina - AR
-Armenia - AM
-Australia - AU
-Austria - AT
-Azerbaijan - AZ
-Bahamas - BS
-Bahrain - BH
-Bangladesh - BD
-Barbados - BB
-Belarus - BY
-Belgium - BE
-Belize - BZ
-Benin - BJ
-Bhutan - BT
-Bolivia - BO
-Bosnia and Herzegovina - BA
-Botswana - BW
-Brazil - BR
-Brunei - BN
-Bulgaria - BG
-Burkina Faso - BF
-Burundi - BI
-Cabo Verde - CV
-Cambodia - KH
-Cameroon - CM
-Canada - CA
-Central African Republic - CF
-Chad - TD
-Chile - CL
-China - CN
-Colombia - CO
-Comoros - KM
-Congo (Congo-Brazzaville) - CG
-Costa Rica - CR
-Croatia - HR
-Cuba - CU
-Cyprus - CY
-Czech Republic (Czechia) - CZ
-Democratic Republic of the Congo - CD
-Denmark - DK
-Djibouti - DJ
-Dominica - DM
-Dominican Republic - DO
-Ecuador - EC
-Egypt - EG
-El Salvador - SV
-Equatorial Guinea - GQ
-Eritrea - ER
-Estonia - EE
-Eswatini (fmr. "Swaziland") - SZ
-Ethiopia - ET
-Fiji - FJ
-Finland - FI
-France - FR
-Gabon - GA
-Gambia - GM
-Georgia - GE
-Germany - DE
-Ghana - GH
-Greece - GR
-Grenada - GD
-Guatemala - GT
-Guinea - GN
-Guinea-Bissau - GW
-Guyana - GY
-Haiti - HT
-Honduras - HN
-Hungary - HU
-Iceland - IS
-India - IN
-Indonesia - ID
-Iran - IR
-Iraq - IQ
-Ireland - IE
-Israel - IL
-Italy - IT
-Jamaica - JM
-Japan - JP
-Jordan - JO
-Kazakhstan - KZ
-Kenya - KE
-Kiribati - KI
-Kuwait - KW
-Kyrgyzstan - KG
-Laos - LA
-Latvia - LV
-Lebanon - LB
-Lesotho - LS
-Liberia - LR
-Libya - LY
-Liechtenstein - LI
-Lithuania - LT
-Luxembourg - LU
-Madagascar - MG
-Malawi - MW
-Malaysia - MY
-Maldives - MV
-Mali - ML
-Malta - MT
-Marshall Islands - MH
-Mauritania - MR
-Mauritius - MU
-Mexico - MX
-Micronesia - FM
-Moldova - MD
-Monaco - MC
-Mongolia - MN
-Montenegro - ME
-Morocco - MA
-Mozambique - MZ
-Myanmar (formerly Burma) - MM
-Namibia - NA
-Nauru - NR
-Nepal - NP
-Netherlands - NL
-New Zealand - NZ
-Nicaragua - NI
-Niger - NE
-Nigeria - NG
-North Korea - KP
-North Macedonia (formerly Macedonia) - MK
-Norway - NO
-Oman - OM
-Pakistan - PK
-Palau - PW
-Palestine State - PS
-Panama - PA
-Papua New Guinea - PG
-Paraguay - PY
-Peru - PE
-Philippines - PH
-Poland - PL
-Portugal - PT
-Qatar - QA
-Romania - RO
-Russia - RU
-Rwanda - RW
-Saint Kitts and Nevis - KN
-Saint Lucia - LC
-Saint Vincent and the Grenadines - VC
-Samoa - WS
-San Marino - SM
-Sao Tome and Principe - ST
-Saudi Arabia - SA
-Senegal - SN
-Serbia - RS
-Seychelles - SC
-Sierra Leone - SL
-Singapore - SG
-Slovakia - SK
-Slovenia - SI
-Solomon Islands - SB
-Somalia - SO
-South Africa - ZA
-South Korea - KR
-South Sudan - SS
-Spain - ES
-Sri Lanka - LK
-Sudan - SD
-Suriname - SR
-Sweden - SE
-Switzerland - CH
-Syria - SY
-Taiwan - TW
-Tajikistan - TJ
-Tanzania - TZ
-Thailand - TH
-Timor-Leste - TL
-Togo - TG
-Tonga - TO
-Trinidad and Tobago - TT
-Tunisia - TN
-Turkey - TR
-Turkmenistan - TM
-Tuvalu - TV
-Uganda - UG
-Ukraine - UA
-United Arab Emirates - AE
-United Kingdom - GB
-United States - US
-Uruguay - UY
-Uzbekistan - UZ
-Vanuatu - VU
-Vatican City (Holy See) - VA
-Venezuela - VE
-Vietnam - VN
-Yemen - YE
-Zambia - ZM
-Zimbabwe - ZW
+import pandas as pd
+import os
+
+# Path to the folder containing the data files
+data_folder = 'path/to/data/folder'
+# Path to the master file
+master_file_path = 'path/to/master/file.xlsx'
+# Filename of the file that uses country codes instead of names
+country_code_file = 'filename_with_country_codes.xlsx'
+
+# Read the master file
+master_df = pd.read_excel(master_file_path)
+
+# Extract country names and codes from the master file
+country_names = set(master_df['Country Name'])
+country_codes = set(master_df['Country Code'])
+
+# Define a function to identify country columns in a data file
+def identify_country_columns(df, country_set):
+    country_columns = [col for col in df.columns if df[col].isin(country_set).all()]
+    return country_columns
+
+# Initialize a list to collect mismatches
+mismatches = []
+
+# Iterate over all files in the data folder
+for filename in os.listdir(data_folder):
+    file_path = os.path.join(data_folder, filename)
+    
+    if filename.endswith('.xlsx'):
+        # Read the Excel file, assuming it might have multiple sheets
+        xls = pd.ExcelFile(file_path)
+        
+        for sheet_name in xls.sheet_names:
+            data_df = pd.read_excel(xls, sheet_name=sheet_name)
+            if filename == country_code_file:
+                country_columns = identify_country_columns(data_df, country_codes)
+            else:
+                country_columns = identify_country_columns(data_df, country_names)
+            
+            if len(country_columns) == 0:
+                mismatches.append((filename, sheet_name, 'No country column identified'))
+            elif len(country_columns) > 1:
+                mismatches.append((filename, sheet_name, 'Multiple columns with country data found: ' + ', '.join(country_columns)))
+            else:
+                country_column = country_columns[0]
+                if filename == country_code_file:
+                    # Check for mismatches in country codes
+                    mismatched_codes = set(data_df[country_column]) - country_codes
+                    if mismatched_codes:
+                        mismatches.append((filename, sheet_name, mismatched_codes))
+                else:
+                    # Check for mismatches in country names
+                    mismatched_countries = set(data_df[country_column]) - country_names
+                    if mismatched_countries:
+                        mismatches.append((filename, sheet_name, mismatched_countries))
+
+# Report mismatches
+if mismatches:
+    for filename, sheet_name, mismatch in mismatches:
+        print(f"File: {filename}, Sheet: {sheet_name}")
+        if isinstance(mismatch, set):
+            print(f"Missing: {', '.join(mismatch)}")
+        else:
+            print(mismatch)
+else:
+    print("All files contain valid country data.")
