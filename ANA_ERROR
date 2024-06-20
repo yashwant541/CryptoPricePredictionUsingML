@@ -1,22 +1,63 @@
 import pandas as pd
-import re
+import os
 
-# Read the CSV file into a DataFrame
-input_file = 'input.csv'
-df = pd.read_csv(input_file)
+# Path to the folder containing the data files
+data_folder = 'path/to/data/folder'
+# Path to the master file
+master_file_path = 'path/to/master/file.csv'
 
-# Function to split text
-def split_text(text):
-    match = re.match(r'((?:[A-Z]+(?:\s+|$))+)(.*)', text)
-    if match:
-        return match.groups()
-    return text, ''  # Default case if no match is found
+# Read the master file
+master_df = pd.read_csv(master_file_path)
 
-# Apply the function to the 'Country' column and create new columns
-df[['UPPERCASE', 'CamelCase_or_lowercase']] = df['Country'].apply(split_text).apply(pd.Series)
+# Extract country names and codes from the master file
+country_names = set(master_df['Country Name'])
+country_codes = set(master_df['Country Code'])
 
-# Save the resulting DataFrame to a new CSV file
-output_file = 'output.csv'
-df.to_csv(output_file, index=False)
+# Define a function to identify the country column in a data file
+def identify_country_column(df, country_codes):
+    for col in df.columns:
+        if df[col].isin(country_codes).any():
+            return col
+    return None
 
-print(f"Processed DataFrame saved to {output_file}")
+# Initialize a list to collect mismatches
+mismatches = []
+
+# Iterate over all files in the data folder
+for filename in os.listdir(data_folder):
+    file_path = os.path.join(data_folder, filename)
+    
+    if filename.endswith('.csv'):
+        data_df = pd.read_csv(file_path)
+        country_column = identify_country_column(data_df, country_codes)
+        
+        if country_column:
+            # Convert country codes to country names for comparison
+            data_df['Country Name'] = data_df[country_column].map(
+                master_df.set_index('Country Code')['Country Name']
+            )
+        else:
+            # Assume one of the columns contains country names
+            for col in data_df.columns:
+                if data_df[col].isin(country_names).all():
+                    country_column = col
+                    break
+        
+        if country_column:
+            # Check for mismatches
+            mismatched_countries = set(data_df[country_column]) - country_names
+            if mismatched_countries:
+                mismatches.append((filename, mismatched_countries))
+        else:
+            mismatches.append((filename, 'No country column identified'))
+
+# Report mismatches
+if mismatches:
+    for filename, mismatch in mismatches:
+        print(f"File: {filename}")
+        if isinstance(mismatch, set):
+            print(f"Missing countries: {', '.join(mismatch)}")
+        else:
+            print(mismatch)
+else:
+    print("All files contain valid country names.")
