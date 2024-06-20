@@ -58,6 +58,7 @@ for filename in os.listdir(data_folder):
             
             output_data.append({
                 "FileName": filename,
+                "Sheetname": sheet_name,
                 "Row Count": row_count,
                 "Country Column Name": country_column if country_column else 'NA',
                 "Duplicates": ', '.join(duplicates) if duplicates else 'None'
