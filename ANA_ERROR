@@ -4,10 +4,10 @@ import os
 # Path to the folder containing the data files
 data_folder = 'path/to/data/folder'
 # Path to the master file
-master_file_path = 'path/to/master/file.csv'
+master_file_path = 'path/to/master/file.xlsx'
 
 # Read the master file
-master_df = pd.read_csv(master_file_path)
+master_df = pd.read_excel(master_file_path)
 
 # Extract country names and codes from the master file
 country_names = set(master_df['Country Name'])
@@ -27,34 +27,38 @@ mismatches = []
 for filename in os.listdir(data_folder):
     file_path = os.path.join(data_folder, filename)
     
-    if filename.endswith('.csv'):
-        data_df = pd.read_csv(file_path)
-        country_column = identify_country_column(data_df, country_codes)
+    if filename.endswith('.xlsx'):
+        # Read the Excel file, assuming it might have multiple sheets
+        xls = pd.ExcelFile(file_path)
         
-        if country_column:
-            # Convert country codes to country names for comparison
-            data_df['Country Name'] = data_df[country_column].map(
-                master_df.set_index('Country Code')['Country Name']
-            )
-        else:
-            # Assume one of the columns contains country names
-            for col in data_df.columns:
-                if data_df[col].isin(country_names).all():
-                    country_column = col
-                    break
-        
-        if country_column:
-            # Check for mismatches
-            mismatched_countries = set(data_df[country_column]) - country_names
-            if mismatched_countries:
-                mismatches.append((filename, mismatched_countries))
-        else:
-            mismatches.append((filename, 'No country column identified'))
+        for sheet_name in xls.sheet_names:
+            data_df = pd.read_excel(xls, sheet_name=sheet_name)
+            country_column = identify_country_column(data_df, country_codes)
+            
+            if country_column:
+                # Convert country codes to country names for comparison
+                data_df['Country Name'] = data_df[country_column].map(
+                    master_df.set_index('Country Code')['Country Name']
+                )
+            else:
+                # Assume one of the columns contains country names
+                for col in data_df.columns:
+                    if data_df[col].isin(country_names).all():
+                        country_column = col
+                        break
+            
+            if country_column:
+                # Check for mismatches
+                mismatched_countries = set(data_df[country_column]) - country_names
+                if mismatched_countries:
+                    mismatches.append((filename, sheet_name, mismatched_countries))
+            else:
+                mismatches.append((filename, sheet_name, 'No country column identified'))
 
 # Report mismatches
 if mismatches:
-    for filename, mismatch in mismatches:
-        print(f"File: {filename}")
+    for filename, sheet_name, mismatch in mismatches:
+        print(f"File: {filename}, Sheet: {sheet_name}")
         if isinstance(mismatch, set):
             print(f"Missing countries: {', '.join(mismatch)}")
         else:
