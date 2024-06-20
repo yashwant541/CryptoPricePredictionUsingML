@@ -1,25 +1,128 @@
 import pandas as pd
+import os
 
-# Function to split rows based on comma-separated values in the first column
-def split_rows(input_file, output_file):
-    # Read the input Excel file using xlrd engine
-    df = pd.read_excel(input_file, engine='xlrd')
-    
-    # Get the name of the first column
-    first_column = df.columns[0]
-    
-    # Explode the first column by splitting comma-separated values into multiple rows
-    df = df.assign(**{first_column: df[first_column].str.split(',')}).explode(first_column).reset_index(drop=True)
-    
-    # Strip any leading or trailing whitespace from the first column values
-    df[first_column] = df[first_column].str.strip()
-    
-    # Write the resulting DataFrame to an output Excel file using xlsxwriter engine
-    df.to_excel(output_file, index=False, engine='xlsxwriter')
+# Paths to the necessary files
+data_folder = 'path/to/data/folder'
+master_file_path = 'path/to/master/file.xlsx'
+country_code_file = 'filename_with_country_codes.xlsx'
+initial_output_file_path = 'path/to/initial/output/file.xlsx'
+final_output_file_path = 'path/to/final/output/file.xlsx'
 
-# Input and output file paths
-input_file = 'input.xlsx'
-output_file = 'output.xlsx'
+# Read the master file
+master_df = pd.read_excel(master_file_path)
 
-# Call the function with the specified input and output file paths
-split_rows(input_file, output_file)
+# Extract country names and codes from the master file
+country_names = set(master_df['Country Name'])
+country_codes = set(master_df['Country Code'])
+
+# Define a function to identify the country column in a data file
+def identify_country_column(df, country_set):
+    for col in df.columns:
+        if df[col].isin(country_set).all():
+            return col
+    return None
+
+# Function to generate initial output file
+def generate_initial_output():
+    output_data = []
+
+    # Iterate over all files in the data folder
+    for filename in os.listdir(data_folder):
+        file_path = os.path.join(data_folder, filename)
+        
+        if filename.endswith('.xlsx'):
+            # Read the Excel file, assuming it might have multiple sheets
+            xls = pd.ExcelFile(file_path)
+            
+            for sheet_name in xls.sheet_names:
+                data_df = pd.read_excel(xls, sheet_name=sheet_name)
+                row_count = len(data_df)
+                country_column = None
+                duplicates = []
+
+                if filename == country_code_file:
+                    country_column = identify_country_column(data_df, country_codes)
+                    if country_column:
+                        # Check for mismatches in country codes
+                        mismatched_codes = set(data_df[country_column]) - country_codes
+                        if mismatched_codes:
+                            duplicates = list(mismatched_codes)
+                else:
+                    country_column = identify_country_column(data_df, country_names)
+                    if country_column:
+                        # Check for mismatches in country names
+                        mismatched_countries = set(data_df[country_column]) - country_names
+                        if mismatched_countries:
+                            duplicates = list(mismatched_countries)
+                
+                output_data.append({
+                    "FileName": filename,
+                    "Row Count": row_count,
+                    "Country Column Name": country_column if country_column else 'NA',
+                    "Duplicates": ', '.join(duplicates) if duplicates else 'None'
+                })
+
+    # Create a DataFrame from the output data and save to Excel
+    output_df = pd.DataFrame(output_data)
+    output_df.to_excel(initial_output_file_path, index=False)
+
+    print("Initial output written to", initial_output_file_path)
+
+# Function to generate final output file without NA
+def generate_final_output():
+    # Read the initial output file
+    initial_output_df = pd.read_excel(initial_output_file_path)
+    
+    # Create a list to collect the final output data
+    final_output_data = []
+
+    # Iterate over each row in the initial output DataFrame
+    for _, row in initial_output_df.iterrows():
+        filename = row['FileName']
+        country_column = row['Country Column Name']
+
+        file_path = os.path.join(data_folder, filename)
+        
+        if filename.endswith('.xlsx'):
+            # Read the Excel file, assuming it might have multiple sheets
+            xls = pd.ExcelFile(file_path)
+            
+            for sheet_name in xls.sheet_names:
+                data_df = pd.read_excel(xls, sheet_name=sheet_name)
+                row_count = len(data_df)
+                duplicates = []
+
+                if country_column != 'NA':
+                    if filename == country_code_file:
+                        # Check for mismatches in country codes using the manually specified column
+                        mismatched_codes = set(data_df[country_column]) - country_codes
+                        if mismatched_codes:
+                            duplicates = list(mismatched_codes)
+                    else:
+                        # Check for mismatches in country names using the manually specified column
+                        mismatched_countries = set(data_df[country_column]) - country_names
+                        if mismatched_countries:
+                            duplicates = list(mismatched_countries)
+                else:
+                    country_column = 'NA'
+                    duplicates = ['NA']
+                
+                final_output_data.append({
+                    "FileName": filename,
+                    "Row Count": row_count,
+                    "Country Column Name": country_column,
+                    "Duplicates": ', '.join(duplicates) if duplicates else 'None'
+                })
+
+    # Create a DataFrame from the final output data and save to Excel
+    final_output_df = pd.DataFrame(final_output_data)
+    final_output_df.to_excel(final_output_file_path, index=False)
+
+    print("Final output written to", final_output_file_path)
+
+# Generate initial output with potential NA values
+generate_initial_output()
+
+# At this point, the user manually updates the 'Country Column Name' column in the initial output file
+# After manual update, generate the final output without any NA values
+generate_final_output()
