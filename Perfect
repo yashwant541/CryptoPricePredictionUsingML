@@ -1,53 +1,41 @@
----------------------------------------------------------------------------
-AttributeError                            Traceback (most recent call last)
-<ipython-input-3-2fe66f53868f> in <module>
-     34 sheet_name = input("Enter the sheet name: ")
-     35 
----> 36 add_row_number_column(file_path, sheet_name)
+import pandas as pd
+import numpy as np
 
-<ipython-input-3-2fe66f53868f> in add_row_number_column(file_path, sheet_name)
-     25 
-     26     # Save the DataFrame back to the Excel file
----> 27     with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-     28         df.to_excel(writer, sheet_name=sheet_name, index=False)
-     29 
+def add_row_number_column(file_path, sheet_name):
+    try:
+        # Read the specific sheet into a DataFrame
+        df = pd.read_excel(file_path, sheet_name=sheet_name)
+    except ValueError as e:
+        print(f"Error reading the sheet: {e}")
+        return
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\excel\_openpyxl.py in __init__(self, path, engine, mode, **engine_kwargs)
-     16     def __init__(self, path, engine=None, mode="w", **engine_kwargs):
-     17         # Use the openpyxl module as the Excel writer.
----> 18         from openpyxl.workbook import Workbook
-     19 
-     20         super().__init__(path, mode=mode, **engine_kwargs)
+    # Check if 'ColumnA' exists in the DataFrame
+    if 'ColumnA' not in df.columns:
+        print("Column 'ColumnA' not found in the sheet.")
+        return
 
-C:\ProgramData\Anaconda3\lib\site-packages\openpyxl\__init__.py in <module>
-      2 
-      3 
-----> 4 from openpyxl.compat.numbers import NUMPY, PANDAS
-      5 from openpyxl.xml import DEFUSEDXML, LXML
-      6 from openpyxl.workbook import Workbook
+    # Initialize the Row Number column
+    df['Row Number'] = 1
 
-C:\ProgramData\Anaconda3\lib\site-packages\openpyxl\compat\__init__.py in <module>
-      1 # Copyright (c) 2010-2020 openpyxl
-      2 
-----> 3 from .numbers import NUMERIC_TYPES
-      4 from .strings import safe_string
-      5 
+    # Iterate over the DataFrame to update the Row Number column
+    for i in range(1, len(df)):
+        if df.loc[i, 'ColumnA'] != df.loc[i - 1, 'ColumnA']:
+            df.loc[i, 'Row Number'] = df.loc[i - 1, 'Row Number'] + 1
+        else:
+            df.loc[i, 'Row Number'] = df.loc[i - 1, 'Row Number']
 
-C:\ProgramData\Anaconda3\lib\site-packages\openpyxl\compat\numbers.py in <module>
-     39                                      numpy.float32,
-     40                                      numpy.float64,
----> 41                                      numpy.float,
-     42                                      numpy.bool_,
-     43                                      numpy.floating,
+    # Save the DataFrame back to the Excel file
+    try:
+        with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    except Exception as e:
+        print(f"Error writing to the Excel file: {e}")
+        return
 
-~\AppData\Roaming\Python\Python38\site-packages\numpy\__init__.py in __getattr__(attr)
-    303 
-    304         if attr in __former_attrs__:
---> 305             raise AttributeError(__former_attrs__[attr])
-    306 
-    307         # Importing Tester requires importing all of UnitTest which is not a
+    print(f"Row Number column added and saved to '{sheet_name}' sheet in the file '{file_path}'.")
 
-AttributeError: module 'numpy' has no attribute 'float'.
-`np.float` was a deprecated alias for the builtin `float`. To avoid this error in existing code, use `float` by itself. Doing this will not modify any behavior and is safe. If you specifically wanted the numpy scalar type, use `np.float64` here.
-The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
-    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+# Prompt the user for the file path and sheet name
+file_path = input("Enter the path to the Excel file: ")
+sheet_name = input("Enter the sheet name: ")
+
+add_row_number_column(file_path, sheet_name)
