@@ -1,8 +1,8 @@
 import pandas as pd
 
-def add_row_number_column(file_name, sheet_name):
+def add_row_number_column(file_path, sheet_name):
     # Load the Excel file
-    xls = pd.ExcelFile(file_name)
+    xls = pd.ExcelFile(file_path)
     
     # Check if the sheet exists in the file
     if sheet_name not in xls.sheet_names:
@@ -10,7 +10,7 @@ def add_row_number_column(file_name, sheet_name):
         return
 
     # Read the specific sheet into a DataFrame
-    df = pd.read_excel(file_name, sheet_name=sheet_name)
+    df = pd.read_excel(file_path, sheet_name=sheet_name)
 
     # Initialize the Row Number column
     df['Row Number'] = 1
@@ -23,12 +23,13 @@ def add_row_number_column(file_name, sheet_name):
             df.loc[i, 'Row Number'] = df.loc[i - 1, 'Row Number']
 
     # Save the DataFrame back to the Excel file
-    with pd.ExcelWriter(file_name, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+    with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
         df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-    print(f"Row Number column added and saved to '{sheet_name}' sheet in the file '{file_name}'.")
+    print(f"Row Number column added and saved to '{sheet_name}' sheet in the file '{file_path}'.")
 
-# Example usage
-file_name = 'example.xlsx'
-sheet_name = 'Sheet1'
-add_row_number_column(file_name, sheet_name)
+# Prompt the user for the file path and sheet name
+file_path = input("Enter the path to the Excel file: ")
+sheet_name = input("Enter the sheet name: ")
+
+add_row_number_column(file_path, sheet_name)
