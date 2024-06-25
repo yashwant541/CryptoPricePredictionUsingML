@@ -25,8 +25,7 @@ def add_row_number_column(file_path, sheet_name):
 
     # Save the DataFrame back to the Excel file
     try:
-        with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-            df.to_excel(writer, sheet_name=sheet_name, index=False)
+        df.to_excel(file_path, sheet_name=sheet_name, index=False)
     except Exception as e:
         print(f"Error writing to the Excel file: {e}")
         return
