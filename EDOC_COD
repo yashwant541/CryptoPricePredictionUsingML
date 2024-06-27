@@ -1,71 +1,16 @@
-import pandas as pd
-import os
+DECLARE @startRow INT = 0;
+DECLARE @endRow INT = 10000;
 
-# Path to the folder containing the data files
-data_folder = 'path/to/data/folder'
-# Path to the master file
-master_file_path = 'path/to/master/file.xlsx'
-# Filename of the file that uses country codes instead of names
-country_code_file = 'filename_with_country_codes.xlsx'
-# Path to the output file
-output_file_path = 'path/to/output/file.xlsx'
+WHILE @startRow < 1000000  -- Replace 1000000 with the total row count in your table
+BEGIN
+    WITH numbered_rows AS (
+        SELECT *, ROW_NUMBER() OVER (ORDER BY some_column) AS row_num
+        FROM your_table_name
+    )
+    SELECT *
+    FROM numbered_rows
+    WHERE row_num > @startRow AND row_num <= @endRow;
 
-# Read the master file
-master_df = pd.read_excel(master_file_path)
-
-# Extract country names and codes from the master file
-country_names = set(master_df['Country Name'])
-country_codes = set(master_df['Country Code'])
-
-# Define a function to identify the country column in a data file
-def identify_country_column(df, country_set):
-    for col in df.columns:
-        if df[col].isin(country_set).all():
-            return col
-    return None
-
-# Initialize a list to collect mismatches and other required info
-output_data = []
-
-# Iterate over all files in the data folder
-for filename in os.listdir(data_folder):
-    file_path = os.path.join(data_folder, filename)
-    
-    if filename.endswith('.xlsx'):
-        # Read the Excel file, assuming it might have multiple sheets
-        xls = pd.ExcelFile(file_path)
-        
-        for sheet_name in xls.sheet_names:
-            data_df = pd.read_excel(xls, sheet_name=sheet_name)
-            row_count = len(data_df)
-            country_column = None
-            duplicates = []
-
-            if filename == country_code_file:
-                country_column = identify_country_column(data_df, country_codes)
-                if country_column:
-                    # Check for mismatches in country codes
-                    mismatched_codes = set(data_df[country_column]) - country_codes
-                    if mismatched_codes:
-                        duplicates = list(mismatched_codes)
-            else:
-                country_column = identify_country_column(data_df, country_names)
-                if country_column:
-                    # Check for mismatches in country names
-                    mismatched_countries = set(data_df[country_column]) - country_names
-                    if mismatched_countries:
-                        duplicates = list(mismatched_countries)
-            
-            output_data.append({
-                "FileName": filename,
-                "Sheetname": sheet_name,
-                "Row Count": row_count,
-                "Country Column Name": country_column if country_column else 'NA',
-                "Duplicates": ', '.join(duplicates) if duplicates else 'None'
-            })
-
-# Create a DataFrame from the output data and save to Excel
-output_df = pd.DataFrame(output_data)
-output_df.to_excel(output_file_path, index=False)
-
-print("Output written to", output_file_path)
+    SET @startRow = @endRow;
+    SET @endRow = @endRow + 10000;
+END;
