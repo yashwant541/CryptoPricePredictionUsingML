@@ -1,67 +1,45 @@
-import pandas as pd
+import tkinter as tk
+from tkinter import ttk
+import subprocess
 import os
 
-# Path to the folder containing the data files
-data_folder = 'path/to/data/folder'
-# Path to the master file
-master_file_path = 'path/to/master/file.xlsx'
-# Filename of the file that uses country codes instead of names
-country_code_file = 'filename_with_country_codes.xlsx'
+def connect():
+    # Fetch values from GUI components
+    path = path_entry.get()
+    user_id = user_id_entry.get()
 
-# Read the master file
-master_df = pd.read_excel(master_file_path)
+    # Example query with user ID
+    query = f"echo > {user_id}_filename.txt"
 
-# Extract country names and codes from the master file
-country_names = set(master_df['Country Name'])
-country_codes = set(master_df['Country Code'])
+    # Change directory command
+    cd_command = f"cd /d {path}"
 
-# Define a function to identify country columns in a data file
-def identify_country_columns(df, country_set):
-    country_columns = [col for col in df.columns if df[col].isin(country_set).all()]
-    return country_columns
+    # Full command to be executed
+    full_command = f"{cd_command} && {query}"
 
-# Initialize a list to collect mismatches
-mismatches = []
+    # Open cmd and execute the command
+    subprocess.run(f"start cmd /k \"{full_command}\"", shell=True)
 
-# Iterate over all files in the data folder
-for filename in os.listdir(data_folder):
-    file_path = os.path.join(data_folder, filename)
-    
-    if filename.endswith('.xlsx'):
-        # Read the Excel file, assuming it might have multiple sheets
-        xls = pd.ExcelFile(file_path)
-        
-        for sheet_name in xls.sheet_names:
-            data_df = pd.read_excel(xls, sheet_name=sheet_name)
-            if filename == country_code_file:
-                country_columns = identify_country_columns(data_df, country_codes)
-            else:
-                country_columns = identify_country_columns(data_df, country_names)
-            
-            if len(country_columns) == 0:
-                mismatches.append((filename, sheet_name, 'No country column identified'))
-            elif len(country_columns) > 1:
-                mismatches.append((filename, sheet_name, 'Multiple columns with country data found: ' + ', '.join(country_columns)))
-            else:
-                country_column = country_columns[0]
-                if filename == country_code_file:
-                    # Check for mismatches in country codes
-                    mismatched_codes = set(data_df[country_column]) - country_codes
-                    if mismatched_codes:
-                        mismatches.append((filename, sheet_name, mismatched_codes))
-                else:
-                    # Check for mismatches in country names
-                    mismatched_countries = set(data_df[country_column]) - country_names
-                    if mismatched_countries:
-                        mismatches.append((filename, sheet_name, mismatched_countries))
+# Create the main window
+window = tk.Tk()
+window.title("Execute Command")
 
-# Report mismatches
-if mismatches:
-    for filename, sheet_name, mismatch in mismatches:
-        print(f"File: {filename}, Sheet: {sheet_name}")
-        if isinstance(mismatch, set):
-            print(f"Missing: {', '.join(mismatch)}")
-        else:
-            print(mismatch)
-else:
-    print("All files contain valid country data.")
+# Label and Entry for file path
+path_label = ttk.Label(window, text="File Path:")
+path_label.grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
+path_entry = ttk.Entry(window, width=50)
+path_entry.insert(0, r"C:\Games")  # Default path
+path_entry.grid(row=0, column=1, padx=10, pady=10)
+
+# Label and Entry for user ID
+user_id_label = ttk.Label(window, text="User ID:")
+user_id_label.grid(row=1, column=0, padx=10, pady=10, sticky=tk.W)
+user_id_entry = ttk.Entry(window, width=50)
+user_id_entry.grid(row=1, column=1, padx=10, pady=10)
+
+# Button to run the query
+connect_button = ttk.Button(window, text="Connect", command=connect)
+connect_button.grid(row=2, column=0, columnspan=2, pady=20)
+
+# Start the GUI event loop
+window.mainloop()
