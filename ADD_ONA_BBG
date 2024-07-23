@@ -20,17 +20,15 @@ class FileProcessorApp:
         self.file_entries_frame = tk.Frame(root)
         self.file_entries_frame.pack()
         
-        self.process_button = tk.Button(root, text="Process", command=self.process_files)
-        self.process_button.pack()
-        
         self.file_entries = []
+        self.process_button = None
 
     def create_file_entry_fields(self):
         self.file_entries = []
         num_files = int(self.num_files_entry.get())
         for widget in self.file_entries_frame.winfo_children():
             widget.destroy()
-            
+        
         for i in range(num_files):
             base_label = tk.Label(self.file_entries_frame, text=f"Base File Path {i+1}:")
             base_label.grid(row=i, column=0)
@@ -38,14 +36,34 @@ class FileProcessorApp:
             base_entry = tk.Entry(self.file_entries_frame, width=50)
             base_entry.grid(row=i, column=1)
             
+            base_browse_button = tk.Button(self.file_entries_frame, text="Browse", 
+                                           command=lambda entry=base_entry: self.browse_file(entry))
+            base_browse_button.grid(row=i, column=2)
+            
             new_label = tk.Label(self.file_entries_frame, text=f"New File Path {i+1}:")
-            new_label.grid(row=i, column=2)
+            new_label.grid(row=i, column=3)
             
             new_entry = tk.Entry(self.file_entries_frame, width=50)
-            new_entry.grid(row=i, column=3)
+            new_entry.grid(row=i, column=4)
+            
+            new_browse_button = tk.Button(self.file_entries_frame, text="Browse", 
+                                          command=lambda entry=new_entry: self.browse_file(entry))
+            new_browse_button.grid(row=i, column=5)
             
             self.file_entries.append((base_entry, new_entry))
-    
+        
+        if not self.process_button:
+            self.process_button = tk.Button(self.file_entries_frame, text="Process", command=self.process_files)
+            self.process_button.grid(row=num_files, columnspan=6)
+        else:
+            self.process_button.grid(row=num_files, columnspan=6)
+
+    def browse_file(self, entry):
+        file_path = filedialog.askopenfilename()
+        if file_path:
+            entry.delete(0, tk.END)
+            entry.insert(0, file_path)
+
     def process_files(self):
         output_folder = filedialog.askdirectory(title="Select Output Folder")
         if not output_folder:
