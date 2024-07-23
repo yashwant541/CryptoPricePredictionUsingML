@@ -1,45 +1,90 @@
 import tkinter as tk
-from tkinter import ttk
-import subprocess
+from tkinter import filedialog, messagebox
+import pandas as pd
 import os
 
-def connect():
-    # Fetch values from GUI components
-    path = path_entry.get()
-    user_id = user_id_entry.get()
+class FileProcessorApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("File Processor")
+        
+        self.num_files_label = tk.Label(root, text="How many files?")
+        self.num_files_label.pack()
+        
+        self.num_files_entry = tk.Entry(root)
+        self.num_files_entry.pack()
+        
+        self.next_button = tk.Button(root, text="Next", command=self.create_file_entry_fields)
+        self.next_button.pack()
+        
+        self.file_entries_frame = tk.Frame(root)
+        self.file_entries_frame.pack()
+        
+        self.process_button = tk.Button(root, text="Process", command=self.process_files)
+        self.process_button.pack()
+        
+        self.file_entries = []
 
-    # Example query with user ID
-    query = f"echo > {user_id}_filename.txt"
+    def create_file_entry_fields(self):
+        self.file_entries = []
+        num_files = int(self.num_files_entry.get())
+        for widget in self.file_entries_frame.winfo_children():
+            widget.destroy()
+            
+        for i in range(num_files):
+            base_label = tk.Label(self.file_entries_frame, text=f"Base File Path {i+1}:")
+            base_label.grid(row=i, column=0)
+            
+            base_entry = tk.Entry(self.file_entries_frame, width=50)
+            base_entry.grid(row=i, column=1)
+            
+            new_label = tk.Label(self.file_entries_frame, text=f"New File Path {i+1}:")
+            new_label.grid(row=i, column=2)
+            
+            new_entry = tk.Entry(self.file_entries_frame, width=50)
+            new_entry.grid(row=i, column=3)
+            
+            self.file_entries.append((base_entry, new_entry))
+    
+    def process_files(self):
+        output_folder = filedialog.askdirectory(title="Select Output Folder")
+        if not output_folder:
+            messagebox.showerror("Error", "Output folder not selected")
+            return
 
-    # Change directory command
-    cd_command = f"cd /d {path}"
+        for base_entry, new_entry in self.file_entries:
+            old_file = base_entry.get()
+            new_file = new_entry.get()
+            
+            old_ext = os.path.splitext(old_file)[1]
+            new_ext = os.path.splitext(new_file)[1]
+            
+            if old_ext == '.csv' and new_ext == '.csv':
+                old_df = pd.read_csv(old_file)
+                new_df = pd.read_csv(new_file)
+                new_df.columns = old_df.columns
+                output_file = os.path.join(output_folder, os.path.basename(new_file))
+                new_df.to_csv(output_file, index=False)
+                messagebox.showinfo("Success", f"Processed and saved {output_file}")
+                
+            elif old_ext == '.xlsx' and new_ext == '.xlsx':
+                old_xls = pd.ExcelFile(old_file)
+                new_xls = pd.ExcelFile(new_file)
+                with pd.ExcelWriter(os.path.join(output_folder, os.path.basename(new_file))) as writer:
+                    for sheet_name in old_xls.sheet_names:
+                        old_df = old_xls.parse(sheet_name)
+                        new_df = new_xls.parse(sheet_name)
+                        new_df.columns = old_df.columns
+                        new_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    messagebox.showinfo("Success", f"Processed and saved {os.path.join(output_folder, os.path.basename(new_file))}")
+                    
+            else:
+                messagebox.showerror("Error", f"Skipping file pair with different extensions: {old_file}, {new_file}")
+        
+def main():
+    root = tk.Tk()
+    app = FileProcessorApp(root)
+    root.mainloop()
 
-    # Full command to be executed
-    full_command = f"{cd_command} && {query}"
-
-    # Open cmd and execute the command
-    subprocess.run(f"start cmd /k \"{full_command}\"", shell=True)
-
-# Create the main window
-window = tk.Tk()
-window.title("Execute Command")
-
-# Label and Entry for file path
-path_label = ttk.Label(window, text="File Path:")
-path_label.grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
-path_entry = ttk.Entry(window, width=50)
-path_entry.insert(0, r"C:\Games")  # Default path
-path_entry.grid(row=0, column=1, padx=10, pady=10)
-
-# Label and Entry for user ID
-user_id_label = ttk.Label(window, text="User ID:")
-user_id_label.grid(row=1, column=0, padx=10, pady=10, sticky=tk.W)
-user_id_entry = ttk.Entry(window, width=50)
-user_id_entry.grid(row=1, column=1, padx=10, pady=10)
-
-# Button to run the query
-connect_button = ttk.Button(window, text="Connect", command=connect)
-connect_button.grid(row=2, column=0, columnspan=2, pady=20)
-
-# Start the GUI event loop
-window.mainloop()
+if __name__ == "__main__":
+    main()
