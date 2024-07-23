@@ -81,20 +81,20 @@ class FileProcessorApp:
                 old_df = pd.read_csv(old_file)
                 new_df = pd.read_csv(new_file)
                 new_df.columns = old_df.columns
-                output_file = os.path.join(output_folder, os.path.basename(new_file))
+                output_file = os.path.join(output_folder, os.path.basename(old_file))
                 new_df.to_csv(output_file, index=False)
                 messagebox.showinfo("Success", f"Processed and saved {output_file}")
                 
             elif old_ext == '.xlsx' and new_ext == '.xlsx':
                 old_xls = pd.ExcelFile(old_file)
                 new_xls = pd.ExcelFile(new_file)
-                with pd.ExcelWriter(os.path.join(output_folder, os.path.basename(new_file))) as writer:
+                with pd.ExcelWriter(os.path.join(output_folder, os.path.basename(old_file))) as writer:
                     for sheet_name in old_xls.sheet_names:
                         old_df = old_xls.parse(sheet_name)
                         new_df = new_xls.parse(sheet_name)
                         new_df.columns = old_df.columns
                         new_df.to_excel(writer, sheet_name=sheet_name, index=False)
-                    messagebox.showinfo("Success", f"Processed and saved {os.path.join(output_folder, os.path.basename(new_file))}")
+                    messagebox.showinfo("Success", f"Processed and saved {os.path.join(output_folder, os.path.basename(old_file))}")
                     
             else:
                 messagebox.showerror("Error", f"Skipping file pair with different extensions: {old_file}, {new_file}")
