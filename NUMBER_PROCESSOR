@@ -8,7 +8,12 @@ def process_numbers(file_path, user_input):
             numbers = file.readlines()
 
         numbers = [number.strip() for number in numbers]
-        formatted_numbers = [user_input.replace('()', f"('{number}')") for number in numbers]
+
+        if user_input.strip() == "":
+            formatted_numbers = [f"'{number}'" for number in numbers]
+        else:
+            formatted_numbers = [user_input.replace('()', f"('{number}')") for number in numbers]
+
         output = ', '.join(formatted_numbers)
 
         # Save the output to output.csv in the same directory as the input file
@@ -32,8 +37,8 @@ def browse_file():
 def on_process():
     file_path = file_path_entry.get()
     user_input = user_input_entry.get()
-    if not file_path or not user_input:
-        messagebox.showerror("Input Error", "Please provide both file path and user input.")
+    if not file_path:
+        messagebox.showerror("Input Error", "Please provide a file path.")
         return
 
     output, output_file_path = process_numbers(file_path, user_input)
