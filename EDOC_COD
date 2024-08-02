@@ -1,16 +1,184 @@
-DECLARE @startRow INT = 0;
-DECLARE @endRow INT = 10000;
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+import pandas as pd
+import re
+import os
 
-WHILE @startRow < 1000000  -- Replace 1000000 with the total row count in your table
-BEGIN
-    WITH numbered_rows AS (
-        SELECT *, ROW_NUMBER() OVER (ORDER BY some_column) AS row_num
-        FROM your_table_name
-    )
-    SELECT *
-    FROM numbered_rows
-    WHERE row_num > @startRow AND row_num <= @endRow;
+class ColumnMatcherApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Column Matcher")
 
-    SET @startRow = @endRow;
-    SET @endRow = @endRow + 10000;
-END;
+        self.old_file_path = tk.StringVar()
+        self.new_file_path = tk.StringVar()
+        self.output_folder_path = tk.StringVar()
+        self.old_sheet_name = tk.StringVar()
+        self.new_sheet_name = tk.StringVar()
+        self.matched_columns = {}
+
+        self.create_widgets()
+
+    def create_widgets(self):
+        frame = tk.Frame(self.root)
+        frame.pack(pady=10, padx=10)
+
+        tk.Label(frame, text="Base file path:").grid(row=0, column=0, sticky="e")
+        tk.Entry(frame, textvariable=self.old_file_path, width=50).grid(row=0, column=1)
+        tk.Button(frame, text="Browse", command=self.browse_old_file).grid(row=0, column=2)
+
+        tk.Label(frame, text="New file path:").grid(row=1, column=0, sticky="e")
+        tk.Entry(frame, textvariable=self.new_file_path, width=50).grid(row=1, column=1)
+        tk.Button(frame, text="Browse", command=self.browse_new_file).grid(row=1, column=2)
+
+        tk.Label(frame, text="Output folder path:").grid(row=2, column=0, sticky="e")
+        tk.Entry(frame, textvariable=self.output_folder_path, width=50).grid(row=2, column=1)
+        tk.Button(frame, text="Browse", command=self.browse_output_folder).grid(row=2, column=2)
+
+        tk.Button(frame, text="Next", command=self.process_files).grid(row=3, column=1, pady=10)
+
+    def browse_old_file(self):
+        filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("Excel files", "*.xlsx")])
+        if filename:
+            self.old_file_path.set(filename)
+            if filename.endswith('.xlsx'):
+                self.prompt_sheet_name(self.old_file_path.get(), self.old_sheet_name)
+
+    def browse_new_file(self):
+        filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("Excel files", "*.xlsx")])
+        if filename:
+            self.new_file_path.set(filename)
+            if filename.endswith('.xlsx'):
+                self.prompt_sheet_name(self.new_file_path.get(), self.new_sheet_name)
+
+    def browse_output_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.output_folder_path.set(folder)
+
+    def prompt_sheet_name(self, file_path, sheet_var):
+        try:
+            xl = pd.ExcelFile(file_path)
+            sheet_window = tk.Toplevel(self.root)
+            sheet_window.title("Select Sheet Name")
+
+            tk.Label(sheet_window, text="Select Sheet Name:").pack(pady=10)
+
+            sheet_dropdown = ttk.Combobox(sheet_window, textvariable=sheet_var, values=xl.sheet_names)
+            sheet_dropdown.pack(pady=10)
+            sheet_dropdown.current(0)
+
+            tk.Button(sheet_window, text="Confirm", command=sheet_window.destroy).pack(pady=10)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read Excel file sheets: {e}")
+
+    def process_files(self):
+        if not self.old_file_path.get() or not self.new_file_path.get() or not self.output_folder_path.get():
+            messagebox.showerror("Error", "Please select both files and output folder.")
+            return
+
+        try:
+            if self.old_file_path.get().endswith('.csv'):
+                old_df = pd.read_csv(self.old_file_path.get())
+            else:
+                old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get())
+
+            if self.new_file_path.get().endswith('.csv'):
+                new_df = pd.read_csv(self.new_file_path.get())
+            else:
+                new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get())
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read files: {e}")
+            return
+
+        matches = self.match_columns(old_df, new_df)
+        old_columns = old_df.columns.tolist()
+        new_columns = new_df.columns.tolist()
+
+        self.show_match_page(matches, old_columns, new_columns)
+
+    def clean_column_name(self, col):
+        return re.sub(r'[^a-z0-9]', '', col.lower())
+
+    def match_columns(self, file_a, file_b):
+        matches = {}
+        for col_a in file_a.columns:
+            best_match = None
+            best_score = 0
+            for col_b in file_b.columns:
+                score = 0
+
+                # Compare data types
+                if file_a[col_a].dtype == file_b[col_b].dtype:
+                    score += 1
+                
+                # Compare non-null lengths
+                len_a = file_a[col_a].dropna().shape[0]
+                len_b = file_b[col_b].dropna().shape[0]
+                length_score = 1 - abs(len_a - len_b) / max(len_a, len_b)
+                score += length_score
+                
+                # Compare data match percentage
+                common_values = set(file_a[col_a].dropna()).intersection(set(file_b[col_b].dropna()))
+                match_percentage = len(common_values) / max(len(file_a[col_a].dropna()), len(file_b[col_b].dropna()))
+                score += match_percentage
+                
+                if score > best_score:
+                    best_score = score
+                    best_match = col_b
+            
+            matches[col_a] = best_match
+        return matches
+
+    def show_match_page(self, matches, old_columns, new_columns):
+        match_window = tk.Toplevel(self.root)
+        match_window.title("Match Columns")
+
+        frame = tk.Frame(match_window)
+        frame.pack(pady=10, padx=10)
+
+        self.matched_columns = matches
+        self.dropdown_vars = {col: tk.StringVar(value=match) for col, match in matches.items()}
+
+        for idx, old_col in enumerate(old_columns):
+            tk.Label(frame, text=f"Old Column: {old_col}").grid(row=idx, column=0, sticky="e")
+            dropdown = ttk.Combobox(frame, textvariable=self.dropdown_vars[old_col], values=new_columns)
+            dropdown.grid(row=idx, column=1, padx=10, pady=5)
+
+        tk.Button(frame, text="Confirm", command=self.confirm_matches).grid(row=idx + 1, column=1, pady=10)
+
+    def confirm_matches(self):
+        for old_col, var in self.dropdown_vars.items():
+            self.matched_columns[old_col] = var.get()
+
+        self.save_matched_file()
+        messagebox.showinfo("Success", "Columns matched and file saved successfully!")
+        self.root.quit()
+
+    def save_matched_file(self):
+        try:
+            if self.old_file_path.get().endswith('.csv'):
+                old_df = pd.read_csv(self.old_file_path.get())
+            else:
+                old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get())
+
+            new_df = pd.read_csv(self.new_file_path.get()) if self.new_file_path.get().endswith('.csv') else pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get())
+
+            matched_df = pd.DataFrame()
+            for old_col in old_df.columns:
+                new_col = self.matched_columns.get(old_col)
+                if new_col and new_col in new_df.columns:
+                    matched_df[old_col] = new_df[new_col]
+
+            output_path = os.path.join(self.output_folder_path.get(), os.path.basename(self.old_file_path.get()))
+            if output_path.endswith('.csv'):
+                matched_df.to_csv(output_path, index=False)
+            else:
+                with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+                    matched_df.to_excel(writer, sheet_name=self.old_sheet_name.get(), index=False)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save matched file: {e}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ColumnMatcherApp(root)
+    root.mainloop()
