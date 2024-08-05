@@ -80,8 +80,10 @@ class ColumnMatcherApp:
         try:
             if self.old_file_path.get().endswith('.csv'):
                 old_df = pd.read_csv(self.old_file_path.get())
+                old_file_type = 'csv'
             else:
                 old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get())
+                old_file_type = 'xlsx'
 
             if self.new_file_path.get().endswith('.csv'):
                 new_df = pd.read_csv(self.new_file_path.get())
@@ -95,7 +97,7 @@ class ColumnMatcherApp:
         old_columns = old_df.columns.tolist()
         new_columns = new_df.columns.tolist()
 
-        self.show_match_page(matches, old_columns, new_columns, old_df.head(), new_df.head())
+        self.show_match_page(matches, old_columns, new_columns, old_df.head(), new_df.head(), old_file_type)
 
     def clean_column_name(self, col):
         return re.sub(r'[^a-z0-9]', '', col.lower())
@@ -130,7 +132,7 @@ class ColumnMatcherApp:
             matches[col_a] = best_match
         return matches
 
-    def show_match_page(self, matches, old_columns, new_columns, old_sample, new_sample):
+    def show_match_page(self, matches, old_columns, new_columns, old_sample, new_sample, old_file_type):
         match_window = tk.Toplevel(self.root)
         match_window.title("Match Columns")
         match_window.geometry("1200x800")  # Set window size
@@ -195,37 +197,60 @@ class ColumnMatcherApp:
 
             tree = ttk.Treeview(content_frame, columns=columns, show="headings")
             tree.pack(fill="both", expand=True)
-
             for col in columns:
                 tree.heading(col, text=col)
-                tree.column(col, width=100, anchor="w")
-
-            for index, row in data.iterrows():
+                tree.column(col, width=100)
+            for _, row in data.iterrows():
                 tree.insert("", "end", values=row.tolist())
 
-            return tree
+        tk.Label(right_frame, text="Old File Sample", font=("Arial", 14)).pack(pady=10)
+        create_scrollable_frame(right_frame, old_columns, old_sample)
 
-        # Create scrollable frames for old and new sample data
-        tk.Label(right_frame, text="Base File Sample Data", font=("Arial", 12)).pack(pady=10)
-        create_scrollable_frame(right_frame, old_sample.columns.tolist(), old_sample)
-
-        tk.Label(right_frame, text="New File Sample Data", font=("Arial", 12)).pack(pady=10)
-        create_scrollable_frame(right_frame, new_sample.columns.tolist(), new_sample)
+        tk.Label(right_frame, text="New File Sample", font=("Arial", 14)).pack(pady=10)
+        create_scrollable_frame(right_frame, new_columns, new_sample)
 
     def confirm_matches(self):
-        for old_col, var in self.dropdown_vars.items():
-            self.matched_columns[old_col] = var.get()
-        self.save_matches()
+        output_folder = self.output_folder_path.get()
+        if not output_folder:
+            messagebox.showerror("Error", "Please select an output folder.")
+            return
 
-    def save_matches(self):
         try:
-            output_file = os.path.join(self.output_folder_path.get(), "matched_columns.txt")
-            with open(output_file, 'w') as file:
+            old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get()) \
+                if self.old_file_path.get().endswith('.xlsx') \
+                else pd.read_csv(self.old_file_path.get())
+
+            new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get()) \
+                if self.new_file_path.get().endswith('.xlsx') \
+                else pd.read_csv(self.new_file_path.get())
+
+            # Create the output DataFrame
+            output_data = {}
+            for old_col, new_col in self.matched_columns.items():
+                if new_col in new_df.columns:
+                    output_data[old_col] = new_df[new_col]
+
+            output_df = pd.DataFrame(output_data)
+
+            # Save the matched columns to a text file
+            matched_columns_file_path = os.path.join(output_folder, "matched_columns.txt")
+            with open(matched_columns_file_path, "w") as f:
                 for old_col, new_col in self.matched_columns.items():
-                    file.write(f"{old_col} -> {new_col}\n")
-            messagebox.showinfo("Success", f"Matches saved to {output_file}")
+                    f.write(f"{old_col} -> {new_col}\n")
+
+            # Save the output file
+            output_file_name = os.path.basename(self.old_file_path.get())
+            output_file_path = os.path.join(output_folder, output_file_name)
+
+            if self.old_file_path.get().endswith('.xlsx'):
+                output_df.to_excel(output_file_path, index=False, sheet_name=self.old_sheet_name.get())
+            else:
+                output_df.to_csv(output_file_path, index=False)
+
+            messagebox.showinfo("Success", f"Files saved successfully:\n{output_file_path}\n{matched_columns_file_path}")
+
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to save file: {e}")
+            messagebox.showerror("Error", f"Failed to save the file: {e}")
 
 if __name__ == "__main__":
     root = tk.Tk()
