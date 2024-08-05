@@ -220,6 +220,7 @@ class ColumnMatcherApp:
         tk.Label(right_frame, text="New File Sample", font=("Arial", 14)).pack(pady=10)
         create_scrollable_frame(right_frame, new_columns, new_sample)
 
+    
     def confirm_matches(self):
         output_folder = self.output_folder_path.get()
         if not output_folder:
@@ -227,7 +228,7 @@ class ColumnMatcherApp:
             return
 
         try:
-            # Re-read the original new file to get the data in its original format
+            # Re-read the original new file to preserve data formatting
             if self.new_file_path.get().endswith('.csv'):
                 new_df = pd.read_csv(self.new_file_path.get(), dtype=str)
             else:
@@ -260,6 +261,7 @@ class ColumnMatcherApp:
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save the file: {e}")
+
 
 
 if __name__ == "__main__":
