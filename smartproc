@@ -100,6 +100,7 @@ class ColumnMatcherApp:
         self.show_match_page(matches, old_columns, new_columns, old_df.head(), new_df.head(), old_file_type)
 
 
+
     def clean_column_name(self, col):
         return re.sub(r'[^a-z0-9]', '', col.lower())
 
@@ -228,17 +229,16 @@ class ColumnMatcherApp:
             return
 
         try:
-            # Re-read the original new file to preserve data formatting
-            if self.new_file_path.get().endswith('.csv'):
-                new_df = pd.read_csv(self.new_file_path.get(), dtype=str)
-            else:
-                new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get(), dtype=str)
+            # Read the original new file as strings to maintain formatting
+            new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get(), dtype=str) \
+                if self.new_file_path.get().endswith('.xlsx') \
+                else pd.read_csv(self.new_file_path.get(), dtype=str)
 
-            # Create the output DataFrame based on the confirmed column mappings
+            # Create the output DataFrame using the matched columns from the original new file
             output_data = {}
             for old_col, new_col in self.matched_columns.items():
                 if new_col in new_df.columns:
-                    output_data[old_col] = new_df[new_col]
+                    output_data[old_col] = new_df[new_col]  # Preserve exact formatting
 
             output_df = pd.DataFrame(output_data)
 
@@ -248,7 +248,7 @@ class ColumnMatcherApp:
                 for old_col, new_col in self.matched_columns.items():
                     f.write(f"{old_col} -> {new_col}\n")
 
-            # Save the output file
+            # Save the output file with preserved formatting
             output_file_name = os.path.basename(self.old_file_path.get())
             output_file_path = os.path.join(output_folder, output_file_name)
 
@@ -261,7 +261,6 @@ class ColumnMatcherApp:
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save the file: {e}")
-
 
 
 if __name__ == "__main__":
