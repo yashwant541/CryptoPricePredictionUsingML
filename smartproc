@@ -227,15 +227,13 @@ class ColumnMatcherApp:
             return
 
         try:
-            old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get(), dtype=str) \
-                if self.old_file_path.get().endswith('.xlsx') \
-                else pd.read_csv(self.old_file_path.get(), dtype=str)
+            # Re-read the original new file to get the data in its original format
+            if self.new_file_path.get().endswith('.csv'):
+                new_df = pd.read_csv(self.new_file_path.get(), dtype=str)
+            else:
+                new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get(), dtype=str)
 
-            new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get(), dtype=str) \
-                if self.new_file_path.get().endswith('.xlsx') \
-                else pd.read_csv(self.new_file_path.get(), dtype=str)
-
-            # Create the output DataFrame
+            # Create the output DataFrame based on the confirmed column mappings
             output_data = {}
             for old_col, new_col in self.matched_columns.items():
                 if new_col in new_df.columns:
@@ -262,6 +260,7 @@ class ColumnMatcherApp:
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save the file: {e}")
+
 
 if __name__ == "__main__":
     root = tk.Tk()
