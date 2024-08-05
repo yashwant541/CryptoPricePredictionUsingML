@@ -79,16 +79,16 @@ class ColumnMatcherApp:
 
         try:
             if self.old_file_path.get().endswith('.csv'):
-                old_df = pd.read_csv(self.old_file_path.get())
+                old_df = pd.read_csv(self.old_file_path.get(), dtype=str)
                 old_file_type = 'csv'
             else:
-                old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get())
+                old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get(), dtype=str)
                 old_file_type = 'xlsx'
 
             if self.new_file_path.get().endswith('.csv'):
-                new_df = pd.read_csv(self.new_file_path.get())
+                new_df = pd.read_csv(self.new_file_path.get(), dtype=str)
             else:
-                new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get())
+                new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get(), dtype=str)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to read files: {e}")
             return
@@ -141,7 +141,6 @@ class ColumnMatcherApp:
             matches[col_a] = best_match
         
         return matches
-
 
     def show_match_page(self, matches, old_columns, new_columns, old_sample, new_sample, old_file_type):
         match_window = tk.Toplevel(self.root)
@@ -227,13 +226,13 @@ class ColumnMatcherApp:
             return
 
         try:
-            old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get()) \
+            old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get(), dtype=str) \
                 if self.old_file_path.get().endswith('.xlsx') \
-                else pd.read_csv(self.old_file_path.get())
+                else pd.read_csv(self.old_file_path.get(), dtype=str)
 
-            new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get()) \
+            new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get(), dtype=str) \
                 if self.new_file_path.get().endswith('.xlsx') \
-                else pd.read_csv(self.new_file_path.get())
+                else pd.read_csv(self.new_file_path.get(), dtype=str)
 
             # Create the output DataFrame
             output_data = {}
