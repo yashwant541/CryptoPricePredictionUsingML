@@ -1,0 +1,233 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+import pandas as pd
+import re
+import os
+
+class ColumnMatcherApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Column Matcher")
+        self.root.state('zoomed')  # Maximize window
+
+        self.old_file_path = tk.StringVar()
+        self.new_file_path = tk.StringVar()
+        self.output_folder_path = tk.StringVar()
+        self.old_sheet_name = tk.StringVar()
+        self.new_sheet_name = tk.StringVar()
+        self.matched_columns = {}
+
+        self.create_widgets()
+
+    def create_widgets(self):
+        frame = tk.Frame(self.root)
+        frame.pack(pady=10, padx=10)
+
+        tk.Label(frame, text="Base file path:").grid(row=0, column=0, sticky="e")
+        tk.Entry(frame, textvariable=self.old_file_path, width=50).grid(row=0, column=1)
+        tk.Button(frame, text="Browse", command=self.browse_old_file).grid(row=0, column=2)
+
+        tk.Label(frame, text="New file path:").grid(row=1, column=0, sticky="e")
+        tk.Entry(frame, textvariable=self.new_file_path, width=50).grid(row=1, column=1)
+        tk.Button(frame, text="Browse", command=self.browse_new_file).grid(row=1, column=2)
+
+        tk.Label(frame, text="Output folder path:").grid(row=2, column=0, sticky="e")
+        tk.Entry(frame, textvariable=self.output_folder_path, width=50).grid(row=2, column=1)
+        tk.Button(frame, text="Browse", command=self.browse_output_folder).grid(row=2, column=2)
+
+        tk.Button(frame, text="Next", command=self.process_files).grid(row=3, column=1, pady=10)
+
+    def browse_old_file(self):
+        filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("Excel files", "*.xlsx")])
+        if filename:
+            self.old_file_path.set(filename)
+            if filename.endswith('.xlsx'):
+                self.prompt_sheet_name(self.old_file_path.get(), self.old_sheet_name)
+
+    def browse_new_file(self):
+        filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("Excel files", "*.xlsx")])
+        if filename:
+            self.new_file_path.set(filename)
+            if filename.endswith('.xlsx'):
+                self.prompt_sheet_name(self.new_file_path.get(), self.new_sheet_name)
+
+    def browse_output_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.output_folder_path.set(folder)
+
+    def prompt_sheet_name(self, file_path, sheet_var):
+        try:
+            xl = pd.ExcelFile(file_path)
+            sheet_window = tk.Toplevel(self.root)
+            sheet_window.title("Select Sheet Name")
+
+            tk.Label(sheet_window, text="Select Sheet Name:").pack(pady=10)
+
+            sheet_dropdown = ttk.Combobox(sheet_window, textvariable=sheet_var, values=xl.sheet_names)
+            sheet_dropdown.pack(pady=10)
+            sheet_dropdown.current(0)
+
+            tk.Button(sheet_window, text="Confirm", command=sheet_window.destroy).pack(pady=10)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read Excel file sheets: {e}")
+
+    def process_files(self):
+        if not self.old_file_path.get() or not self.new_file_path.get() or not self.output_folder_path.get():
+            messagebox.showerror("Error", "Please select both files and output folder.")
+            return
+
+        try:
+            if self.old_file_path.get().endswith('.csv'):
+                old_df = pd.read_csv(self.old_file_path.get())
+            else:
+                old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get())
+
+            if self.new_file_path.get().endswith('.csv'):
+                new_df = pd.read_csv(self.new_file_path.get())
+            else:
+                new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get())
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read files: {e}")
+            return
+
+        matches = self.match_columns(old_df, new_df)
+        old_columns = old_df.columns.tolist()
+        new_columns = new_df.columns.tolist()
+
+        self.show_match_page(matches, old_columns, new_columns, old_df.head(), new_df.head())
+
+    def clean_column_name(self, col):
+        return re.sub(r'[^a-z0-9]', '', col.lower())
+
+    def match_columns(self, file_a, file_b):
+        matches = {}
+        for col_a in file_a.columns:
+            best_match = None
+            best_score = 0
+            for col_b in file_b.columns:
+                score = 0
+
+                # Compare data types
+                if file_a[col_a].dtype == file_b[col_b].dtype:
+                    score += 1
+                
+                # Compare non-null lengths
+                len_a = file_a[col_a].dropna().shape[0]
+                len_b = file_b[col_b].dropna().shape[0]
+                length_score = 1 - abs(len_a - len_b) / max(len_a, len_b)
+                score += length_score
+                
+                # Compare data match percentage
+                common_values = set(file_a[col_a].dropna()).intersection(set(file_b[col_b].dropna()))
+                match_percentage = len(common_values) / max(len(file_a[col_a].dropna()), len(file_b[col_b].dropna()))
+                score += match_percentage
+                
+                if score > best_score:
+                    best_score = score
+                    best_match = col_b
+            
+            matches[col_a] = best_match
+        return matches
+
+    def show_match_page(self, matches, old_columns, new_columns, old_sample, new_sample):
+        match_window = tk.Toplevel(self.root)
+        match_window.title("Match Columns")
+        match_window.geometry("1200x800")  # Set window size
+
+        # Create main frame
+        main_frame = tk.Frame(match_window)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Create paned window for left and right sections
+        paned_window = ttk.PanedWindow(main_frame, orient="horizontal")
+        paned_window.pack(fill="both", expand=True)
+
+        # Left frame (column matching)
+        left_frame = tk.Frame(paned_window, width=300)
+        paned_window.add(left_frame, weight=1)
+
+        # Right frame (data samples)
+        right_frame = tk.Frame(paned_window)
+        paned_window.add(right_frame, weight=3)
+
+        # Column Matching Section
+        left_canvas = tk.Canvas(left_frame)
+        left_scrollbar = ttk.Scrollbar(left_frame, orient="vertical", command=left_canvas.yview)
+        left_scrollbar.pack(side="right", fill="y")
+        left_canvas.pack(side="left", fill="both", expand=True)
+        left_canvas.configure(yscrollcommand=left_scrollbar.set)
+        left_content_frame = tk.Frame(left_canvas)
+        left_canvas.create_window((0, 0), window=left_content_frame, anchor="nw")
+        left_content_frame.bind("<Configure>", lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all")))
+
+        # Show column matching confirmation
+        tk.Label(left_content_frame, text="Confirm Column Matching", font=("Arial", 14)).pack(pady=10, padx=10)
+
+        self.matched_columns = matches
+        self.dropdown_vars = {col: tk.StringVar(value=match) for col, match in matches.items()}
+
+        for old_col in old_columns:
+            tk.Label(left_content_frame, text=f"Old Column: {old_col}").pack(anchor="w", padx=10)
+            dropdown = ttk.Combobox(left_content_frame, textvariable=self.dropdown_vars[old_col], values=new_columns)
+            dropdown.pack(fill="x", pady=5, padx=10)
+
+        tk.Button(left_content_frame, text="Confirm", command=self.confirm_matches).pack(pady=20, padx=10)
+
+        # Data Samples Section
+        def create_scrollable_frame(parent_frame, columns, data):
+            frame = tk.Frame(parent_frame)
+            frame.pack(fill="both", expand=True)
+
+            canvas = tk.Canvas(frame)
+            v_scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+            h_scrollbar = ttk.Scrollbar(frame, orient="horizontal", command=canvas.xview)
+
+            canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+            v_scrollbar.pack(side="right", fill="y")
+            h_scrollbar.pack(side="bottom", fill="x")
+            canvas.pack(side="left", fill="both", expand=True)
+
+            content_frame = tk.Frame(canvas)
+            canvas.create_window((0, 0), window=content_frame, anchor="nw")
+
+            content_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+            tree = ttk.Treeview(content_frame, columns=columns, show="headings")
+            tree.pack(fill="both", expand=True)
+
+            for col in columns:
+                tree.heading(col, text=col)
+                tree.column(col, width=100, anchor="w")
+
+            for index, row in data.iterrows():
+                tree.insert("", "end", values=row.tolist())
+
+            return tree
+
+        # Create scrollable frames for old and new sample data
+        tk.Label(right_frame, text="Base File Sample Data", font=("Arial", 12)).pack(pady=10)
+        create_scrollable_frame(right_frame, old_sample.columns.tolist(), old_sample)
+
+        tk.Label(right_frame, text="New File Sample Data", font=("Arial", 12)).pack(pady=10)
+        create_scrollable_frame(right_frame, new_sample.columns.tolist(), new_sample)
+
+    def confirm_matches(self):
+        for old_col, var in self.dropdown_vars.items():
+            self.matched_columns[old_col] = var.get()
+        self.save_matches()
+
+    def save_matches(self):
+        try:
+            output_file = os.path.join(self.output_folder_path.get(), "matched_columns.txt")
+            with open(output_file, 'w') as file:
+                for old_col, new_col in self.matched_columns.items():
+                    file.write(f"{old_col} -> {new_col}\n")
+            messagebox.showinfo("Success", f"Matches saved to {output_file}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save file: {e}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ColumnMatcherApp(root)
+    root.mainloop()
