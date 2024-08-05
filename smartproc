@@ -79,16 +79,16 @@ class ColumnMatcherApp:
 
         try:
             if self.old_file_path.get().endswith('.csv'):
-                old_df = pd.read_csv(self.old_file_path.get(), dtype=str)
+                old_df = pd.read_csv(self.old_file_path.get(), dtype=str)  # Read as strings
                 old_file_type = 'csv'
             else:
-                old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get(), dtype=str)
+                old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get(), dtype=str)  # Read as strings
                 old_file_type = 'xlsx'
 
             if self.new_file_path.get().endswith('.csv'):
-                new_df = pd.read_csv(self.new_file_path.get(), dtype=str)
+                new_df = pd.read_csv(self.new_file_path.get(), dtype=str)  # Read as strings
             else:
-                new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get(), dtype=str)
+                new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get(), dtype=str)  # Read as strings
         except Exception as e:
             messagebox.showerror("Error", f"Failed to read files: {e}")
             return
@@ -98,6 +98,7 @@ class ColumnMatcherApp:
         new_columns = new_df.columns.tolist()
 
         self.show_match_page(matches, old_columns, new_columns, old_df.head(), new_df.head(), old_file_type)
+
 
     def clean_column_name(self, col):
         return re.sub(r'[^a-z0-9]', '', col.lower())
