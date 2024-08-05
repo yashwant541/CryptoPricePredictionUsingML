@@ -104,9 +104,18 @@ class ColumnMatcherApp:
 
     def match_columns(self, file_a, file_b):
         matches = {}
+        cleaned_b_columns = {self.clean_column_name(col): col for col in file_b.columns}
+        
         for col_a in file_a.columns:
+            cleaned_a_col = self.clean_column_name(col_a)
             best_match = None
             best_score = 0
+
+            # Check for exact match with priority
+            if cleaned_a_col in cleaned_b_columns:
+                matches[col_a] = cleaned_b_columns[cleaned_a_col]
+                continue
+            
             for col_b in file_b.columns:
                 score = 0
 
@@ -130,7 +139,9 @@ class ColumnMatcherApp:
                     best_match = col_b
             
             matches[col_a] = best_match
+        
         return matches
+
 
     def show_match_page(self, matches, old_columns, new_columns, old_sample, new_sample, old_file_type):
         match_window = tk.Toplevel(self.root)
