@@ -1,0 +1,6 @@
+final_output = merge_and_resolve_categorisation(client_income_cg_eaf_df, sabre_product_category_df, murex_product_category_df)
+    
+
+client_income_cg_eaf_df - 'trade id', 'External_Trade_ID'
+sabre_product_category_df - 'Trade_Id', 'External_Trade_Id'
+murex_product_category_df - 'Trade_Id', 'External_Trade_Id'
