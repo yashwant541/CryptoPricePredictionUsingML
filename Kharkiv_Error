@@ -1,0 +1,57 @@
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+<ipython-input-46-55be150939cd> in <module>
+      1 # this line enable to run the script but also import it as a module (without run)
+      2 if __name__ == '__main__':
+----> 3     runfmsalesall()
+
+<ipython-input-45-78f3e8e1da62> in runfmsalesall()
+     41     #client_income_cg_eaf_sabre_product_category_murex_product_category_df = cross_cicgeafsabrprodcat_murprod(client_income_cg_eaf_sabre_product_category_df, murex_product_category_df)
+     42 
+---> 43     final_output = merge_and_resolve_categorisation(client_income_cg_eaf_df, sabre_product_category_df, murex_product_category_df)
+     44 
+     45     ####################################################################################################################
+
+<ipython-input-42-7b998427bc3f> in merge_and_resolve_categorisation(client_income_df, sabre_product_df, murex_product_df)
+     11 
+     12     # Merge client_income_df with sabre_product_df using Trade_Id and External_Trade_Id with fallbacks
+---> 13     merged_AB = merge_with_fallback(client_income_df, sabre_product_df, 'Trade_Id', 'External_Trade_Id', 'trade id', 'External_Trade_ID')
+     14 
+     15     # Merge the resulting DataFrame with murex_product_df using Trade_Id and External_Trade_Id with fallbacks
+
+<ipython-input-42-7b998427bc3f> in merge_with_fallback(df1, df2, key1_a, key1_b, key2_a, key2_b)
+      3     def merge_with_fallback(df1, df2, key1_a, key1_b, key2_a, key2_b):
+      4         # First merge on primary keys
+----> 5         merged_primary = pd.merge(df1, df2, left_on=key1_a, right_on=key2_a, how='left')
+      6         # Merge on secondary keys where primary key merge did not succeed
+      7         merged_secondary = pd.merge(df1, df2, left_on=key1_b, right_on=key2_b, how='left')
+
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\reshape\merge.py in merge(left, right, how, on, left_on, right_on, left_index, right_index, sort, suffixes, copy, indicator, validate)
+     72     validate=None,
+     73 ) -> "DataFrame":
+---> 74     op = _MergeOperation(
+     75         left,
+     76         right,
+
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\reshape\merge.py in __init__(self, left, right, how, on, left_on, right_on, axis, left_index, right_index, sort, suffixes, copy, indicator, validate)
+    650             self.right_join_keys,
+    651             self.join_names,
+--> 652         ) = self._get_merge_keys()
+    653 
+    654         # validate the merge keys dtypes. We may need to coerce
+
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\reshape\merge.py in _get_merge_keys(self)
+   1003                     if not is_rkey(rk):
+   1004                         if rk is not None:
+-> 1005                             right_keys.append(right._get_label_or_level_values(rk))
+   1006                         else:
+   1007                             # work-around for merge_asof(right_index=True)
+
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\generic.py in _get_label_or_level_values(self, key, axis)
+   1561             values = self.axes[axis].get_level_values(key)._values
+   1562         else:
+-> 1563             raise KeyError(key)
+   1564 
+   1565         # Check for duplicates
+
+KeyError: 'trade id'
