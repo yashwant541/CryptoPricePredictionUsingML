@@ -1,29 +1,48 @@
-import pandas as pd
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+<ipython-input-56-b7d72c92fe79> in <module>
+----> 1 final_output = merge_and_resolve_categorisation(client_income_cg_eaf_df, sabre_product_category_df, murex_product_category_df)
 
-def merge_and_resolve_categorisation(client_income_df, sabre_product_df, murex_product_df):
-    # Create a helper function to merge on multiple columns with fallback for null values
-    def merge_with_fallback(df1, df2, key1_a, key1_b, key2_a, key2_b):
-        # First merge on primary keys
-        merged_primary = pd.merge(df1, df2, left_on=key1_a, right_on=key2_a, how='left')
-        # Merge on secondary keys where primary key merge did not succeed
-        merged_secondary = pd.merge(df1, df2, left_on=key1_b, right_on=key2_b, how='left')
-        # Combine results giving precedence to non-null primary key merges
-        merged = merged_primary.combine_first(merged_secondary)
-        return merged
+<ipython-input-48-f6ca43cf84c5> in merge_and_resolve_categorisation(client_income_df, sabre_product_df, murex_product_df)
+     11 
+     12     # Merge client_income_df with sabre_product_df using 'trade id' and 'External_Trade_ID' with fallbacks
+---> 13     merged_AB = merge_with_fallback(client_income_df, sabre_product_df, 'trade id', 'External_Trade_ID', 'Trade_Id', 'External_Trade_Id')
+     14 
+     15     # Merge the resulting DataFrame with murex_product_df using 'trade id' and 'External_Trade_ID' with fallbacks
 
-    # Merge client_income_df with sabre_product_df using 'trade id' and 'External_Trade_ID' with fallbacks
-    merged_AB = merge_with_fallback(client_income_df, sabre_product_df, 'trade id', 'External_Trade_ID', 'Trade_Id', 'External_Trade_Id')
+<ipython-input-48-f6ca43cf84c5> in merge_with_fallback(df1, df2, key1_a, key1_b, key2_a, key2_b)
+      3     def merge_with_fallback(df1, df2, key1_a, key1_b, key2_a, key2_b):
+      4         # First merge on primary keys
+----> 5         merged_primary = pd.merge(df1, df2, left_on=key1_a, right_on=key2_a, how='left')
+      6         # Merge on secondary keys where primary key merge did not succeed
+      7         merged_secondary = pd.merge(df1, df2, left_on=key1_b, right_on=key2_b, how='left')
 
-    # Merge the resulting DataFrame with murex_product_df using 'trade id' and 'External_Trade_ID' with fallbacks
-    merged_ABC = merge_with_fallback(merged_AB, murex_product_df, 'trade id', 'External_Trade_ID', 'Trade_Id', 'External_Trade_Id')
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\reshape\merge.py in merge(left, right, how, on, left_on, right_on, left_index, right_index, sort, suffixes, copy, indicator, validate)
+     72     validate=None,
+     73 ) -> "DataFrame":
+---> 74     op = _MergeOperation(
+     75         left,
+     76         right,
 
-    # Resolve the 'Product Categorisation' column from murex_product_df (or sabre_product_df)
-    merged_ABC['Product Categorisation'] = merged_ABC.apply(lambda row: row['Product Categorisation_y'] if pd.notnull(row['Product Categorisation_y']) else row['Product Categorisation_x'], axis=1)
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\reshape\merge.py in __init__(self, left, right, how, on, left_on, right_on, axis, left_index, right_index, sort, suffixes, copy, indicator, validate)
+    650             self.right_join_keys,
+    651             self.join_names,
+--> 652         ) = self._get_merge_keys()
+    653 
+    654         # validate the merge keys dtypes. We may need to coerce
 
-    # Drop the intermediate 'Product Categorisation' columns
-    merged_ABC.drop(columns=['Product Categorisation_x', 'Product Categorisation_y'], inplace=True)
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\reshape\merge.py in _get_merge_keys(self)
+   1003                     if not is_rkey(rk):
+   1004                         if rk is not None:
+-> 1005                             right_keys.append(right._get_label_or_level_values(rk))
+   1006                         else:
+   1007                             # work-around for merge_asof(right_index=True)
 
-    # Ensure row count of client_income_df is intact
-    merged_ABC = merged_ABC.combine_first(client_income_df)
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\generic.py in _get_label_or_level_values(self, key, axis)
+   1561             values = self.axes[axis].get_level_values(key)._values
+   1562         else:
+-> 1563             raise KeyError(key)
+   1564 
+   1565         # Check for duplicates
 
-    return merged_ABC
+KeyError: 'Trade_Id'
