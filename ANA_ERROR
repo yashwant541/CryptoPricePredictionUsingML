@@ -1,37 +1,38 @@
-import os
 import pandas as pd
 
-def count_rows_in_file(file_path):
-    if file_path.endswith('.csv'):
-        df = pd.read_csv(file_path)
-    elif file_path.endswith('.xlsx'):
-        df = pd.read_excel(file_path)
-    else:
-        return None
-    return len(df)
+# Function to process the names and split them by semicolon
+def split_names(df, column_name):
+    # Remove trailing semicolons first, if any
+    df[column_name] = df[column_name].str.rstrip(';')
+    
+    # Split the names on semicolon and explode the rows
+    df[column_name] = df[column_name].str.split(';')
+    
+    # Use explode to split the rows based on the list of names
+    df = df.explode(column_name).reset_index(drop=True)
+    
+    return df
 
-def scan_folders(base_path):
-    data = []
-    for folder_name in os.listdir(base_path):
-        folder_path = os.path.join(base_path, folder_name)
-        if os.path.isdir(folder_path):
-            for file_name in os.listdir(folder_path):
-                file_path = os.path.join(folder_path, file_name)
-                if file_name.endswith('.csv') or file_name.endswith('.xlsx'):
-                    row_count = count_rows_in_file(file_path)
-                    if row_count is not None:
-                        data.append([folder_path, folder_name, file_name, row_count])
-    return data
+# Function to read and process the Excel file
+def process_excel(file_path, sheet_name, column_name):
+    # Read the Excel file
+    df = pd.read_excel(file_path, sheet_name=sheet_name)
+    
+    # Process the names column
+    df = split_names(df, column_name)
+    
+    return df
 
-def save_to_csv(data, output_file):
-    df = pd.DataFrame(data, columns=['Folder Path', 'Folder Name', 'File Name with Extension', 'File Row Count'])
-    df.to_csv(output_file, index=False)
+# Specify the file path, sheet name, and the column with names
+file_path = 'your_file.xlsx'
+sheet_name = 'Sheet1'  # Replace with your actual sheet name
+column_name = 'Names'  # Replace with your actual column name containing the names
 
-# Usage example
-base_path = 'your/folder/path/here'
-output_file = 'output_file.csv'
+# Process the file and get the updated DataFrame
+updated_df = process_excel(file_path, sheet_name, column_name)
 
-data = scan_folders(base_path)
-save_to_csv(data, output_file)
+# Optionally, save the result to a new Excel file
+output_file_path = 'processed_file.xlsx'
+updated_df.to_excel(output_file_path, index=False)
 
-print(f"CSV file saved: {output_file}")
+print("Processed file saved to", output_file_path)
