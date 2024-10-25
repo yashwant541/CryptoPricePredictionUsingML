@@ -1,31 +1,27 @@
----------------------------------------------------------------------------
-KeyError                                  Traceback (most recent call last)
-<ipython-input-12-fcce073da4f4> in <module>
-      6 name_pass_map = dict(zip(final_df['Id'], zip(grouped['Name'], grouped['SCB_PSID'])))
-      7 
-----> 8 final_df['Name_Group'] = final_df['Id'].map(lambda x : name_pass_map[x][0])
-      9 final_df['SCB_PSID_Group'] = final_df['Id'].map(lambda x : name_pass_map[x][1])
+import pandas as pd
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\series.py in map(self, arg, na_action)
-   3968         dtype: object
-   3969         """
--> 3970         new_values = super()._map_values(arg, na_action=na_action)
-   3971         return self._constructor(new_values, index=self.index).__finalize__(
-   3972             self, method="map"
+# Sample data for final_df with some blanks
+data = {
+    'Name': ['Bush, George', 'Clinton, Bill', 'Putin, Vladimir', 'Ping, Su', 'Abe, Shinzo', ''],
+    'Pass': [1234, 8546, 5734, 5935, 9354, ''],
+    'Id': [2, 2, 3, 3, 4, 4]  # Example with Id 4 having a blank entry
+}
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\base.py in _map_values(self, mapper, na_action)
-   1158 
-   1159         # mapper is a function
--> 1160         new_values = map_f(values, mapper)
-   1161 
-   1162         return new_values
+# Create the final_df DataFrame
+final_df = pd.DataFrame(data)
 
-pandas\_libs\lib.pyx in pandas._libs.lib.map_infer()
+# Group by 'Id' and collect non-empty 'Name' and 'Pass' values in lists
+grouped = final_df.groupby('Id').agg({
+    'Name': lambda x: [f"'{name}'" for name in x if name],  # Filter out empty names
+    'Pass': lambda x: [f"'{pass_}'" for pass_ in x if pass_]  # Filter out empty passes
+}).reset_index()
 
-<ipython-input-12-fcce073da4f4> in <lambda>(x)
-      6 name_pass_map = dict(zip(final_df['Id'], zip(grouped['Name'], grouped['SCB_PSID'])))
-      7 
-----> 8 final_df['Name_Group'] = final_df['Id'].map(lambda x : name_pass_map[x][0])
-      9 final_df['SCB_PSID_Group'] = final_df['Id'].map(lambda x : name_pass_map[x][1])
+# Create a mapping from 'Id' to aggregated Name_Group and Pass_Group
+name_pass_map = dict(zip(grouped['Id'], zip(grouped['Name'], grouped['Pass'])))
 
-KeyError: 10
+# Map the Name_Group and Pass_Group back to the original DataFrame based on 'Id'
+final_df['Name_Group'] = final_df['Id'].map(lambda x: name_pass_map.get(x, ([], []))[0])
+final_df['Pass_Group'] = final_df['Id'].map(lambda x: name_pass_map.get(x, ([], []))[1])
+
+# Show the final result
+print(final_df)
