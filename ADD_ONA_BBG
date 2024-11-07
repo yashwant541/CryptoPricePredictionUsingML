@@ -1,99 +1,40 @@
-import pandas as pd
-import json
-import re
-import dataiku
+---------------------------------------------------------------------------
+AttributeError                            Traceback (most recent call last)
+<ipython-input-3-b0ed940d0bc1> in <module>
+     48 ###################################################################################################
+     49 
+---> 50 contact_dfs = GIA_CM_Register_prepared_df['Contact'].apply(extract_contact_info)
+     51 
+     52 result_df = pd.concat(contact_dfs.tolist(), ignore_index=True)
 
-# Load the dataset from Dataiku
-register_dataset = dataiku.Dataset("Register")
-cmreg_prepped = register_dataset.get_dataframe()
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\series.py in apply(self, func, convert_dtype, args, **kwds)
+   4198             else:
+   4199                 values = self.astype(object)._values
+-> 4200                 mapped = lib.map_infer(values, f, convert=convert_dtype)
+   4201 
+   4202         if len(mapped) and isinstance(mapped[0], Series):
 
-# Rename the column
-cmreg_prepped.rename(columns={'Title': 'Title_SCB'}, inplace=True)
+pandas\_libs\lib.pyx in pandas._libs.lib.map_infer()
 
-def extract_contact_info(json_str):
-    json_str = json_str.replace("'", '"')
-    json_str = re.sub(r'(?<!\\)"', r'"', json_str)
-    json_str = re.sub(r',\s*(}|\])', r'\1', json_str)
-    
-    try:
-        data = json.loads(json_str)
-        results = data['results']
-        contact_df = pd.json_normalize(results)
-        return contact_df[['Name', 'Title']]
-    except json.JSONDecodeError as e:
-        print(f"JSON Decode Error: {e}")
-        return pd.DataFrame(columns=['Name', 'Title'])
-    
-def process_and_merge(df):
-    contact_dfs = df['Contact_x0020_for_x0020_Continuo'].apply(extract_contact_info)
-    df['row_id'] = df.index
-    contact_dfs = pd.concat(contact_dfs.tolist(), ignore_index=True)
-    df_expanded = df.drop(columns='Contact_x0020_for_x0020_Continuo')
-    contact_dfs['row_id'] = df_expanded['row_id'].repeat(contact_dfs.groupby('row_id').size().values())
-    result_df = pd.merge(df_expanded, contact_dfs, on='row_id').drop(columns='row_id')
-    return result_df
+<ipython-input-3-b0ed940d0bc1> in extract_contact_info(json_str)
+     17         data = json.loads(json_str)
+     18         results = data['results']
+---> 19         contact_df = pd.json_normalize(results)
+     20         return contact_df[['Name', 'Title']]
+     21     except json.JSONDecodeError as e:
 
-# Function to split rows based on semicolon-separated "Country" values
-def split_rows(df, column_name):
-    df[column_name] = df[column_name].str.split(',')
-    df = df.explode(column_name)
-    return df
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\json\_normalize.py in _json_normalize(data, record_path, meta, meta_prefix, record_prefix, errors, sep, max_level)
+    268 
+    269     if record_path is None:
+--> 270         if any([isinstance(x, dict) for x in y.values()] for y in data):
+    271             # naive normalization, this is idempotent for flat records
+    272             # and potentially will inflate the data considerably for
 
-contact_dfs = cmreg_prepped['Contact_x0020_for_x0020_Continuo'].apply(extract_contact_info)
-result_df = pd.concat(contact_dfs.tolist(), ignore_index=True)
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\json\_normalize.py in <genexpr>(.0)
+    268 
+    269     if record_path is None:
+--> 270         if any([isinstance(x, dict) for x in y.values()] for y in data):
+    271             # naive normalization, this is idempotent for flat records
+    272             # and potentially will inflate the data considerably for
 
-result_df['SCB_PSID'] = result_df['Name'].str.slice(-7)
-result_df = result_df.drop(columns={'Name'})
-result_df.rename(columns={'Title': 'Name'}, inplace=True)
-
-contacts_df = result_df
-cmreg_prepped['Extracted_IDs'] = cmreg_prepped['Contact_x0020_for_x0020_Continuo'].apply(lambda x: re.findall(r'\b\d{7}\b', x))
-cmreg_prepped_expanded = cmreg_prepped.explode('Extracted_IDs')
-final_df = pd.merge(cmreg_prepped_expanded, contacts_df, left_on='Extracted_IDs', right_on='SCB_PSID', how='left')
-
-final_df['Risk_Themes'] = final_df['Risk_Themes'].str.replace('[', '').str.replace(']', '').str.replace('"', '')
-final_df['Business_Functions'] = final_df['Business_Functions'].str.replace('[', '').str.replace(']', '').str.replace('"', '')
-
-# Clean specific values in 'Business_Functions'
-for term in ['Compliance', 'Sanctions', 'Affairs', 'Governance']:
-    final_df['Business_Functions'] = final_df['Business_Functions'].str.replace(f'{term},', term)
-
-final_df['Auditable_Entity'] = final_df['Auditable_Entity'].str.replace('[', '').str.replace(']', '').str.replace('"', '')
-
-# Clean specific values in 'Auditable_Entity'
-final_df['Auditable_Entity'] = final_df['Auditable_Entity'].str.replace('Transformation, Technology,', 'Transformation Technology')
-final_df['Auditable_Entity'] = final_df['Auditable_Entity'].str.replace('Corporate Secretariat, Legal and SIS', 'Corporate Secretariat Legal and SIS')
-final_df['Auditable_Entity'] = final_df['Auditable_Entity'].str.replace('Corporate, Commercial & Institutional Banking', 'Corporate Commercial & Institutional Banking')
-final_df['Auditable_Entity'] = final_df['Auditable_Entity'].str.replace('(CPM), Stressed Asset Group (SAG),', '(CPM) Stressed Asset Group (SAG)')
-
-final_df['Risk_Themes_Original'] = final_df['Risk_Themes']
-final_df['Business_Functions_Original'] = final_df['Business_Functions']
-final_df['Country_Original'] = final_df['Country_x0020_impacted_results']
-
-final_dfa = split_rows(final_df, 'Business_Functions')
-
-final_dfa['Country_x0020_impacted_results'] = final_dfa['Country_x0020_impacted_results'].str.replace('[', '').str.replace(']', '').str.replace('"', '')
-
-final_df = final_dfa[['Id', 'Title_SCB', 'Date_event', 'Source_event', 'Created', 'Risk_Themes_Original', 'Business_Functions_Original', 'Country_Original', 'Risk_Themes', 'Business_Functions', 'Country_x0020_impacted_results', 'Name', 'SCB_PSID', 'Key_Points']]
-
-final_df = final_df.rename(columns={'Title_SCB': 'Title', 'Date_event': 'Date_of_event', 'Source_event': 'Source_of_event', 'Country_x0020_impacted_results': 'Country'})
-
-final_df = split_rows(final_df, 'Country')
-final_df = split_rows(final_df, 'Risk_Themes')
-
-# Group by 'Id' and collect non-empty 'Name' and 'Pass' values in lists
-grouped = final_df.groupby('Id').agg({
-    'Name': lambda x: list(set(f"'{name}'" for name in x if name)),
-    'SCB_PSID': lambda x: list(set(f"'{pass_}'" for pass_ in x if pass_))
-}).reset_index()
-
-# Create a mapping from 'Id' to aggregated Name_Group and Pass_Group
-name_pass_map = dict(zip(grouped['Id'], zip(grouped['Name'], grouped['SCB_PSID'])))
-
-# Map the Name_Group and Pass_Group back to the original DataFrame based on 'Id'
-final_df['Name_Group'] = final_df['Id'].map(lambda x: name_pass_map.get(x, ([], []))[0])
-final_df['SCB_PSID_Group'] = final_df['Id'].map(lambda x: name_pass_map.get(x, ([], []))[1])
-
-# Save the final DataFrame to Dataiku
-final_dataset = dataiku.Dataset("Final_GIA_CM_Register")
-final_dataset.write_with_schema(final_df)
+AttributeError: 'str' object has no attribute 'values'
