@@ -1,73 +1,49 @@
-import dataiku
-from dataiku import pandasutils as pdu
-import pandas as pd
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
-import pyminizip
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.pdfgen import canvas
+from PIL import Image
 import os
 
-# Load the dataset with email information
-dataset = dataiku.Dataset("your_dataset_name")  # Replace with your dataset name in Dataiku
-email_data = dataset.get_dataframe()
-
-# SMTP configuration (update as per your settings)
-SMTP_SERVER = "smtp.example.com"  # Replace with your SMTP server
-SMTP_PORT = 587  # Common SMTP port for TLS
-SMTP_USERNAME = "your_email@example.com"
-SMTP_PASSWORD = "your_email_password"
-
-# Function to send an email with a password-protected zip attachment
-def send_email(to_address, subject, body, attachment_path, zip_password=None):
-    try:
-        # Initialize the email message
-        msg = MIMEMultipart()
-        msg['From'] = SMTP_USERNAME
-        msg['To'] = to_address
-        msg['Subject'] = subject
-
-        # Attach the email body
-        msg.attach(MIMEText(body, 'plain'))
-
-        # Zip the file if a password is provided
-        if zip_password and attachment_path:
-            zip_filename = "protected_attachment.zip"
-            pyminizip.compress(attachment_path, None, zip_filename, zip_password, 5)
-            attachment_path = zip_filename  # Update the attachment path to the zip file
-
-        # Attach the file
-        if attachment_path:
-            with open(attachment_path, "rb") as attachment:
-                part = MIMEBase("application", "octet-stream")
-                part.set_payload(attachment.read())
-            encoders.encode_base64(part)
-            part.add_header("Content-Disposition", f"attachment; filename= {os.path.basename(attachment_path)}")
-            msg.attach(part)
-
-        # Connect to the SMTP server and send the email
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        server.sendmail(SMTP_USERNAME, to_address, msg.as_string())
-        print(f"Email sent to {to_address}")
+# Define function to add custom text and images to pages
+def add_page(c, page_number, image_folder):
+    # Page 1: Title
+    if page_number == 1:
+        c.setFont("Helvetica", 50)
+        c.setFillColor(colors.black)
+        c.drawCentredString(300, 750, "XYZ Report")
+    else:
+        # Custom text for page 2 to 5
+        c.setFont("Helvetica", 18)
+        custom_text = f"This is custom text for page {page_number}"
+        c.drawString(50, 750, custom_text)
         
-    except Exception as e:
-        print(f"Failed to send email to {to_address}: {e}")
-        
-    finally:
-        server.quit()
-        # Clean up the zip file if created
-        if zip_password and os.path.exists(zip_filename):
-            os.remove(zip_filename)
+        # Add image (PNG)
+        image_path = os.path.join(image_folder, f"image{page_number - 1}.png")
+        if os.path.exists(image_path):
+            img = Image.open(image_path)
+            img_width, img_height = img.size
+            aspect_ratio = img_height / float(img_width)
+            c.drawImage(image_path, 50, 500, width=500, height=500 * aspect_ratio)
 
-# Iterate over each row in the dataset and send an email
-for index, row in email_data.iterrows():
-    to_address = row['Email']
-    subject = row['Subject']
-    body = row['Body']
-    attachment_path = row.get('Attachment File Path')
-    zip_password = row.get('Password')  # Optional password for the zip file
+# Create the PDF
+def create_pdf(output_path, image_folder):
+    c = canvas.Canvas(output_path, pagesize=letter)
+    
+    # Loop through 5 pages
+    for page_number in range(1, 6):
+        add_page(c, page_number, image_folder)
+        c.showPage()  # Create a new page
 
-    send_email(to_address, subject, body, attachment_path, zip_password)
+    # Save the PDF
+    c.save()
+
+# Define your folder containing images
+image_folder = "/path/to/your/images"  # Replace with the path to your PNG images
+
+# Define the output path for the PDF file
+output_pdf = "/path/to/output/report.pdf"  # Replace with your desired PDF file path
+
+# Create the PDF report
+create_pdf(output_pdf, image_folder)
+
+print("PDF report created successfully!")
