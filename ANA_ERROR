@@ -1,38 +1,73 @@
+import dataiku
+from dataiku import pandasutils as pdu
 import pandas as pd
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+import pyminizip
+import os
 
-# Function to process the names and split them by semicolon
-def split_names(df, column_name):
-    # Remove trailing semicolons first, if any
-    df[column_name] = df[column_name].str.rstrip(';')
-    
-    # Split the names on semicolon and explode the rows
-    df[column_name] = df[column_name].str.split(';')
-    
-    # Use explode to split the rows based on the list of names
-    df = df.explode(column_name).reset_index(drop=True)
-    
-    return df
+# Load the dataset with email information
+dataset = dataiku.Dataset("your_dataset_name")  # Replace with your dataset name in Dataiku
+email_data = dataset.get_dataframe()
 
-# Function to read and process the Excel file
-def process_excel(file_path, sheet_name, column_name):
-    # Read the Excel file
-    df = pd.read_excel(file_path, sheet_name=sheet_name)
-    
-    # Process the names column
-    df = split_names(df, column_name)
-    
-    return df
+# SMTP configuration (update as per your settings)
+SMTP_SERVER = "smtp.example.com"  # Replace with your SMTP server
+SMTP_PORT = 587  # Common SMTP port for TLS
+SMTP_USERNAME = "your_email@example.com"
+SMTP_PASSWORD = "your_email_password"
 
-# Specify the file path, sheet name, and the column with names
-file_path = 'your_file.xlsx'
-sheet_name = 'Sheet1'  # Replace with your actual sheet name
-column_name = 'Names'  # Replace with your actual column name containing the names
+# Function to send an email with a password-protected zip attachment
+def send_email(to_address, subject, body, attachment_path, zip_password=None):
+    try:
+        # Initialize the email message
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USERNAME
+        msg['To'] = to_address
+        msg['Subject'] = subject
 
-# Process the file and get the updated DataFrame
-updated_df = process_excel(file_path, sheet_name, column_name)
+        # Attach the email body
+        msg.attach(MIMEText(body, 'plain'))
 
-# Optionally, save the result to a new Excel file
-output_file_path = 'processed_file.xlsx'
-updated_df.to_excel(output_file_path, index=False)
+        # Zip the file if a password is provided
+        if zip_password and attachment_path:
+            zip_filename = "protected_attachment.zip"
+            pyminizip.compress(attachment_path, None, zip_filename, zip_password, 5)
+            attachment_path = zip_filename  # Update the attachment path to the zip file
 
-print("Processed file saved to", output_file_path)
+        # Attach the file
+        if attachment_path:
+            with open(attachment_path, "rb") as attachment:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f"attachment; filename= {os.path.basename(attachment_path)}")
+            msg.attach(part)
+
+        # Connect to the SMTP server and send the email
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.sendmail(SMTP_USERNAME, to_address, msg.as_string())
+        print(f"Email sent to {to_address}")
+        
+    except Exception as e:
+        print(f"Failed to send email to {to_address}: {e}")
+        
+    finally:
+        server.quit()
+        # Clean up the zip file if created
+        if zip_password and os.path.exists(zip_filename):
+            os.remove(zip_filename)
+
+# Iterate over each row in the dataset and send an email
+for index, row in email_data.iterrows():
+    to_address = row['Email']
+    subject = row['Subject']
+    body = row['Body']
+    attachment_path = row.get('Attachment File Path')
+    zip_password = row.get('Password')  # Optional password for the zip file
+
+    send_email(to_address, subject, body, attachment_path, zip_password)
