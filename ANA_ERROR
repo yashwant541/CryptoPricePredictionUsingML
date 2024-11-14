@@ -1,49 +1,62 @@
 from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
 from reportlab.pdfgen import canvas
 from PIL import Image
 import os
 
-# Define function to add custom text and images to pages
-def add_page(c, page_number, image_folder):
-    # Page 1: Title
-    if page_number == 1:
-        c.setFont("Helvetica", 50)
-        c.setFillColor(colors.black)
-        c.drawCentredString(300, 750, "XYZ Report")
-    else:
-        # Custom text for page 2 to 5
-        c.setFont("Helvetica", 18)
-        custom_text = f"This is custom text for page {page_number}"
+# Function to add each image to a new page in the PDF
+def add_image_page(c, image_path, custom_text=None):
+    # Set font and add custom text at the top if provided
+    c.setFont("Helvetica", 18)
+    if custom_text:
         c.drawString(50, 750, custom_text)
-        
-        # Add image (PNG)
-        image_path = os.path.join(image_folder, f"image{page_number - 1}.png")
-        if os.path.exists(image_path):
-            img = Image.open(image_path)
-            img_width, img_height = img.size
-            aspect_ratio = img_height / float(img_width)
-            c.drawImage(image_path, 50, 500, width=500, height=500 * aspect_ratio)
-
-# Create the PDF
-def create_pdf(output_path, image_folder):
-    c = canvas.Canvas(output_path, pagesize=letter)
     
-    # Loop through 5 pages
-    for page_number in range(1, 6):
-        add_page(c, page_number, image_folder)
-        c.showPage()  # Create a new page
+    # Open and add the image
+    img = Image.open(image_path)
+    img_width, img_height = img.size
+    aspect_ratio = img_height / float(img_width)
+
+    # Adjust image to fit within the PDF page dimensions
+    margin = 50
+    max_width = letter[0] - 2 * margin
+    max_height = letter[1] - 2 * margin
+    
+    # Scale image to fit the page while maintaining aspect ratio
+    if img_width > max_width or img_height > max_height:
+        if img_width > img_height:
+            width = max_width
+            height = width * aspect_ratio
+        else:
+            height = max_height
+            width = height / aspect_ratio
+    else:
+        width, height = img_width, img_height
+
+    # Center the image on the page
+    x = (letter[0] - width) / 2
+    y = (letter[1] - height) / 2
+    c.drawImage(image_path, x, y, width=width, height=height)
+
+# Main function to create the PDF with one image per page
+def create_pdf_from_images(image_folder, output_pdf):
+    c = canvas.Canvas(output_pdf, pagesize=letter)
+
+    # List all images in the folder, sorted alphanumerically
+    image_files = sorted([f for f in os.listdir(image_folder) if f.lower().endswith('.png')])
+
+    # Loop through each image, adding it to a new page
+    for i, image_file in enumerate(image_files, start=1):
+        image_path = os.path.join(image_folder, image_file)
+        custom_text = f"Page {i} - {image_file}"
+        add_image_page(c, image_path, custom_text=custom_text)
+        c.showPage()  # Start a new page after each image
 
     # Save the PDF
     c.save()
 
-# Define your folder containing images
-image_folder = "/path/to/your/images"  # Replace with the path to your PNG images
+# Folder containing the images and output PDF path
+image_folder = "/path/to/your/image_folder"  # Replace with your folder path
+output_pdf = "/path/to/output/XYZ_Report.pdf"  # Replace with your desired output file path
 
-# Define the output path for the PDF file
-output_pdf = "/path/to/output/report.pdf"  # Replace with your desired PDF file path
-
-# Create the PDF report
-create_pdf(output_pdf, image_folder)
-
-print("PDF report created successfully!")
+# Create the PDF
+create_pdf_from_images(image_folder, output_pdf)
+print("PDF created successfully!")
