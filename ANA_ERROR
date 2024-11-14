@@ -3,7 +3,7 @@ from reportlab.pdfgen import canvas
 from PIL import Image
 import os
 
-# Function to add each image to a new page in the PDF with larger width
+# Function to add each image to a new page in the PDF with max width
 def add_image_page(c, image_path, custom_text=None):
     # Set font and add custom text at the top if provided
     c.setFont("Helvetica", 18)
@@ -15,23 +15,20 @@ def add_image_page(c, image_path, custom_text=None):
     img_width, img_height = img.size
     aspect_ratio = img_height / float(img_width)
 
-    # Define a larger maximum width while still maintaining margins
-    larger_margin = 30  # Decrease margins for a larger image display
-    max_width = letter[0] - 2 * larger_margin
-    max_height = letter[1] - 2 * larger_margin
-    
-    # Scale the image to fit the new max width
-    if img_width > max_width or img_height > max_height:
-        if img_width > img_height:
-            width = max_width
-            height = width * aspect_ratio
-        else:
-            height = max_height
-            width = height / aspect_ratio
-    else:
-        width, height = img_width, img_height
+    # Set maximum width to the full width of the PDF page, minus minimal margins
+    max_width = letter[0] - 20  # Small margin on each side
+    max_height = letter[1] - 100  # Margin to accommodate text at the top
 
-    # Center the image on the page
+    # Adjust the image dimensions to fit the maximum width
+    width = max_width
+    height = width * aspect_ratio
+
+    # Ensure the height does not exceed the max page height
+    if height > max_height:
+        height = max_height
+        width = height / aspect_ratio
+
+    # Center the image vertically if there's extra space
     x = (letter[0] - width) / 2
     y = (letter[1] - height) / 2
     c.drawImage(image_path, x, y, width=width, height=height)
