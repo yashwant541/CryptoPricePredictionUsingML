@@ -3,7 +3,7 @@ from reportlab.pdfgen import canvas
 from PIL import Image
 import os
 
-# Function to add each image to a new page in the PDF
+# Function to add each image to a new page in the PDF with larger width
 def add_image_page(c, image_path, custom_text=None):
     # Set font and add custom text at the top if provided
     c.setFont("Helvetica", 18)
@@ -15,12 +15,12 @@ def add_image_page(c, image_path, custom_text=None):
     img_width, img_height = img.size
     aspect_ratio = img_height / float(img_width)
 
-    # Adjust image to fit within the PDF page dimensions
-    margin = 50
-    max_width = letter[0] - 2 * margin
-    max_height = letter[1] - 2 * margin
+    # Define a larger maximum width while still maintaining margins
+    larger_margin = 30  # Decrease margins for a larger image display
+    max_width = letter[0] - 2 * larger_margin
+    max_height = letter[1] - 2 * larger_margin
     
-    # Scale image to fit the page while maintaining aspect ratio
+    # Scale the image to fit the new max width
     if img_width > max_width or img_height > max_height:
         if img_width > img_height:
             width = max_width
