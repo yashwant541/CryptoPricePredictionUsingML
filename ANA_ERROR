@@ -1,9 +1,9 @@
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak
 import pandas as pd
-from reportlab.pdfgen import canvas
+from reportlab.lib.units import inch
 
 # File Paths
 input_file = 'input_data.csv'  # Change this to your file path
@@ -23,8 +23,9 @@ story = []
 # Add front page image (first page)
 try:
     img = Image(image_file)
-    img.drawHeight = 600  # Adjust height based on your image
-    img.drawWidth = 800  # Adjust width based on your image
+    # Resize image to fit within the page (example: fit within 6x6 inches)
+    img.drawWidth = 6 * inch  # Resize width (in inches)
+    img.drawHeight = 6 * inch  # Resize height (in inches)
     story.append(img)
     story.append(Spacer(1, 12))  # Add some space after the image
 except Exception as e:
