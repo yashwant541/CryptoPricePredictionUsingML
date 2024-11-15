@@ -1,14 +1,13 @@
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
 import pandas as pd
 from reportlab.lib.units import inch
 
 # File Paths
 input_file = 'input_data.csv'  # Change this to your file path
 pdf_file = 'dynamic_report.pdf'
-image_file = 'front_page_image.png'  # Path to your PNG file for the front page
 
 # Read the file (supports both CSV and Excel)
 if input_file.endswith('.csv'):
@@ -20,26 +19,30 @@ elif input_file.endswith('.xlsx'):
 doc = SimpleDocTemplate(pdf_file, pagesize=(A4[1], A4[0]))  # A4 landscape
 story = []
 
-# Add front page image (first page)
-try:
-    img = Image(image_file)
-    # Resize image to fit within the page (example: fit within 6x6 inches)
-    img.drawWidth = 6 * inch  # Resize width (in inches)
-    img.drawHeight = 6 * inch  # Resize height (in inches)
-    story.append(img)
-    story.append(Spacer(1, 12))  # Add some space after the image
-except Exception as e:
-    print(f"Error loading image: {e}")
+# Front page with big custom text (first page)
+front_page_text = "Dynamic Report"  # Custom text for the front page
+front_page_style = ParagraphStyle(
+    'FrontPageStyle',
+    fontName='Helvetica-Bold',
+    fontSize=48,
+    textColor=colors.black,
+    alignment=1  # Center alignment
+)
+
+# Add front page text
+front_page_paragraph = Paragraph(front_page_text, front_page_style)
+story.append(front_page_paragraph)
+story.append(Spacer(1, 200))  # Add some space to keep the text at the center of the page
 
 # Add content from the second page onward (your report)
 styles = getSampleStyleSheet()
 
-# Section style for report text
+# Section style for report text (black text color)
 section_style = ParagraphStyle(
     'SectionStyle',
     fontName='Helvetica',
     fontSize=12,
-    textColor=colors.HexColor("#38D200"),  # Green text color for fields
+    textColor=colors.black,  # Black text color for fields
 )
 
 # Add report data from the DataFrame to the PDF
