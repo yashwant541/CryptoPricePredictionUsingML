@@ -27,6 +27,11 @@ for col in df.columns:
 # Create PDF report
 doc = SimpleDocTemplate(pdf_file, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
 
+# Define Colors
+banner_bg_color = colors.HexColor("#0473EA")  # Banner Background color
+banner_text_color = colors.HexColor("#38D200")  # Text color on Banner
+column_field_color = colors.HexColor("#38D200")  # Column Field Names Color
+
 # Styling with Times-Roman (default font)
 styles = getSampleStyleSheet()
 title_style = ParagraphStyle(
@@ -62,13 +67,13 @@ story.append(Spacer(1, 0.2 * inch))
 
 # Loop through each row and generate dynamic content
 for idx, row in df.iterrows():
-    # Section header with a light background color
+    # Section header with the defined banner background color
     title_text = row[df.columns[0]] if len(df.columns) > 0 else "No Title"  # Use first column as section header
     title_table = Table(
         [[f"Record {idx + 1}: {title_text}"]],
         colWidths=[450],
-        style=[('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#FFD43B")),
-               ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+        style=[('BACKGROUND', (0, 0), (-1, -1), banner_bg_color),  # Set banner background color
+               ('TEXTCOLOR', (0, 0), (-1, -1), banner_text_color),  # Set text color on banner
                ('FONTNAME', (0, 0), (-1, -1), 'Times-Roman'),
                ('FONTSIZE', (0, 0), (-1, -1), 14),
                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
@@ -83,12 +88,9 @@ for idx, row in df.iterrows():
     # Add each column dynamically
     for col in df.columns:
         if pd.notna(row[col]):
-            # Format date if it's a date column
-            if col == date_column:
-                formatted_date = row[col].strftime('%d-%m-%Y') if pd.notnull(row[col]) else 'N/A'
-                story.append(Paragraph(f"<b>{col}:</b> {formatted_date}", section_style))
-            else:
-                story.append(Paragraph(f"<b>{col}:</b> {row[col]}", section_style))
+            # Set the color for column field names
+            col_name_paragraph = Paragraph(f"<b><font color='{column_field_color}'>{col}:</font></b> {row[col]}", section_style)
+            story.append(col_name_paragraph)
 
     # Spacer between entries
     story.append(Spacer(1, 0.2 * inch))
