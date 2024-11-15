@@ -1,7 +1,7 @@
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, HRFlowable
 import pandas as pd
 from reportlab.lib.units import inch
 
@@ -32,7 +32,7 @@ front_page_style = ParagraphStyle(
 # Add front page text
 front_page_paragraph = Paragraph(front_page_text, front_page_style)
 story.append(front_page_paragraph)
-story.append(Spacer(1, 200))  # Add some space to keep the text at the center of the page
+story.append(Spacer(1, 100))  # Increase space to avoid overlap (adjust as needed)
 
 # Add content from the second page onward (your report)
 styles = getSampleStyleSheet()
@@ -57,6 +57,10 @@ for idx, row in df.iterrows():
         if pd.notna(row[col]):
             story.append(Paragraph(f"<b>{col}:</b> {row[col]}", section_style))
             story.append(Spacer(1, 6))
+
+    # Add a line after each record
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.black))
+    story.append(Spacer(1, 12))  # Add some space after the line
 
     # Add page break after each record (if necessary)
     if (idx + 1) % 10 == 0:
