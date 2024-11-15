@@ -15,6 +15,15 @@ if input_file.endswith('.csv'):
 elif input_file.endswith('.xlsx'):
     df = pd.read_excel(input_file)
 
+# Check if there is a date column and sort by latest date to oldest
+date_column = None
+for col in df.columns:
+    if 'date' in col.lower():  # Identify date column
+        date_column = col
+        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')  # Convert to datetime
+        df = df.sort_values(by=date_column, ascending=False).reset_index(drop=True)  # Sort by latest date
+        break
+
 # Create PDF report with landscape orientation
 doc = SimpleDocTemplate(pdf_file, pagesize=(A4[1], A4[0]))  # A4 landscape
 story = []
@@ -47,7 +56,7 @@ section_style = ParagraphStyle(
 
 # Add report data from the DataFrame to the PDF
 for idx, row in df.iterrows():
-    title_text = row[df.columns[0]] if len(df.columns) > 0 else "No Title"
+    title_text = row['Title'] if 'Title' in row else f"Record {idx + 1}"  # Use 'Title' column or default to record number
     title_paragraph = Paragraph(f"Record {idx + 1}: {title_text}", style=styles['Heading2'])
     story.append(title_paragraph)
     story.append(Spacer(1, 12))
