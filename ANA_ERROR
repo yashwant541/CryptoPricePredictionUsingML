@@ -1,88 +1,19 @@
-from docx import Document
-from docx.shared import RGBColor
-import pandas as pd
+from pdf2docx import Converter
 
-# File Paths
-input_file = 'input_data.csv'  # Change this to your file path
-template_file = 'template.docx'  # Path to the Word template
-output_file = 'dynamic_report.docx'  # Output Word file
-
-# Read the input data (CSV or Excel)
-if input_file.endswith('.csv'):
-    df = pd.read_csv(input_file)
-elif input_file.endswith('.xlsx'):
-    df = pd.read_excel(input_file)
-
-# Convert Date column if exists and sort by latest date
-date_column = None
-for col in df.columns:
-    if 'date' in col.lower():  # Find any column with "date" in its name
-        date_column = col
-        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
-        df = df.sort_values(by=date_column, ascending=False).reset_index(drop=True)
-        break
-
-# Read the template Word document
-doc = Document(template_file)
-
-# Create a new document for output
-output_doc = Document()
-
-# Copy Page 1 (Banner) from the template
-# Assuming the first section (element 0) in the document is the banner
-for i, element in enumerate(doc.element.body):
-    if i == 0:
-        output_doc.element.body.append(element)
-
-# Extract the content from Pages 2 and 3 (template format for report)
-template_content = []
-for i, element in enumerate(doc.element.body):
-    if i == 1 or i == 2:  # Page 2 and Page 3 are the template for the report
-        template_content.append(element)
-
-# Loop through the rows in the dataframe and add data dynamically
-section_style = {
-    'font_name': 'Times New Roman', 
-    'font_size': 12,
-    'font_color': RGBColor(0x38, 0xD2, 0x00)  # Green color for text
-}
-
-# Determine how many pages are needed for the report content
-max_rows_per_page = 15  # Adjust this number to fit how many rows fit on a page
-rows_remaining = len(df)
-
-# Add dynamic report content following the Page 2/3 format
-for idx, row in df.iterrows():
-    # For each record, add the content using the template format
-    if idx % max_rows_per_page == 0 and idx != 0:
-        # Add a new page if the previous page has been filled
-        output_doc.add_page_break()
+def convert_pdf_to_word(pdf_file, word_file):
+    # Initialize the Converter
+    cv = Converter(pdf_file)
     
-    # Add the report data for the current row
-    title_text = row[df.columns[0]] if len(df.columns) > 0 else "No Title"
-    title_paragraph = output_doc.add_paragraph(f"Record {idx + 1}: {title_text}", style="Heading 2")
+    # Convert the PDF to Word (docx format)
+    cv.convert(word_file, start=0, end=None)
     
-    # Loop through the columns of the current row and add to the document
-    for col in df.columns:
-        if pd.notna(row[col]):
-            # Format date if it's a date column
-            if col == date_column:
-                formatted_date = row[col].strftime('%d-%m-%Y') if pd.notnull(row[col]) else 'N/A'
-                output_doc.add_paragraph(f"{col}: {formatted_date}", style="Normal")
-            else:
-                output_doc.add_paragraph(f"{col}: {row[col]}", style="Normal")
+    # Close the converter
+    cv.close()
     
-    # Page break if we reach the end of the page content
-    rows_remaining -= 1
-    if rows_remaining % max_rows_per_page == 0:
-        output_doc.add_page_break()
+    print(f"Conversion successful! The Word file is saved as {word_file}")
 
-# Copy Last Page (footer or closing page) from the template
-for i, element in enumerate(doc.element.body):
-    if i == len(doc.element.body) - 1:
-        output_doc.element.body.append(element)
+# Example usage
+pdf_file = 'path_to_your_pdf.pdf'   # Input PDF file path
+word_file = 'output_word_file.docx'  # Output Word file path
 
-# Save the document
-output_doc.save(output_file)
-
-print(f"Dynamic Word report created: {output_file}")
+convert_pdf_to_word(pdf_file, word_file)
