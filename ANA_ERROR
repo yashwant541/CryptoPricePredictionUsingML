@@ -1,59 +1,104 @@
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-from PIL import Image
-import os
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import inch
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase import pdfmetrics
+import pandas as pd
 
-# Function to add each image to a new page in the PDF with max width
-def add_image_page(c, image_path, custom_text=None):
-    # Set font and add custom text at the top if provided
-    c.setFont("Helvetica", 18)
-    if custom_text:
-        c.drawString(50, 750, custom_text)
-    
-    # Open and add the image
-    img = Image.open(image_path)
-    img_width, img_height = img.size
-    aspect_ratio = img_height / float(img_width)
+# Register a custom font for styling (you can use any TTF font)
+pdfmetrics.registerFont(TTFont('Helvetica-Bold', 'Helvetica-Bold.ttf'))
 
-    # Set maximum width to the full width of the PDF page, minus minimal margins
-    max_width = letter[0] - 20  # Small margin on each side
-    max_height = letter[1] - 100  # Margin to accommodate text at the top
+# File Paths
+input_file = 'input_data.csv'  # Change this to your file path
+pdf_file = 'dynamic_report.pdf'
 
-    # Adjust the image dimensions to fit the maximum width
-    width = max_width
-    height = width * aspect_ratio
+# Read the file (supports both CSV and Excel)
+if input_file.endswith('.csv'):
+    df = pd.read_csv(input_file)
+elif input_file.endswith('.xlsx'):
+    df = pd.read_excel(input_file)
 
-    # Ensure the height does not exceed the max page height
-    if height > max_height:
-        height = max_height
-        width = height / aspect_ratio
+# Convert Date column if exists and sort by latest date
+date_column = None
+for col in df.columns:
+    if 'date' in col.lower():  # Find any column with "date" in its name
+        date_column = col
+        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
+        df = df.sort_values(by=date_column, ascending=False).reset_index(drop=True)
+        break
 
-    # Center the image vertically if there's extra space
-    x = (letter[0] - width) / 2
-    y = (letter[1] - height) / 2
-    c.drawImage(image_path, x, y, width=width, height=height)
+# Create PDF report
+doc = SimpleDocTemplate(pdf_file, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
 
-# Main function to create the PDF with one image per page
-def create_pdf_from_images(image_folder, output_pdf):
-    c = canvas.Canvas(output_pdf, pagesize=letter)
+# Styling
+styles = getSampleStyleSheet()
+title_style = ParagraphStyle(
+    'TitleStyle',
+    fontName='Helvetica-Bold',
+    fontSize=18,
+    textColor=colors.HexColor("#4B8BBE"),
+    spaceAfter=10,
+    leading=22,
+)
+section_style = ParagraphStyle(
+    'SectionStyle',
+    fontSize=12,
+    leading=16,
+    textColor=colors.black,
+)
+header_style = ParagraphStyle(
+    'HeaderStyle',
+    fontName='Helvetica-Bold',
+    fontSize=24,
+    textColor=colors.HexColor("#306998"),
+    alignment=1,
+    spaceAfter=20,
+)
 
-    # List all images in the folder, sorted alphanumerically
-    image_files = sorted([f for f in os.listdir(image_folder) if f.lower().endswith('.png')])
+# Collect paragraphs to add to PDF
+story = []
 
-    # Loop through each image, adding it to a new page
-    for i, image_file in enumerate(image_files, start=1):
-        image_path = os.path.join(image_folder, image_file)
-        custom_text = f"Page {i} - {image_file}"
-        add_image_page(c, image_path, custom_text=custom_text)
-        c.showPage()  # Start a new page after each image
+# Add header
+story.append(Paragraph("Data Summary Report", header_style))
+story.append(Spacer(1, 0.2 * inch))
 
-    # Save the PDF
-    c.save()
+# Loop through each row and generate dynamic content
+for idx, row in df.iterrows():
+    # Section header with a light background color
+    title_text = row[df.columns[0]] if len(df.columns) > 0 else "No Title"  # Use first column as section header
+    title_table = Table(
+        [[f"Record {idx + 1}: {title_text}"]],
+        colWidths=[450],
+        style=[
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#FFD43B")),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 14),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]
+    )
+    story.append(title_table)
+    story.append(Spacer(1, 0.15 * inch))
 
-# Folder containing the images and output PDF path
-image_folder = "/path/to/your/image_folder"  # Replace with your folder path
-output_pdf = "/path/to/output/XYZ_Report.pdf"  # Replace with your desired output file path
+    # Add each column dynamically
+    for col in df.columns:
+        if pd.notna(row[col]):
+            # Format date if it's a date column
+            if col == date_column:
+                formatted_date = row[col].strftime('%d-%m-%Y') if pd.notnull(row[col]) else 'N/A'
+                story.append(Paragraph(f"<b>{col}:</b> {formatted_date}", section_style))
+            else:
+                story.append(Paragraph(f"<b>{col}:</b> {row[col]}", section_style))
 
-# Create the PDF
-create_pdf_from_images(image_folder, output_pdf)
-print("PDF created successfully!")
+    # Spacer between entries
+    story.append(Spacer(1, 0.2 * inch))
+
+# Build PDF
+doc.build(story)
+
+print(f"Dynamic PDF report created: {pdf_file}")
