@@ -1,15 +1,13 @@
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.units import inch
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from docx import Document
+from docx.shared import RGBColor
 import pandas as pd
 
 # File Paths
 input_file = 'input_data.csv'  # Change this to your file path
-pdf_file = 'dynamic_report.pdf'
+template_file = 'template.docx'  # Path to the Word template
+output_file = 'dynamic_report.docx'  # Output Word file
 
-# Read the file (supports both CSV and Excel)
+# Read the input data (CSV or Excel)
 if input_file.endswith('.csv'):
     df = pd.read_csv(input_file)
 elif input_file.endswith('.xlsx'):
@@ -24,78 +22,67 @@ for col in df.columns:
         df = df.sort_values(by=date_column, ascending=False).reset_index(drop=True)
         break
 
-# Create PDF report
-doc = SimpleDocTemplate(pdf_file, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
+# Read the template Word document
+doc = Document(template_file)
 
-# Define Colors
-banner_bg_color = colors.HexColor("#0473EA")  # Banner Background color
-banner_text_color = colors.HexColor("#38D200")  # Text color on Banner
-column_field_color = colors.HexColor("#38D200")  # Column Field Names Color
+# Create a new document for output
+output_doc = Document()
 
-# Styling with Times-Roman (default font)
-styles = getSampleStyleSheet()
-title_style = ParagraphStyle(
-    'TitleStyle',
-    fontName='Times-Roman',
-    fontSize=18,
-    textColor=colors.HexColor("#4B8BBE"),
-    spaceAfter=10,
-    leading=22,
-)
-section_style = ParagraphStyle(
-    'SectionStyle',
-    fontName='Times-Roman',
-    fontSize=12,
-    leading=16,
-    textColor=colors.black,
-)
-header_style = ParagraphStyle(
-    'HeaderStyle',
-    fontName='Times-Roman',
-    fontSize=24,
-    textColor=colors.HexColor("#306998"),
-    alignment=1,
-    spaceAfter=20,
-)
+# Copy Page 1 (Banner) from the template
+# Assuming the first section (element 0) in the document is the banner
+for i, element in enumerate(doc.element.body):
+    if i == 0:
+        output_doc.element.body.append(element)
 
-# Collect paragraphs to add to PDF
-story = []
+# Extract the content from Pages 2 and 3 (template format for report)
+template_content = []
+for i, element in enumerate(doc.element.body):
+    if i == 1 or i == 2:  # Page 2 and Page 3 are the template for the report
+        template_content.append(element)
 
-# Add header
-story.append(Paragraph("Data Summary Report", header_style))
-story.append(Spacer(1, 0.2 * inch))
+# Loop through the rows in the dataframe and add data dynamically
+section_style = {
+    'font_name': 'Times New Roman', 
+    'font_size': 12,
+    'font_color': RGBColor(0x38, 0xD2, 0x00)  # Green color for text
+}
 
-# Loop through each row and generate dynamic content
+# Determine how many pages are needed for the report content
+max_rows_per_page = 15  # Adjust this number to fit how many rows fit on a page
+rows_remaining = len(df)
+
+# Add dynamic report content following the Page 2/3 format
 for idx, row in df.iterrows():
-    # Section header with the defined banner background color
-    title_text = row[df.columns[0]] if len(df.columns) > 0 else "No Title"  # Use first column as section header
-    title_table = Table(
-        [[f"Record {idx + 1}: {title_text}"]],
-        colWidths=[450],
-        style=[('BACKGROUND', (0, 0), (-1, -1), banner_bg_color),  # Set banner background color
-               ('TEXTCOLOR', (0, 0), (-1, -1), banner_text_color),  # Set text color on banner
-               ('FONTNAME', (0, 0), (-1, -1), 'Times-Roman'),
-               ('FONTSIZE', (0, 0), (-1, -1), 14),
-               ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-               ('LEFTPADDING', (0, 0), (-1, -1), 8),
-               ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-               ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-              ]
-    )
-    story.append(title_table)
-    story.append(Spacer(1, 0.15 * inch))
-
-    # Add each column dynamically
+    # For each record, add the content using the template format
+    if idx % max_rows_per_page == 0 and idx != 0:
+        # Add a new page if the previous page has been filled
+        output_doc.add_page_break()
+    
+    # Add the report data for the current row
+    title_text = row[df.columns[0]] if len(df.columns) > 0 else "No Title"
+    title_paragraph = output_doc.add_paragraph(f"Record {idx + 1}: {title_text}", style="Heading 2")
+    
+    # Loop through the columns of the current row and add to the document
     for col in df.columns:
         if pd.notna(row[col]):
-            # Set the color for column field names
-            col_name_paragraph = Paragraph(f"<b><font color='{column_field_color}'>{col}:</font></b> {row[col]}", section_style)
-            story.append(col_name_paragraph)
+            # Format date if it's a date column
+            if col == date_column:
+                formatted_date = row[col].strftime('%d-%m-%Y') if pd.notnull(row[col]) else 'N/A'
+                output_doc.add_paragraph(f"{col}: {formatted_date}", style="Normal")
+            else:
+                output_doc.add_paragraph(f"{col}: {row[col]}", style="Normal")
+    
+    # Page break if we reach the end of the page content
+    rows_remaining -= 1
+    if rows_remaining % max_rows_per_page == 0:
+        output_doc.add_page_break()
 
-    # Spacer between entries
-    story.append(Spacer(1, 0.2 * inch))
+# Copy Last Page (footer or closing page) from the template
+for i, element in enumerate(doc.element.body):
+    if i == len(doc.element.body) - 1:
+        output_doc.element.body.append(element)
 
-# Build PDF
-doc.build(story)
+# Save the document
+output_doc.save(output_file)
 
-print(f"Dynamic PDF report created: {pdf_file}")
+print(f"Dynamic Word report created: {output_file}")
