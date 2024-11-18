@@ -1,88 +1,27 @@
 from PyPDF2 import PdfReader, PdfWriter
-from pdf2docx import Converter
-from docx import Document
-from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-import pandas as pd
 
-# File Paths
-input_file = 'input_data.csv'  # Input data file
-template_pdf = 'template.pdf'  # Original PDF template
-final_pdf = 'final_report.pdf'  # Final output PDF
-temp_word = 'temp_report.docx'  # Temporary Word document
-modified_pdf = 'modified_report.pdf'  # Modified PDF from Word
+def merge_pdfs(first_pdf, second_pdf, output_pdf):
+    # Read the first PDF
+    first_reader = PdfReader(first_pdf)
+    # Read the second PDF
+    second_reader = PdfReader(second_pdf)
+    # Create a writer object
+    writer = PdfWriter()
 
-# Step 1: Read the Input Data
-if input_file.endswith('.csv'):
-    df = pd.read_csv(input_file)
-elif input_file.endswith('.xlsx'):
-    df = pd.read_excel(input_file)
+    # Add the first page from the first PDF
+    writer.add_page(first_reader.pages[0])
 
-# Sort by Date Column (if it exists)
-date_column = None
-for col in df.columns:
-    if 'date' in col.lower():
-        date_column = col
-        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
-        df = df.sort_values(by=date_column, ascending=False).reset_index(drop=True)
-        break
+    # Add all pages except the first from the second PDF
+    for page in second_reader.pages[1:]:
+        writer.add_page(page)
 
-# Step 2: Convert PDF to Word Document
-cv = Converter(template_pdf)
-cv.convert(temp_word, start=0, end=None)  # Convert the entire PDF to Word
-cv.close()
+    # Write the output file
+    with open(output_pdf, "wb") as output_file:
+        writer.write(output_file)
 
-# Step 3: Modify the Word Document
-doc = Document(temp_word)
+# Example usage
+first_pdf_path = "path/to/first.pdf"
+second_pdf_path = "path/to/second.pdf"
+output_pdf_path = "path/to/output.pdf"
 
-# Modify content from the second page onward
-# Remove existing content after the first page
-for i in range(len(doc.paragraphs) - 1, -1, -1):
-    if i > 0:
-        del doc.paragraphs[i]
-
-# Add Report Content
-doc.add_section()
-doc.styles['Normal'].font.name = 'Helvetica'
-doc.styles['Normal'].font.size = Pt(12)
-doc.styles['Normal'].font.color.rgb = RGBColor(0, 0, 0)
-
-for idx, row in df.iterrows():
-    # Add Title (Headline)
-    title = row.get('Title', f"Record {idx + 1}")
-    p = doc.add_paragraph(f"Record {idx + 1}: {title}")
-    p.style = 'Heading 1'
-    p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-
-    # Add Record Data
-    for col in df.columns:
-        if pd.notna(row[col]):
-            doc.add_paragraph(f"{col}: {row[col]}")
-
-    doc.add_paragraph('-' * 50)  # Separator
-
-# Save the modified Word document
-doc.save(temp_word)
-
-# Step 4: Convert Modified Word Document Back to PDF
-cv = Converter(temp_word)
-cv.convert(modified_pdf, start=0, end=None)
-cv.close()
-
-# Step 5: Combine Original First Page and Modified Report
-reader = PdfReader(template_pdf)
-writer = PdfWriter()
-
-# Add the first page from the template
-writer.add_page(reader.pages[0])
-
-# Add the modified report content
-report_reader = PdfReader(modified_pdf)
-for page in report_reader.pages:
-    writer.add_page(page)
-
-# Save the final PDF
-with open(final_pdf, 'wb') as f:
-    writer.write(f)
-
-print(f"Final PDF report created successfully: {final_pdf}")
+merge_pdfs(first_pdf_path, second_pdf_path, output_pdf_path)
