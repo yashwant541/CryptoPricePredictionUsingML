@@ -1,40 +1,88 @@
----------------------------------------------------------------------------
-AttributeError                            Traceback (most recent call last)
-<ipython-input-3-b0ed940d0bc1> in <module>
-     48 ###################################################################################################
-     49 
----> 50 contact_dfs = GIA_CM_Register_prepared_df['Contact'].apply(extract_contact_info)
-     51 
-     52 result_df = pd.concat(contact_dfs.tolist(), ignore_index=True)
+from PyPDF2 import PdfReader, PdfWriter
+from pdf2docx import Converter
+from docx import Document
+from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+import pandas as pd
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\series.py in apply(self, func, convert_dtype, args, **kwds)
-   4198             else:
-   4199                 values = self.astype(object)._values
--> 4200                 mapped = lib.map_infer(values, f, convert=convert_dtype)
-   4201 
-   4202         if len(mapped) and isinstance(mapped[0], Series):
+# File Paths
+input_file = 'input_data.csv'  # Input data file
+template_pdf = 'template.pdf'  # Original PDF template
+final_pdf = 'final_report.pdf'  # Final output PDF
+temp_word = 'temp_report.docx'  # Temporary Word document
+modified_pdf = 'modified_report.pdf'  # Modified PDF from Word
 
-pandas\_libs\lib.pyx in pandas._libs.lib.map_infer()
+# Step 1: Read the Input Data
+if input_file.endswith('.csv'):
+    df = pd.read_csv(input_file)
+elif input_file.endswith('.xlsx'):
+    df = pd.read_excel(input_file)
 
-<ipython-input-3-b0ed940d0bc1> in extract_contact_info(json_str)
-     17         data = json.loads(json_str)
-     18         results = data['results']
----> 19         contact_df = pd.json_normalize(results)
-     20         return contact_df[['Name', 'Title']]
-     21     except json.JSONDecodeError as e:
+# Sort by Date Column (if it exists)
+date_column = None
+for col in df.columns:
+    if 'date' in col.lower():
+        date_column = col
+        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
+        df = df.sort_values(by=date_column, ascending=False).reset_index(drop=True)
+        break
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\json\_normalize.py in _json_normalize(data, record_path, meta, meta_prefix, record_prefix, errors, sep, max_level)
-    268 
-    269     if record_path is None:
---> 270         if any([isinstance(x, dict) for x in y.values()] for y in data):
-    271             # naive normalization, this is idempotent for flat records
-    272             # and potentially will inflate the data considerably for
+# Step 2: Convert PDF to Word Document
+cv = Converter(template_pdf)
+cv.convert(temp_word, start=0, end=None)  # Convert the entire PDF to Word
+cv.close()
 
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\json\_normalize.py in <genexpr>(.0)
-    268 
-    269     if record_path is None:
---> 270         if any([isinstance(x, dict) for x in y.values()] for y in data):
-    271             # naive normalization, this is idempotent for flat records
-    272             # and potentially will inflate the data considerably for
+# Step 3: Modify the Word Document
+doc = Document(temp_word)
 
-AttributeError: 'str' object has no attribute 'values'
+# Modify content from the second page onward
+# Remove existing content after the first page
+for i in range(len(doc.paragraphs) - 1, -1, -1):
+    if i > 0:
+        del doc.paragraphs[i]
+
+# Add Report Content
+doc.add_section()
+doc.styles['Normal'].font.name = 'Helvetica'
+doc.styles['Normal'].font.size = Pt(12)
+doc.styles['Normal'].font.color.rgb = RGBColor(0, 0, 0)
+
+for idx, row in df.iterrows():
+    # Add Title (Headline)
+    title = row.get('Title', f"Record {idx + 1}")
+    p = doc.add_paragraph(f"Record {idx + 1}: {title}")
+    p.style = 'Heading 1'
+    p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+
+    # Add Record Data
+    for col in df.columns:
+        if pd.notna(row[col]):
+            doc.add_paragraph(f"{col}: {row[col]}")
+
+    doc.add_paragraph('-' * 50)  # Separator
+
+# Save the modified Word document
+doc.save(temp_word)
+
+# Step 4: Convert Modified Word Document Back to PDF
+cv = Converter(temp_word)
+cv.convert(modified_pdf, start=0, end=None)
+cv.close()
+
+# Step 5: Combine Original First Page and Modified Report
+reader = PdfReader(template_pdf)
+writer = PdfWriter()
+
+# Add the first page from the template
+writer.add_page(reader.pages[0])
+
+# Add the modified report content
+report_reader = PdfReader(modified_pdf)
+for page in report_reader.pages:
+    writer.add_page(page)
+
+# Save the final PDF
+with open(final_pdf, 'wb') as f:
+    writer.write(f)
+
+print(f"Final PDF report created successfully: {final_pdf}")
