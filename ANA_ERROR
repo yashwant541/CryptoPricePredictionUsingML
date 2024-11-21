@@ -1,83 +1,17 @@
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, HRFlowable
-import pandas as pd
-from reportlab.lib.units import inch
+# Calculate the current quarter
+current_month = today.month
+if current_month in [1, 2, 3]:
+    quarter_start = datetime(today.year, 1, 1)
+    quarter_end = datetime(today.year, 3, 31)
+elif current_month in [4, 5, 6]:
+    quarter_start = datetime(today.year, 4, 1)
+    quarter_end = datetime(today.year, 6, 30)
+elif current_month in [7, 8, 9]:
+    quarter_start = datetime(today.year, 7, 1)
+    quarter_end = datetime(today.year, 9, 30)
+else:
+    quarter_start = datetime(today.year, 10, 1)
+    quarter_end = datetime(today.year, 12, 31)
 
-# File Paths
-input_file = 'input_data.csv'  # Change this to your file path
-pdf_file = 'dynamic_report.pdf'
-
-# Read the file (supports both CSV and Excel)
-if input_file.endswith('.csv'):
-    df = pd.read_csv(input_file)
-elif input_file.endswith('.xlsx'):
-    df = pd.read_excel(input_file)
-
-# Check if there is a date column and sort by latest date to oldest
-date_column = None
-for col in df.columns:
-    if 'date' in col.lower():  # Identify date column
-        date_column = col
-        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')  # Convert to datetime
-        df = df.sort_values(by=date_column, ascending=False).reset_index(drop=True)  # Sort by latest date
-        break
-
-# Create PDF report with landscape orientation
-doc = SimpleDocTemplate(pdf_file, pagesize=(A4[1], A4[0]))  # A4 landscape
-story = []
-
-# Front page with big custom text (first page)
-front_page_text = "Dynamic Report"  # Custom text for the front page
-front_page_style = ParagraphStyle(
-    'FrontPageStyle',
-    fontName='Helvetica-Bold',
-    fontSize=48,
-    textColor=colors.black,
-    alignment=1  # Center alignment
-)
-
-# Add front page text
-front_page_paragraph = Paragraph(front_page_text, front_page_style)
-story.append(front_page_paragraph)
-story.append(Spacer(1, 100))  # Increase space to avoid overlap (adjust as needed)
-
-# Add content from the second page onward (your report)
-styles = getSampleStyleSheet()
-
-# Section style for report text (black text color)
-section_style = ParagraphStyle(
-    'SectionStyle',
-    fontName='Helvetica',
-    fontSize=12,
-    textColor=colors.black,  # Black text color for fields
-)
-
-# Add report data from the DataFrame to the PDF
-for idx, row in df.iterrows():
-    title_text = row['Title'] if 'Title' in row else f"Record {idx + 1}"  # Use 'Title' column or default to record number
-    title_paragraph = Paragraph(f"Record {idx + 1}: {title_text}", style=styles['Heading2'])
-    story.append(title_paragraph)
-    story.append(Spacer(1, 12))
-
-    # Add data for each column dynamically
-    for col in df.columns:
-        if pd.notna(row[col]):
-            story.append(Paragraph(f"<b>{col}:</b> {row[col]}", section_style))
-            story.append(Spacer(1, 6))
-
-    # Add a line after each record
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.black))
-    story.append(Spacer(1, 12))  # Add some space after the line
-
-    # Add page break after each record (if necessary)
-    if (idx + 1) % 10 == 0:
-        story.append(PageBreak())
-
-# Build PDF with the collected story content
-try:
-    doc.build(story)
-    print(f"Dynamic PDF report created successfully: {pdf_file}")
-except Exception as e:
-    print(f"Error creating PDF: {e}")
+# Filter the DataFrame for the current quarter
+filtered_df = df[(df['date_column'] >= quarter_start) & (df['date_column'] <= quarter_end)]
