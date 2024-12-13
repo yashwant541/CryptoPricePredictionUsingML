@@ -1,17 +1,39 @@
-# Calculate the current quarter
-current_month = today.month
-if current_month in [1, 2, 3]:
-    quarter_start = datetime(today.year, 1, 1)
-    quarter_end = datetime(today.year, 3, 31)
-elif current_month in [4, 5, 6]:
-    quarter_start = datetime(today.year, 4, 1)
-    quarter_end = datetime(today.year, 6, 30)
-elif current_month in [7, 8, 9]:
-    quarter_start = datetime(today.year, 7, 1)
-    quarter_end = datetime(today.year, 9, 30)
-else:
-    quarter_start = datetime(today.year, 10, 1)
-    quarter_end = datetime(today.year, 12, 31)
+AttributeError                            Traceback (most recent call last)
+<ipython-input-3-f0872254343a> in <module>
+     66 GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'] = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(check_and_nullify)
+     67 
+---> 68 contact_dfs = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(extract_contact_info)
+     69 
+     70 result_df = pd.concat(contact_dfs.tolist(), ignore_index=True)
 
-# Filter the DataFrame for the current quarter
-filtered_df = df[(df['date_column'] >= quarter_start) & (df['date_column'] <= quarter_end)]
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\series.py in apply(self, func, convert_dtype, args, **kwds)
+   4198             else:
+   4199                 values = self.astype(object)._values
+-> 4200                 mapped = lib.map_infer(values, f, convert=convert_dtype)
+   4201 
+   4202         if len(mapped) and isinstance(mapped[0], Series):
+
+pandas\_libs\lib.pyx in pandas._libs.lib.map_infer()
+
+<ipython-input-3-f0872254343a> in extract_contact_info(json_str)
+     32         data = json.loads(json_str)
+     33         results = data['results']
+---> 34         contact_df = pd.json_normalize(results)
+     35         return contact_df[['Name', 'Title']]
+     36     except json.JSONDecodeError as e:
+
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\json\_normalize.py in _json_normalize(data, record_path, meta, meta_prefix, record_prefix, errors, sep, max_level)
+    268 
+    269     if record_path is None:
+--> 270         if any([isinstance(x, dict) for x in y.values()] for y in data):
+    271             # naive normalization, this is idempotent for flat records
+    272             # and potentially will inflate the data considerably for
+
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\json\_normalize.py in <genexpr>(.0)
+    268 
+    269     if record_path is None:
+--> 270         if any([isinstance(x, dict) for x in y.values()] for y in data):
+    271             # naive normalization, this is idempotent for flat records
+    272             # and potentially will inflate the data considerably for
+
+AttributeError: 'str' object has no attribute 'values'
