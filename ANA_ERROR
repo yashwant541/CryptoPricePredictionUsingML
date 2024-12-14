@@ -1,26 +1,23 @@
----------------------------------------------------------------------------
-AttributeError                            Traceback (most recent call last)
-<ipython-input-4-e12c4058d01a> in <module>
-     96 GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'] = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(check_and_nullify)
-     97 
----> 98 contact_dfs = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(extract_contact_info)
-     99 
-    100 result_df = pd.concat(contact_dfs.tolist(), ignore_index=True)
-
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\series.py in apply(self, func, convert_dtype, args, **kwds)
-   4198             else:
-   4199                 values = self.astype(object)._values
--> 4200                 mapped = lib.map_infer(values, f, convert=convert_dtype)
-   4201 
-   4202         if len(mapped) and isinstance(mapped[0], Series):
-
-pandas\_libs\lib.pyx in pandas._libs.lib.map_infer()
-
-<ipython-input-4-e12c4058d01a> in extract_contact_info(json_str)
-     40 def extract_contact_info(json_str):
-     41     #print("Original JSON String:", json_str)
----> 42     json_str = json_str.replace("'", '"')
-     43     json_str = re.sub(r'(?<!\\)"', r'"', json_str)
-     44 
-
-AttributeError: 'NoneType' object has no attribute 'replace'
+def extract_contact_info(json_str):
+    try:
+        if not isinstance(json_str, str):
+            # If the value is not a string, return an empty DataFrame
+            return pd.DataFrame(columns=['Name', 'Title'])
+        
+        # Replace single quotes with double quotes and ensure valid JSON
+        json_str = json_str.replace("'", '"')
+        
+        # Parse the JSON string
+        data = json.loads(json_str)
+        results = data.get('results', [])
+        
+        # Check if results is a list of dictionaries
+        if isinstance(results, list) and all(isinstance(item, dict) for item in results):
+            contact_df = pd.json_normalize(results)
+            return contact_df[['Name', 'Title']]
+        else:
+            # Return an empty DataFrame if the structure is unexpected
+            return pd.DataFrame(columns=['Name', 'Title'])
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        # Handle JSON parsing errors, missing keys, or invalid types
+        return pd.DataFrame(columns=['Name', 'Title'])
