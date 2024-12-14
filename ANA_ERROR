@@ -1,4 +1,15 @@
 def extract_contact_info(json_str):
+    #print("Original JSON String:", json_str)
+    json_str = json_str.replace("'", '"')
+    json_str = re.sub(r'(?<!\\)"', r'"', json_str)
+    
+    json_str = re.sub(r',\s*(}|\])', r'\1', json_str)
+    
+    #json_str = re.sub(r'(?<!\\)"', r'"', json_str)
+    #json_str = re.sub(r',\s*}', '}', json_str)
+    #json_str = re.sub(r',\s*]', ']', json_str)
+    #print("Preprocessed JSON String:", json_str)
+    
     try:
         if not isinstance(json_str, str):
             # If the value is not a string, return an empty DataFrame
@@ -21,3 +32,31 @@ def extract_contact_info(json_str):
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         # Handle JSON parsing errors, missing keys, or invalid types
         return pd.DataFrame(columns=['Name', 'Title'])
+
+
+---------------------------------------------------------------------------
+AttributeError                            Traceback (most recent call last)
+<ipython-input-5-88fc1871f8ac> in <module>
+    125 GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'] = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(check_and_nullify)
+    126 
+--> 127 contact_dfs = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(extract_contact_info)
+    128 
+    129 result_df = pd.concat(contact_dfs.tolist(), ignore_index=True)
+
+C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\series.py in apply(self, func, convert_dtype, args, **kwds)
+   4198             else:
+   4199                 values = self.astype(object)._values
+-> 4200                 mapped = lib.map_infer(values, f, convert=convert_dtype)
+   4201 
+   4202         if len(mapped) and isinstance(mapped[0], Series):
+
+pandas\_libs\lib.pyx in pandas._libs.lib.map_infer()
+
+<ipython-input-5-88fc1871f8ac> in extract_contact_info(json_str)
+     64 def extract_contact_info(json_str):
+     65     #print("Original JSON String:", json_str)
+---> 66     json_str = json_str.replace("'", '"')
+     67     json_str = re.sub(r'(?<!\\)"', r'"', json_str)
+     68 
+
+AttributeError: 'NoneType' object has no attribute 'replace'
