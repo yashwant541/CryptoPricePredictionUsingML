@@ -1,39 +1,18 @@
-AttributeError                            Traceback (most recent call last)
-<ipython-input-3-f0872254343a> in <module>
-     66 GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'] = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(check_and_nullify)
-     67 
----> 68 contact_dfs = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(extract_contact_info)
-     69 
-     70 result_df = pd.concat(contact_dfs.tolist(), ignore_index=True)
-
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\series.py in apply(self, func, convert_dtype, args, **kwds)
-   4198             else:
-   4199                 values = self.astype(object)._values
--> 4200                 mapped = lib.map_infer(values, f, convert=convert_dtype)
-   4201 
-   4202         if len(mapped) and isinstance(mapped[0], Series):
-
-pandas\_libs\lib.pyx in pandas._libs.lib.map_infer()
-
-<ipython-input-3-f0872254343a> in extract_contact_info(json_str)
-     32         data = json.loads(json_str)
-     33         results = data['results']
----> 34         contact_df = pd.json_normalize(results)
-     35         return contact_df[['Name', 'Title']]
-     36     except json.JSONDecodeError as e:
-
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\json\_normalize.py in _json_normalize(data, record_path, meta, meta_prefix, record_prefix, errors, sep, max_level)
-    268 
-    269     if record_path is None:
---> 270         if any([isinstance(x, dict) for x in y.values()] for y in data):
-    271             # naive normalization, this is idempotent for flat records
-    272             # and potentially will inflate the data considerably for
-
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\io\json\_normalize.py in <genexpr>(.0)
-    268 
-    269     if record_path is None:
---> 270         if any([isinstance(x, dict) for x in y.values()] for y in data):
-    271             # naive normalization, this is idempotent for flat records
-    272             # and potentially will inflate the data considerably for
-
-AttributeError: 'str' object has no attribute 'values'
+def extract_contact_info(json_str):
+    try:
+        # Ensure the input is a valid JSON string
+        if isinstance(json_str, str):
+            data = json.loads(json_str)
+            results = data.get('results', [])
+            if isinstance(results, list) and all(isinstance(item, dict) for item in results):
+                contact_df = pd.json_normalize(results)
+                return contact_df[['Name', 'Title']]
+            else:
+                # Return an empty DataFrame for unexpected structures
+                return pd.DataFrame(columns=['Name', 'Title'])
+        else:
+            # Return an empty DataFrame for non-string inputs
+            return pd.DataFrame(columns=['Name', 'Title'])
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        # Handle any parsing or key errors
+        return pd.DataFrame(columns=['Name', 'Title'])
