@@ -1,33 +1,3 @@
---------------------------------------------------------------------------
-TypeError                                 Traceback (most recent call last)
-<ipython-input-6-1b78f404cb0a> in <module>
-    127 contacts_df = result_df
-    128 
---> 129 GIA_CM_Register_prepared_df['Extracted_IDs'] = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(lambda x: re.findall(r'\b\d{7}\b', x))
-    130 GIA_CM_Register_prepared_df_expanded = GIA_CM_Register_prepared_df.explode('Extracted_IDs')
-    131 final_df = pd.merge(GIA_CM_Register_prepared_df_expanded, contacts_df, left_on = 'Extracted_IDs', right_on = 'SCB_PSID', how='left')
-
-C:\ProgramData\Anaconda3\lib\site-packages\pandas\core\series.py in apply(self, func, convert_dtype, args, **kwds)
-   4198             else:
-   4199                 values = self.astype(object)._values
--> 4200                 mapped = lib.map_infer(values, f, convert=convert_dtype)
-   4201 
-   4202         if len(mapped) and isinstance(mapped[0], Series):
-
-pandas\_libs\lib.pyx in pandas._libs.lib.map_infer()
-
-<ipython-input-6-1b78f404cb0a> in <lambda>(x)
-    127 contacts_df = result_df
-    128 
---> 129 GIA_CM_Register_prepared_df['Extracted_IDs'] = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(lambda x: re.findall(r'\b\d{7}\b', x))
-    130 GIA_CM_Register_prepared_df_expanded = GIA_CM_Register_prepared_df.explode('Extracted_IDs')
-    131 final_df = pd.merge(GIA_CM_Register_prepared_df_expanded, contacts_df, left_on = 'Extracted_IDs', right_on = 'SCB_PSID', how='left')
-
-C:\ProgramData\Anaconda3\lib\re.py in findall(pattern, string, flags)
-    239 
-    240     Empty matches are included in the result."""
---> 241     return _compile(pattern, flags).findall(string)
-    242 
-    243 def finditer(pattern, string, flags=0):
-
-TypeError: expected string or bytes-like object
+GIA_CM_Register_prepared_df['Extracted_IDs'] = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(
+    lambda x: re.findall(r'\b\d{7}\b', x) if isinstance(x, str) else []
+)
