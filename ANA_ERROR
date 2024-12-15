@@ -1,3 +1,1 @@
-GIA_CM_Register_prepared_df['Extracted_IDs'] = GIA_CM_Register_prepared_df['Contact_x0020_for_x0020_Continuo'].apply(
-    lambda x: re.findall(r'\b\d{7}\b', x) if isinstance(x, str) else []
-)
+{'results': [{'__metadata': {'id': 'abjbdsbdjbjsbjbdhabd', 'type': 'SP.Data.UserInfoItem'}, 'Name': 'i:0#.w|zone1-kfcnet\\1434834', 'Title': 'Lee, Ankur'}, {'__metadata': {'id': 'hgddjgwjdgydjwbdwbduj', 'type': 'SP.Data.UserInfoItem'}, 'Name': 'i:0#.w|zone1-kfcnet\\9118747', 'Title': 'Wangu, Ivan'}]}
