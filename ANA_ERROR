@@ -4,6 +4,7 @@ import dataiku
 
 # Sample DataFrame
 data = {
+    "uid": [3463245, 3463246],  # UID column
     "Id": [1, 2],
     "Name": ["Putin", "Putout"],
     "Age": [56, 55],
@@ -25,31 +26,34 @@ class PDF(FPDF):
         self.set_font("Arial", size=10)
         self.cell(0, 10, f"Page {self.page_no()}", align="C")
 
-# Initialize PDF
-pdf = PDF()
-pdf.set_auto_page_break(auto=True, margin=15)
+# Get Dataiku managed folder
+folder = dataiku.Folder("quarterly_reports")  # Replace with your folder ID
 
-# Add rows to PDF
+# Generate PDF for each row and save
 for index, row in df.iterrows():
+    pdf = PDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
+    
+    # Add record details
     pdf.set_font("Arial", size=12)
     pdf.cell(0, 10, f"Record {row['Id']}: {row['Title']}", ln=True, align="L")
     pdf.ln(5)
     
-    # Add details
+    # Add details row by row
     for col, value in row.items():
         pdf.cell(0, 10, f"{col}: {value}", ln=True, align="L")
     pdf.ln(5)
     pdf.cell(0, 0, "_" * 100, ln=True)  # Separator line
     pdf.ln(10)
+    
+    # Generate file name using UID
+    uid = row["uid"]
+    pdf_file_name = f"Quarterly_Report_{uid}.pdf"
+    
+    # Save PDF to Dataiku folder
+    pdf_output = pdf.output(dest='S').encode('latin1')  # Generate PDF content as bytes
+    with folder.get_writer(pdf_file_name) as writer:
+        writer.write(pdf_output)
 
-# Save PDF to Dataiku folder
-pdf_file_name = "Quarterly_Report.pdf"
-pdf_output = pdf.output(dest='S').encode('latin1')  # Generate PDF content as bytes
-
-# Get Dataiku managed folder
-folder = dataiku.Folder("quarterly_reports")  # Replace with your folder ID
-with folder.get_writer(pdf_file_name) as writer:
-    writer.write(pdf_output)
-
-print(f"PDF saved to Dataiku folder: {pdf_file_name}")
+    print(f"PDF saved for UID {uid}: {pdf_file_name}")
