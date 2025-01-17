@@ -1,4 +1,5 @@
-from fpdf import FPDF
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 import pandas as pd
 import dataiku
 
@@ -14,46 +15,38 @@ data = {
 }
 df = pd.DataFrame(data)
 
-# Create PDF class
-class PDF(FPDF):
-    def header(self):
-        self.set_font("Arial", size=16, style="B")
-        self.cell(0, 10, "Quarterly Report", border=0, ln=True, align="C")
-        self.ln(10)
-    
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Arial", size=10)
-        self.cell(0, 10, f"Page {self.page_no()}", align="C")
-
 # Get Dataiku managed folder
 folder = dataiku.Folder("quarterly_reports")  # Replace with your folder ID
 
-# Generate PDF for each row and save
+# Generate PDF for each row
 for index, row in df.iterrows():
-    pdf = PDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    
-    # Add record details
-    pdf.set_font("Arial", size=12)
-    pdf.cell(0, 10, f"Record {row['Id']}: {row['Title']}", ln=True, align="L")
-    pdf.ln(5)
-    
-    # Add details row by row
-    for col, value in row.items():
-        pdf.cell(0, 10, f"{col}: {value}", ln=True, align="L")
-    pdf.ln(5)
-    pdf.cell(0, 0, "_" * 100, ln=True)  # Separator line
-    pdf.ln(10)
-    
-    # Generate file name using UID
+    # File name using UID
     uid = row["uid"]
     pdf_file_name = f"Quarterly_Report_{uid}.pdf"
-    
-    # Save PDF to Dataiku folder
-    pdf_output = pdf.output(dest='S').encode('latin1')  # Generate PDF content as bytes
-    with folder.get_writer(pdf_file_name) as writer:
-        writer.write(pdf_output)
+
+    # Create a PDF in memory
+    pdf_buffer = folder.get_writer(pdf_file_name)
+    c = canvas.Canvas(pdf_buffer, pagesize=letter)
+
+    # Add header
+    c.setFont("Helvetica-Bold", 16)
+    c.drawCentredString(300, 750, "Quarterly Report")
+    c.line(50, 740, 550, 740)
+
+    # Add row details
+    c.setFont("Helvetica", 12)
+    y = 700
+    c.drawString(50, y, f"Record {row['Id']}: {row['Title']}")
+    y -= 20
+
+    for col, value in row.items():
+        c.drawString(50, y, f"{col}: {value}")
+        y -= 20
+
+    # Separator line
+    y -= 10
+    c.line(50, y, 550, y)
+    c.showPage()
+    c.save()
 
     print(f"PDF saved for UID {uid}: {pdf_file_name}")
