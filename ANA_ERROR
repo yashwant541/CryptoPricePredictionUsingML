@@ -1,69 +1,55 @@
-Maintaining a Tableau dashboard ensures its accuracy, usability, and relevance over time. Below are the steps and best practices for maintaining a Tableau dashboard effectively:
+from fpdf import FPDF
+import pandas as pd
+import dataiku
 
-1. Understand the Dashboard Purpose
+# Sample DataFrame
+data = {
+    "Id": [1, 2],
+    "Name": ["Putin", "Putout"],
+    "Age": [56, 55],
+    "Salary": [34343, 434343],
+    "Country": ["Russia", "Russia"],
+    "Title": ["Fox and cow", "Tom and Jerry"]
+}
+df = pd.DataFrame(data)
 
-Revisit the dashboard’s goals and primary users.
+# Create PDF class
+class PDF(FPDF):
+    def header(self):
+        self.set_font("Arial", size=16, style="B")
+        self.cell(0, 10, "Quarterly Report", border=0, ln=True, align="C")
+        self.ln(10)
+    
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Arial", size=10)
+        self.cell(0, 10, f"Page {self.page_no()}", align="C")
 
-Ensure the dashboard aligns with the business objectives it was designed for.
+# Initialize PDF
+pdf = PDF()
+pdf.set_auto_page_break(auto=True, margin=15)
 
-2. Data Source Monitoring
+# Add rows to PDF
+for index, row in df.iterrows():
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(0, 10, f"Record {row['Id']}: {row['Title']}", ln=True, align="L")
+    pdf.ln(5)
+    
+    # Add details
+    for col, value in row.items():
+        pdf.cell(0, 10, f"{col}: {value}", ln=True, align="L")
+    pdf.ln(5)
+    pdf.cell(0, 0, "_" * 100, ln=True)  # Separator line
+    pdf.ln(10)
 
-Verify Data Integrity: Regularly check that the data sources are updated and consistent.
+# Save PDF to Dataiku folder
+pdf_file_name = "Quarterly_Report.pdf"
+pdf_output = pdf.output(dest='S').encode('latin1')  # Generate PDF content as bytes
 
-Automate Updates: Use scheduled refreshes to ensure real-time or periodic data updates.
+# Get Dataiku managed folder
+folder = dataiku.Folder("quarterly_reports")  # Replace with your folder ID
+with folder.get_writer(pdf_file_name) as writer:
+    writer.write(pdf_output)
 
-Backup Data Sources: Maintain backups of critical data sources in case of corruption or accidental deletion.
-
-3. Performance Optimization
-
-Reduce Data Size: Use data extracts and filters to limit the data displayed to the most relevant.
-
-Optimize Queries: Review and optimize custom SQL queries used in the data source.
-
-Check Dashboard Load Times: Use Tableau’s Performance Recorder to identify bottlenecks and improve efficiency.
-
-4. Maintain Visual Consistency
-
-Standardize Design: Ensure consistent colors, fonts, and layout across dashboards.
-
-Review Annotations: Periodically update tooltips, labels, and annotations to reflect current data and context.
-
-Use Dynamic Titles: Incorporate dynamic titles or filters to provide clear context for users.
-
-5. User Access Management
-
-Review Permissions: Regularly audit user access to ensure appropriate levels of data visibility.
-
-Use Groups: Leverage Tableau Server or Tableau Online’s group functionality for easier permission management.
-
-6. Documentation and Metadata
-
-Document Changes: Maintain a changelog for updates or modifications to the dashboard.
-
-Update Metadata: Ensure data source metadata is accurate and includes descriptions for fields and calculations.
-
-7. Respond to Feedback
-
-Gather User Input: Use surveys or direct feedback to identify areas for improvement.
-
-Iterate: Regularly incorporate feedback to improve dashboard usability.
-
-8. Test Regularly
-
-Validate Data: Cross-check the data against the source systems to ensure accuracy.
-
-Test Filters: Confirm that filters and parameters work as intended.
-
-Simulate User Scenarios: Test the dashboard’s functionality from an end-user perspective.
-
-9. Monitor Usage
-
-Analyze Usage Patterns: Use Tableau Server’s or Tableau Online’s usage metrics to identify popular views and areas of improvement.
-
-Identify Redundancy: Remove or archive dashboards that are no longer in use.
-
-10. Plan for Updates
-
-Stay Updated on Tableau Features: Keep up with Tableau’s latest releases to leverage new functionalities.
-
-Schedule Maintenance: Plan regular maintenance windows to apply updates or make structural changes.
+print(f"PDF saved to Dataiku folder: {pdf_file_name}")
