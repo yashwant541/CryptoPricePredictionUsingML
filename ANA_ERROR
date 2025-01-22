@@ -1,11 +1,19 @@
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
+import io
 import pandas as pd
 import dataiku
 
-# Sample DataFrame
+# ReportLab imports for creating the in-memory PDF page
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+
+# PyPDF2 imports for reading/writing PDF
+from PyPDF2 import PdfReader, PdfWriter
+
+# -----------------------------------------------------------------------------
+# 1. Sample DataFrame
+# -----------------------------------------------------------------------------
 data = {
-    "uid": [3463245, 3463246],  # UID column
+    "uid": [3463245, 3463246],  # e.g. user IDs
     "Id": [1, 2],
     "Name": ["Putin", "Putout"],
     "Age": [56, 55],
@@ -15,38 +23,71 @@ data = {
 }
 df = pd.DataFrame(data)
 
-# Get Dataiku managed folder
-folder = dataiku.Folder("quarterly_reports")  # Replace with your folder ID
+# -----------------------------------------------------------------------------
+# 2. Get the Dataiku managed folder
+#    Replace "quarterly_reports" with the actual folder name or ID in your project
+# -----------------------------------------------------------------------------
+folder = dataiku.Folder("quarterly_reports")
 
-# Generate PDF for each row
+# -----------------------------------------------------------------------------
+# 3. Generate one PDF per row
+# -----------------------------------------------------------------------------
 for index, row in df.iterrows():
-    # File name using UID
-    uid = row["uid"]
-    pdf_file_name = f"Quarterly_Report_{uid}.pdf"
-
-    # Create a PDF in memory
-    pdf_buffer = folder.get_writer(pdf_file_name)
-    c = canvas.Canvas(pdf_buffer, pagesize=letter)
-
-    # Add header
+    # Create an in-memory buffer for ReportLab
+    packet = io.BytesIO()
+    
+    # Initialize ReportLab canvas
+    c = canvas.Canvas(packet, pagesize=letter)
+    
+    # -----------------------
+    # 3a. Draw the "header"
+    # -----------------------
     c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(300, 750, "Quarterly Report")
     c.line(50, 740, 550, 740)
-
-    # Add row details
+    
+    # -----------------------
+    # 3b. Add row details
+    # -----------------------
     c.setFont("Helvetica", 12)
     y = 700
     c.drawString(50, y, f"Record {row['Id']}: {row['Title']}")
     y -= 20
-
+    
     for col, value in row.items():
         c.drawString(50, y, f"{col}: {value}")
         y -= 20
-
+    
     # Separator line
     y -= 10
     c.line(50, y, 550, y)
+    
+    # Finish this page
     c.showPage()
     c.save()
-
-    print(f"PDF saved for UID {uid}: {pdf_file_name}")
+    
+    # --------------------------------------------------
+    # 3c. Convert the ReportLab output into a PyPDF2 PDF
+    # --------------------------------------------------
+    packet.seek(0)
+    pdf_reader = PdfReader(packet)
+    pdf_writer = PdfWriter()
+    
+    # Add each page from ReportLab's PDF to our writer
+    for page in pdf_reader.pages:
+        pdf_writer.add_page(page)
+    
+    # ---------------------------------------------
+    # 3d. Write the final PDF to the Dataiku folder
+    # ---------------------------------------------
+    pdf_bytes = io.BytesIO()
+    pdf_writer.write(pdf_bytes)
+    pdf_bytes.seek(0)
+    
+    # Generate file name using the 'uid' column
+    pdf_file_name = f"Quarterly_Report_{row['uid']}.pdf"
+    
+    with folder.get_writer(pdf_file_name) as writer:
+        writer.write(pdf_bytes.getvalue())
+    
+    print(f"Saved {pdf_file_name} to Dataiku managed folder.")
