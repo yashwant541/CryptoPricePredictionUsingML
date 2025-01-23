@@ -3,10 +3,9 @@ import pandas as pd
 import dataiku
 
 # ReportLab imports for creating the in-memory PDF page
-from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import Paragraph, Frame
+from reportlab.platypus import Paragraph, Frame, PageBreak, SimpleDocTemplate
 
 # PyPDF2 imports for reading/writing PDF
 from PyPDF2 import PdfReader, PdfWriter
@@ -41,83 +40,67 @@ folder = dataiku.Folder("quarterly_reports")
 for index, row in df.iterrows():
     # Create an in-memory buffer for ReportLab
     packet = io.BytesIO()
-    
-    # Initialize ReportLab canvas with landscape page
-    c = canvas.Canvas(packet, pagesize=landscape(letter))
-    
-    # -----------------------
-    # 3a. Draw the "header"
-    # -----------------------
-    c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(415, 550, "Quarterly Report")  # Centered in landscape
-    c.line(50, 530, 780, 530)  # Full-width line
-    
-    # -----------------------
-    # 3b. Add row details with word wrapping
-    # -----------------------
-    c.setFont("Helvetica", 12)
-    y = 500  # Start position for content
-    
-    # Use Platypus Paragraph for long text handling
-    styles = getSampleStyleSheet()
-    wrap_style = styles["Normal"]
-    wrap_style.fontName = "Helvetica"
-    wrap_style.fontSize = 12
-    wrap_style.leading = 14  # Line spacing
-    
-    for col, value in row.items():
-        if isinstance(value, str) and len(value) > 200:  # Long text detection
-            text = f"{col}: {value}"
-            wrapped_paragraph = Paragraph(text, wrap_style)
-            
-            # Create a frame to draw the paragraph
-            frame = Frame(50, 50, 700, y - 50, showBoundary=False)
-            while wrapped_paragraph.wrap(700, y - 50)[1] > y - 50:
-                # Draw remaining content on new pages as needed
-                frame.addFromList([wrapped_paragraph], c)
-                c.showPage()
-                c.setFont("Helvetica", 12)
-                c.line(50, 530, 780, 530)  # Repeat separator
-                y = 500
-                frame = Frame(50, 50, 700, y - 50, showBoundary=False)
-        else:
-            # Regular key-value pairs
-            c.drawString(50, y, f"{col}: {value}")
-            y -= 20
 
-            # Handle page overflow for regular content
-            if y < 50:
-                c.showPage()
-                y = 500
-                c.setFont("Helvetica", 12)
-                c.line(50, 530, 780, 530)  # Repeat separator line
+    # Styles for word wrapping
+    styles = getSampleStyleSheet()
+    normal_style = styles["Normal"]
+    normal_style.fontName = "Helvetica"
+    normal_style.fontSize = 12
+    normal_style.leading = 14  # Line height
     
-    # Finish this page
-    c.showPage()
-    c.save()
-    
+    # Initialize the document in landscape mode
+    page_width, page_height = landscape(letter)
+    frame_margin = 50
+    frame_width = page_width - 2 * frame_margin
+    frame_height = page_height - 2 * frame_margin
+
+    # Generate the PDF content
+    pdf_story = []
+
+    # Header
+    pdf_story.append(Paragraph(f"<b>Quarterly Report</b>", styles["Heading1"]))
+
+    # Add each row's data with word wrapping
+    for col, value in row.items():
+        value = str(value)
+        text = f"<b>{col}:</b> {value}"
+        pdf_story.append(Paragraph(text, normal_style))
+
+    # Use ReportLab's SimpleDocTemplate for rendering
+    doc = SimpleDocTemplate(
+        packet,
+        pagesize=landscape(letter),
+        leftMargin=frame_margin,
+        rightMargin=frame_margin,
+        topMargin=frame_margin,
+        bottomMargin=frame_margin,
+    )
+
+    # Build the PDF
+    doc.build(pdf_story)
+
     # --------------------------------------------------
     # 3c. Convert the ReportLab output into a PyPDF2 PDF
     # --------------------------------------------------
     packet.seek(0)
     pdf_reader = PdfReader(packet)
     pdf_writer = PdfWriter()
-    
+
     # Add each page from ReportLab's PDF to our writer
     for page in pdf_reader.pages:
         pdf_writer.add_page(page)
-    
+
     # ---------------------------------------------
     # 3d. Write the final PDF to the Dataiku folder
     # ---------------------------------------------
     pdf_bytes = io.BytesIO()
     pdf_writer.write(pdf_bytes)
     pdf_bytes.seek(0)
-    
+
     # Generate file name using the 'uid' column
     pdf_file_name = f"Quarterly_Report_{row['uid']}.pdf"
-    
+
     with folder.get_writer(pdf_file_name) as writer:
         writer.write(pdf_bytes.getvalue())
-    
+
     print(f"Saved {pdf_file_name} to Dataiku managed folder.")
