@@ -1,106 +1,74 @@
-import io
-import pandas as pd
-import dataiku
+def write_to_pdf(input_file, pdf_file):
+#     # Read the file (supports both CSV and Excel)
+#     if input_file.endswith('.csv'):
+#         df = pd.read_csv(input_file)
+#     elif input_file.endswith('.xlsx'):
+#         df = pd.read_excel(input_file)
+    df = input_file
 
-# ReportLab imports for creating the in-memory PDF page
-from reportlab.lib.pagesizes import letter, landscape
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import Paragraph, Frame, PageBreak, SimpleDocTemplate
+    # Check if there is a date column and sort by latest date to oldest
+    date_column = None
+    for col in df.columns:
+        if 'date' in col.lower():  # Identify date column
+            date_column = col
+            df[date_column] = pd.to_datetime(df[date_column], errors='coerce')  # Convert to datetime
+            df = df.sort_values(by=date_column, ascending=False).reset_index(drop=True)  # Sort by latest date
+            break
 
-# PyPDF2 imports for reading/writing PDF
-from PyPDF2 import PdfReader, PdfWriter
+    # Create PDF report with landscape orientation
+    doc = SimpleDocTemplate(pdf_file, pagesize=(A4[1], A4[0]))  # A4 landscape
+    story = []
 
-# ---------------------------------------------------------------------------
-# 1. Sample DataFrame
-# ---------------------------------------------------------------------------
-data = {
-    "uid": [3463245, 3463246],  # e.g., user IDs
-    "Id": [1, 2],
-    "Name": ["Putin", "Putout"],
-    "Age": [56, 55],
-    "Salary": [34343, 434343],
-    "Country": ["Russia", "Russia"],
-    "Title": ["Fox and cow", "Tom and Jerry"],
-    "Description": [
-        "This is a long text that might be up to 2000 words in length. " * 50,
-        "Another very long text field with lots of information. " * 40
-    ]
-}
-df = pd.DataFrame(data)
-
-# ---------------------------------------------------------------------------
-# 2. Get the Dataiku managed folder
-#    Replace "quarterly_reports" with the actual folder name or ID in your project
-# ---------------------------------------------------------------------------
-folder = dataiku.Folder("quarterly_reports")
-
-# ---------------------------------------------------------------------------
-# 3. Generate one PDF per row
-# ---------------------------------------------------------------------------
-for index, row in df.iterrows():
-    # Create an in-memory buffer for ReportLab
-    packet = io.BytesIO()
-
-    # Styles for word wrapping
-    styles = getSampleStyleSheet()
-    normal_style = styles["Normal"]
-    normal_style.fontName = "Helvetica"
-    normal_style.fontSize = 12
-    normal_style.leading = 14  # Line height
-    
-    # Initialize the document in landscape mode
-    page_width, page_height = landscape(letter)
-    frame_margin = 50
-    frame_width = page_width - 2 * frame_margin
-    frame_height = page_height - 2 * frame_margin
-
-    # Generate the PDF content
-    pdf_story = []
-
-    # Header
-    pdf_story.append(Paragraph(f"<b>Quarterly Report</b>", styles["Heading1"]))
-
-    # Add each row's data with word wrapping
-    for col, value in row.items():
-        value = str(value)
-        text = f"<b>{col}:</b> {value}"
-        pdf_story.append(Paragraph(text, normal_style))
-
-    # Use ReportLab's SimpleDocTemplate for rendering
-    doc = SimpleDocTemplate(
-        packet,
-        pagesize=landscape(letter),
-        leftMargin=frame_margin,
-        rightMargin=frame_margin,
-        topMargin=frame_margin,
-        bottomMargin=frame_margin,
+    # Front page with big custom text (first page)
+    front_page_text = "Business Monitoring Report"  # Custom text for the front page
+    front_page_style = ParagraphStyle(
+        'FrontPageStyle',
+        fontName='Helvetica-Bold',
+        fontSize=22,
+        textColor=colors.black,
+        alignment=1  # Center alignment
     )
 
-    # Build the PDF
-    doc.build(pdf_story)
+    # Add front page text
+    front_page_paragraph = Paragraph(front_page_text, front_page_style)
+    story.append(front_page_paragraph)
+    story.append(Spacer(1, 100))  # Increase space to avoid overlap (adjust as needed)
 
-    # --------------------------------------------------
-    # 3c. Convert the ReportLab output into a PyPDF2 PDF
-    # --------------------------------------------------
-    packet.seek(0)
-    pdf_reader = PdfReader(packet)
-    pdf_writer = PdfWriter()
+    # Add content from the second page onward (your report)
+    styles = getSampleStyleSheet()
 
-    # Add each page from ReportLab's PDF to our writer
-    for page in pdf_reader.pages:
-        pdf_writer.add_page(page)
+    # Section style for report text (black text color)
+    section_style = ParagraphStyle(
+        'SectionStyle',
+        fontName='Helvetica',
+        fontSize=12,
+        textColor=colors.black,  # Black text color for fields
+    )
 
-    # ---------------------------------------------
-    # 3d. Write the final PDF to the Dataiku folder
-    # ---------------------------------------------
-    pdf_bytes = io.BytesIO()
-    pdf_writer.write(pdf_bytes)
-    pdf_bytes.seek(0)
+    # Add report data from the DataFrame to the PDF
+    for idx, row in df.iterrows():
+        title_text = row['Title'] if 'Title' in row else f"Record {idx + 1}"  # Use 'Title' column or default to record number
+        title_paragraph = Paragraph(f"Record {idx + 1}: {title_text}", style=styles['Heading2'])
+        story.append(title_paragraph)
+        story.append(Spacer(1, 12))
 
-    # Generate file name using the 'uid' column
-    pdf_file_name = f"Quarterly_Report_{row['uid']}.pdf"
+        # Add data for each column dynamically
+        for col in df.columns:
+            if pd.notna(row[col]):
+                story.append(Paragraph(f"<b>{col}:</b> {row[col]}", section_style))
+                story.append(Spacer(1, 6))
 
-    with folder.get_writer(pdf_file_name) as writer:
-        writer.write(pdf_bytes.getvalue())
+        # Add a line after each record
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.black))
+        story.append(Spacer(1, 12))  # Add some space after the line
 
-    print(f"Saved {pdf_file_name} to Dataiku managed folder.")
+        # Add page break after each record (if necessary)
+        if (idx + 1) % 10 == 0:
+            story.append(PageBreak())
+
+    # Build PDF with the collected story content
+    try:
+        doc.build(story)
+        print(f"Dynamic PDF report created successfully: {pdf_file}")
+    except Exception as e:
+        print(f"Error creating PDF: {e}")
