@@ -4,7 +4,9 @@ import dataiku
 
 # ReportLab imports for creating the in-memory PDF page
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Paragraph, Frame
 
 # PyPDF2 imports for reading/writing PDF
 from PyPDF2 import PdfReader, PdfWriter
@@ -19,7 +21,11 @@ data = {
     "Age": [56, 55],
     "Salary": [34343, 434343],
     "Country": ["Russia", "Russia"],
-    "Title": ["Fox and cow", "Tom and Jerry"]
+    "Title": ["Fox and cow", "Tom and Jerry"],
+    "Description": [
+        "This is a long text that might be up to 2000 words in length. " * 50,
+        "Another very long text field with lots of information. " * 40
+    ]
 }
 df = pd.DataFrame(data)
 
@@ -36,31 +42,55 @@ for index, row in df.iterrows():
     # Create an in-memory buffer for ReportLab
     packet = io.BytesIO()
     
-    # Initialize ReportLab canvas
-    c = canvas.Canvas(packet, pagesize=letter)
+    # Initialize ReportLab canvas with landscape page
+    c = canvas.Canvas(packet, pagesize=landscape(letter))
     
     # -----------------------
     # 3a. Draw the "header"
     # -----------------------
     c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(300, 750, "Quarterly Report")
-    c.line(50, 740, 550, 740)
+    c.drawCentredString(415, 550, "Quarterly Report")  # Centered in landscape
+    c.line(50, 530, 780, 530)  # Full-width line
     
     # -----------------------
-    # 3b. Add row details
+    # 3b. Add row details with word wrapping
     # -----------------------
     c.setFont("Helvetica", 12)
-    y = 700
-    c.drawString(50, y, f"Record {row['Id']}: {row['Title']}")
-    y -= 20
+    y = 500  # Start position for content
+    
+    # Use Platypus Paragraph for long text handling
+    styles = getSampleStyleSheet()
+    wrap_style = styles["Normal"]
+    wrap_style.fontName = "Helvetica"
+    wrap_style.fontSize = 12
+    wrap_style.leading = 14  # Line spacing
     
     for col, value in row.items():
-        c.drawString(50, y, f"{col}: {value}")
-        y -= 20
-    
-    # Separator line
-    y -= 10
-    c.line(50, y, 550, y)
+        if isinstance(value, str) and len(value) > 200:  # Long text detection
+            text = f"{col}: {value}"
+            wrapped_paragraph = Paragraph(text, wrap_style)
+            
+            # Create a frame to draw the paragraph
+            frame = Frame(50, 50, 700, y - 50, showBoundary=False)
+            while wrapped_paragraph.wrap(700, y - 50)[1] > y - 50:
+                # Draw remaining content on new pages as needed
+                frame.addFromList([wrapped_paragraph], c)
+                c.showPage()
+                c.setFont("Helvetica", 12)
+                c.line(50, 530, 780, 530)  # Repeat separator
+                y = 500
+                frame = Frame(50, 50, 700, y - 50, showBoundary=False)
+        else:
+            # Regular key-value pairs
+            c.drawString(50, y, f"{col}: {value}")
+            y -= 20
+
+            # Handle page overflow for regular content
+            if y < 50:
+                c.showPage()
+                y = 500
+                c.setFont("Helvetica", 12)
+                c.line(50, 530, 780, 530)  # Repeat separator line
     
     # Finish this page
     c.showPage()
