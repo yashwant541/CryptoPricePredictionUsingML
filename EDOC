@@ -5,7 +5,7 @@ from io import StringIO, BytesIO
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Image, PageBreak
 import zipfile
 import matplotlib.pyplot as plt
 import datetime
@@ -87,7 +87,6 @@ def create_pdf_from_dataframe(psid, data):
     return pdf_file_name, pdf_buffer.getvalue()
 
 def create_profile_pdf(psid, data):
-    ## Do we need to remove duplicates
     pdf_buffer = BytesIO()
     pdf_file_name = f"Business_Profile_for_user_{psid}.pdf"
     doc = SimpleDocTemplate(pdf_buffer, pagesize=landscape(A4))
@@ -181,6 +180,7 @@ def create_profile_pdf(psid, data):
     graph_list.append(("Graph 6: Name Group Distribution", create_pie_chart(data, 'Source_of_event', 'Graph 6: Type of Audit')))
 
     for graph_title, graph_buffer in graph_list:
+        story.append(PageBreak())  # Start a new page for each graph
         story.append(Paragraph(graph_title, getSampleStyleSheet()['Heading2']))
         story.append(Spacer(1, 12))
         img = Image(graph_buffer, width=500, height=350)
