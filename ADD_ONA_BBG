@@ -1,27 +1,38 @@
-from PyPDF2 import PdfReader, PdfWriter
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
+from io import StringIO
 
-def merge_pdfs(first_pdf, second_pdf, output_pdf):
-    # Read the first PDF
-    first_reader = PdfReader(first_pdf)
-    # Read the second PDF
-    second_reader = PdfReader(second_pdf)
-    # Create a writer object
-    writer = PdfWriter()
+# Read recipe inputs
+Delta_Users_Join_GIA = dataiku.Dataset("Delta_Users_Join_GIA")
+Delta_Users_Join_GIA_df = Delta_Users_Join_GIA.get_dataframe()
 
-    # Add the first page from the first PDF
-    writer.add_page(first_reader.pages[0])
+Delta_Users_Join_GIA_df['SCB_PSID'] = Delta_Users_Join_GIA_df['SCB_PSID'].apply(int).apply(str)
 
-    # Add all pages except the first from the second PDF
-    for page in second_reader.pages[1:]:
-        writer.add_page(page)
+# Write recipe outputs
+Email_Attachments_Folder = dataiku.Folder("XXXXXXXX")
+Email_Attachments_Folder_info = Email_Attachments_Folder.get_info()
 
-    # Write the output file
-    with open(output_pdf, "wb") as output_file:
-        writer.write(output_file)
+data = Delta_Users_Join_GIA_df
+data_psid = data[['SCB_PSID']]
+data_psid = data_psid.drop_duplicates()
+data_psid = data_psid.reset_index(drop=True)
 
-# Example usage
-first_pdf_path = "path/to/first.pdf"
-second_pdf_path = "path/to/second.pdf"
-output_pdf_path = "path/to/output.pdf"
+def return_rows_for_userid(psid):
+    df = Delta_Users_Join_GIA_df
+    filtered_data = df[df['SCB_PSID']==psid]
+    filtered_data = filtered_data[['Id', 'Title', 'Date_of_event', 'Source_of_event', 'Created',
+       'Risk_Themes_Original', 'Business_Functions_Original',
+       'Country_Original', 'Key_Points', 'Name_Group', 'SCB_PSID_Group',]]
+    filtered_data = filtered_data.drop_duplicates()
+    filtered_data = filtered_data.reset_index(drop=True)
+    
+    return filtered_data
 
-merge_pdfs(first_pdf_path, second_pdf_path, output_pdf_path)
+for psid in data_psid['SCB_PSID']:
+    csv_buffer = StringIO()
+    csv_file=return_rows_for_userid(psid)
+    csv_file_name = f"Business_Monitoring_Data_for_user_{psid}.csv"
+    csv_file.to_csv(csv_buffer, index=False)
+    Email_Attachments_Folder.upload_stream(csv_file_name, csv_buffer.getvalue().encode('utf-8'))
