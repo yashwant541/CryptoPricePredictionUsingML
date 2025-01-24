@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 import dataiku
-import pandas as pd, numpy as np
-from dataiku import pandasutils as pdu
-from io import StringIO
+import pandas as pd
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 
 # Read recipe inputs
 Delta_Users_Join_GIA = dataiku.Dataset("Delta_Users_Join_GIA")
@@ -15,24 +18,62 @@ Email_Attachments_Folder = dataiku.Folder("XXXXXXXX")
 Email_Attachments_Folder_info = Email_Attachments_Folder.get_info()
 
 data = Delta_Users_Join_GIA_df
-data_psid = data[['SCB_PSID']]
-data_psid = data_psid.drop_duplicates()
-data_psid = data_psid.reset_index(drop=True)
+data_psid = data[['SCB_PSID']].drop_duplicates().reset_index(drop=True)
 
 def return_rows_for_userid(psid):
     df = Delta_Users_Join_GIA_df
-    filtered_data = df[df['SCB_PSID']==psid]
+    filtered_data = df[df['SCB_PSID'] == psid]
     filtered_data = filtered_data[['Id', 'Title', 'Date_of_event', 'Source_of_event', 'Created',
-       'Risk_Themes_Original', 'Business_Functions_Original',
-       'Country_Original', 'Key_Points', 'Name_Group', 'SCB_PSID_Group',]]
-    filtered_data = filtered_data.drop_duplicates()
-    filtered_data = filtered_data.reset_index(drop=True)
-    
+                                   'Risk_Themes_Original', 'Business_Functions_Original',
+                                   'Country_Original', 'Key_Points', 'Name_Group', 'SCB_PSID_Group']]
+    filtered_data = filtered_data.drop_duplicates().reset_index(drop=True)
     return filtered_data
 
+def create_pdf_from_dataframe(psid, data):
+    # Prepare PDF document
+    pdf_buffer = BytesIO()
+    pdf_file_name = f"Business_Monitoring_Data_for_user_{psid}.pdf"
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=A4)
+    story = []
+
+    # Add title
+    front_page_style = ParagraphStyle(
+        'FrontPageStyle',
+        fontName='Helvetica-Bold',
+        fontSize=18,
+        textColor=colors.black,
+        alignment=1
+    )
+    front_page_paragraph = Paragraph(f"Business Monitoring Report for User {psid}", front_page_style)
+    story.append(front_page_paragraph)
+    story.append(Spacer(1, 24))
+
+    # Add data
+    styles = getSampleStyleSheet()
+    section_style = ParagraphStyle(
+        'SectionStyle',
+        fontName='Helvetica',
+        fontSize=12,
+        textColor=colors.black,
+    )
+
+    for idx, row in data.iterrows():
+        story.append(Paragraph(f"Record {idx + 1}", styles['Heading2']))
+        story.append(Spacer(1, 12))
+        for col in data.columns:
+            if pd.notna(row[col]):
+                story.append(Paragraph(f"<b>{col}:</b> {row[col]}", section_style))
+                story.append(Spacer(1, 6))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.black))
+        story.append(Spacer(1, 12))
+
+    # Generate PDF
+    doc.build(story)
+    pdf_buffer.seek(0)
+    return pdf_file_name, pdf_buffer.getvalue()
+
+# Process and generate PDFs for each PSID
 for psid in data_psid['SCB_PSID']:
-    csv_buffer = StringIO()
-    csv_file=return_rows_for_userid(psid)
-    csv_file_name = f"Business_Monitoring_Data_for_user_{psid}.csv"
-    csv_file.to_csv(csv_buffer, index=False)
-    Email_Attachments_Folder.upload_stream(csv_file_name, csv_buffer.getvalue().encode('utf-8'))
+    user_data = return_rows_for_userid(psid)
+    pdf_file_name, pdf_content = create_pdf_from_dataframe(psid, user_data)
+    Email_Attachments_Folder.upload_stream(pdf_file_name, pdf_content)
