@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 import dataiku
 import pandas as pd
-from io import BytesIO
+from io import StringIO, BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+import zipfile
+import os
 
 # Read recipe inputs
 Delta_Users_Join_GIA = dataiku.Dataset("Delta_Users_Join_GIA")
@@ -17,6 +19,7 @@ Delta_Users_Join_GIA_df['SCB_PSID'] = Delta_Users_Join_GIA_df['SCB_PSID'].apply(
 Email_Attachments_Folder = dataiku.Folder("XXXXXXXX")
 Email_Attachments_Folder_info = Email_Attachments_Folder.get_info()
 
+# Prepare data for processing
 data = Delta_Users_Join_GIA_df
 data_psid = data[['SCB_PSID']].drop_duplicates().reset_index(drop=True)
 
@@ -30,7 +33,6 @@ def return_rows_for_userid(psid):
     return filtered_data
 
 def create_pdf_from_dataframe(psid, data):
-    # Prepare PDF document
     pdf_buffer = BytesIO()
     pdf_file_name = f"Business_Monitoring_Data_for_user_{psid}.pdf"
     doc = SimpleDocTemplate(pdf_buffer, pagesize=A4)
@@ -72,8 +74,26 @@ def create_pdf_from_dataframe(psid, data):
     pdf_buffer.seek(0)
     return pdf_file_name, pdf_buffer.getvalue()
 
-# Process and generate PDFs for each PSID
+# Process and generate outputs for each PSID
 for psid in data_psid['SCB_PSID']:
     user_data = return_rows_for_userid(psid)
+
+    # Generate CSV
+    csv_buffer = StringIO()
+    csv_file_name = f"Business_Monitoring_Data_for_user_{psid}.csv"
+    user_data.to_csv(csv_buffer, index=False)
+    csv_content = csv_buffer.getvalue().encode('utf-8')
+
+    # Generate PDF
     pdf_file_name, pdf_content = create_pdf_from_dataframe(psid, user_data)
-    Email_Attachments_Folder.upload_stream(pdf_file_name, pdf_content)
+
+    # Create a zip file
+    zip_file_name = f"Business_Monitoring_Data_for_user_{psid}.zip"
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        zip_file.writestr(csv_file_name, csv_content)
+        zip_file.writestr(pdf_file_name, pdf_content)
+
+    # Save the zip file to the folder
+    zip_buffer.seek(0)
+    Email_Attachments_Folder.upload_stream(zip_file_name, zip_buffer.getvalue())
