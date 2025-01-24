@@ -1,9 +1,33 @@
-def write_to_pdf(input_file, pdf_file):
-#     # Read the file (supports both CSV and Excel)
-#     if input_file.endswith('.csv'):
-#         df = pd.read_csv(input_file)
-#     elif input_file.endswith('.xlsx'):
-#         df = pd.read_excel(input_file)
+import io
+import pandas as pd
+import dataiku
+
+# ReportLab imports for creating the in-memory PDF page
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, HRFlowable
+import pandas as pd
+from reportlab.lib.units import inch
+
+# PyPDF2 imports for reading/writing PDF
+from PyPDF2 import PdfReader, PdfWriter
+
+# Read recipe inputs
+Delta_Users_Join_GIA = dataiku.Dataset("Delta_Users_Join_GIA")
+Delta_Users_Join_GIA_df = Delta_Users_Join_GIA.get_dataframe()
+
+
+df = pd.DataFrame(Delta_Users_Join_GIA_df)
+df = df[['Id', 'Title', 'Date_of_event', 'Source_of_event', 'Created',
+       'Risk_Themes_Original', 'Business_Functions_Original',
+       'Country_Original', 'Key_Points', 'Name_Group', 'SCB_PSID']]
+
+folder = dataiku.Folder("z9zdl1Pj")
+
+######################################################################
+
+def convert_to_pdf(input_file):
     df = input_file
 
     # Check if there is a date column and sort by latest date to oldest
@@ -72,3 +96,14 @@ def write_to_pdf(input_file, pdf_file):
         print(f"Dynamic PDF report created successfully: {pdf_file}")
     except Exception as e:
         print(f"Error creating PDF: {e}")
+
+
+
+######################################################################
+
+for psid in df['SCB_PSID']:
+    df=df[df['SCB_PSID']==psid]
+    df = df[['Id', 'Title', 'Date_of_event', 'Source_of_event', 'Created',
+       'Risk_Themes_Original', 'Business_Functions_Original',
+       'Country_Original', 'Key_Points', 'Name_Group']]
+    pdf_file = convert_to_pdf(df)
