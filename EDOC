@@ -1,51 +1,52 @@
-from PIL import Image
-from collections import Counter
-import os
+Keep the original data for the Profile Quarterly Report -
+This PDF will be landscape mode
 
-def extract_colors(image_path, output_format="hex"):
-    """
-    Extract all color codes from an image.
 
-    Args:
-        image_path (str): Path to the image file.
-        output_format (str): Format of color codes - "hex" or "rgb".
+1) Write the User Name in Big Bold.
+2) Then Write the Last Quarter - the previous one to the current like this "Quarter - Year". Example - "Quarter - Q4 | Year - 2024"
+3) The Write - "You have been mentioned in the Business Monitoring Report - X times this quarter." This is the total distinct row count.
+4) Then Start with the Graphs.
 
-    Returns:
-        list: A list of unique colors in the specified format.
-    """
-    if not os.path.exists(image_path):
-        raise FileNotFoundError(f"The file {image_path} does not exist.")
+Instead of the column chart let's make it bar graph - and using only these colors for the bar graph. Make the graphs size standardized to a good size. Use the below only colors for this graph - Pick only from these.
 
-    # Open the image
-    image = Image.open(image_path)
-    image = image.convert("RGB")  # Ensure the image is in RGB mode
+#2fb000
+#91c5fd
+#88ff5e
+#217e00
+#35c800
+#3be100
+#01306c
+#2f92fc
+#eef2f5
+#9aff77
+#01245b
+#60abfc
+#479ffc
+#013d7d
+#c2dffe
+#289700
+#024894
+#78b8fc
+#daecfe
+#e9f2fb
+#bfffa8
+#1a6500
+#144d00
+#0254ad
+#0362c9
+#0371e6
+#0d7cf2
+#1a86fa
+#3495fc
+#a5d0fd
+#a9d2fd
+#e8f4e3
 
-    # Get the colors from the image as a list of RGB tuples
-    pixels = list(image.getdata())
+I want the Pie colors to be only these colors-
 
-    # Count unique colors
-    color_counts = Counter(pixels)
-
-    # Convert to the desired format
-    if output_format == "hex":
-        colors = ["#{:02x}{:02x}{:02x}".format(*color) for color in color_counts.keys()]
-    elif output_format == "rgb":
-        colors = list(color_counts.keys())
-    else:
-        raise ValueError("Invalid output_format. Choose either 'hex' or 'rgb'.")
-
-    return colors
-
-# Example usage
-if __name__ == "__main__":
-    image_file = input("Enter the path to the image file (JPEG or PNG): ")
-    format_choice = input("Enter the output format ('hex' or 'rgb'): ").lower()
-
-    try:
-        colors = extract_colors(image_file, format_choice)
-        print(f"Extracted {len(colors)} unique colors:")
-        for color in colors[:10]:  # Display the first 10 colors
-            print(color)
-        print("\n... (list truncated)")
-    except Exception as e:
-        print(f"Error: {e}")
+#d4d4d4
+#20acff
+#38d200
+#0473ea
+#3beb8d
+#0083b3
