@@ -5,8 +5,9 @@ from io import StringIO, BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Image
 import zipfile
+import matplotlib.pyplot as plt
 import os
 
 # Read recipe inputs
@@ -30,11 +31,47 @@ def return_rows_for_userid(psid):
                                    'Risk_Themes_Original', 'Business_Functions_Original',
                                    'Country_Original', 'Key_Points', 'Name_Group', 'SCB_PSID_Group']]
     filtered_data = filtered_data.drop_duplicates().reset_index(drop=True)
-    return filtered_data
 
-def create_pdf_from_dataframe(psid, data):
+    # Create graphs
+    graph_buffer_list = []
+
+    def create_column_graph(data, column_name, graph_title):
+        plt.figure(figsize=(8, 5))
+        data[column_name].value_counts().plot(kind='bar', color='skyblue')
+        plt.title(graph_title)
+        plt.xlabel(column_name)
+        plt.ylabel('Count Distinct of Id')
+        plt.tight_layout()
+        buffer = BytesIO()
+        plt.savefig(buffer, format='png')
+        buffer.seek(0)
+        plt.close()
+        return buffer
+
+    def create_pie_chart(data, column_name, graph_title):
+        plt.figure(figsize=(6, 6))
+        data[column_name].value_counts().plot(kind='pie', autopct='%1.1f%%', startangle=90, colors=plt.cm.Paired.colors)
+        plt.title(graph_title)
+        plt.ylabel('')  # Hide y-axis label for pie chart
+        buffer = BytesIO()
+        plt.savefig(buffer, format='png')
+        buffer.seek(0)
+        plt.close()
+        return buffer
+
+    # Graphs
+    graph_buffer_list.append(("Graph 1", create_column_graph(filtered_data, 'Title', 'Graph 1: Title vs Count Distinct of Id')))
+    graph_buffer_list.append(("Graph 2", create_column_graph(filtered_data, 'Source_of_event', 'Graph 2: Source of Event vs Count Distinct of Id')))
+    graph_buffer_list.append(("Graph 3", create_column_graph(filtered_data, 'Risk_Themes_Original', 'Graph 3: Risk Themes vs Count Distinct of Id')))
+    graph_buffer_list.append(("Graph 4", create_column_graph(filtered_data, 'Country_Original', 'Graph 4: Country vs Count Distinct of Id')))
+    graph_buffer_list.append(("Graph 5", create_pie_chart(filtered_data, 'Business_Functions_Original', 'Graph 5: Business Functions Distribution')))
+    graph_buffer_list.append(("Graph 6", create_pie_chart(filtered_data, 'Name_Group', 'Graph 6: Name Group Distribution')))
+
+    return filtered_data, graph_buffer_list
+
+def create_profile_pdf(psid, data, graph_buffers):
     pdf_buffer = BytesIO()
-    pdf_file_name = f"Business_Monitoring_Data_for_user_{psid}.pdf"
+    pdf_file_name = f"Business_Profile_for_user_{psid}.pdf"
     doc = SimpleDocTemplate(pdf_buffer, pagesize=A4)
     story = []
 
@@ -46,28 +83,17 @@ def create_pdf_from_dataframe(psid, data):
         textColor=colors.black,
         alignment=1
     )
-    front_page_paragraph = Paragraph(f"Business Monitoring Report for User {psid}", front_page_style)
+    front_page_paragraph = Paragraph(f"Quarterly Report for User {psid}", front_page_style)
     story.append(front_page_paragraph)
     story.append(Spacer(1, 24))
 
-    # Add data
-    styles = getSampleStyleSheet()
-    section_style = ParagraphStyle(
-        'SectionStyle',
-        fontName='Helvetica',
-        fontSize=12,
-        textColor=colors.black,
-    )
-
-    for idx, row in data.iterrows():
-        story.append(Paragraph(f"Record {idx + 1}", styles['Heading2']))
+    # Add graphs to the PDF
+    for graph_title, graph_buffer in graph_buffers:
+        story.append(Paragraph(graph_title, getSampleStyleSheet()['Heading2']))
         story.append(Spacer(1, 12))
-        for col in data.columns:
-            if pd.notna(row[col]):
-                story.append(Paragraph(f"<b>{col}:</b> {row[col]}", section_style))
-                story.append(Spacer(1, 6))
-        story.append(HRFlowable(width="100%", thickness=1, color=colors.black))
-        story.append(Spacer(1, 12))
+        img = Image(graph_buffer, width=400, height=300)
+        story.append(img)
+        story.append(Spacer(1, 24))
 
     # Generate PDF
     doc.build(story)
@@ -76,7 +102,7 @@ def create_pdf_from_dataframe(psid, data):
 
 # Process and generate outputs for each PSID
 for psid in data_psid['SCB_PSID']:
-    user_data = return_rows_for_userid(psid)
+    user_data, graph_buffers = return_rows_for_userid(psid)
 
     # Generate CSV
     csv_buffer = StringIO()
@@ -85,10 +111,10 @@ for psid in data_psid['SCB_PSID']:
     csv_content = csv_buffer.getvalue().encode('utf-8')
 
     # Generate PDF
-    pdf_file_name, pdf_content = create_pdf_from_dataframe(psid, user_data)
+    pdf_file_name, pdf_content = create_profile_pdf(psid, user_data, graph_buffers)
 
     # Create a zip file
-    zip_file_name = f"Business_Monitoring_Data_for_user_{psid}.zip"
+    zip_file_name = f"Business_Profile_and_Data_for_user_{psid}.zip"
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
         zip_file.writestr(csv_file_name, csv_content)
