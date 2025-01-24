@@ -18,11 +18,12 @@ Delta_Users_Join_GIA_df = Delta_Users_Join_GIA.get_dataframe()
 Delta_Users_Join_GIA_df['SCB_PSID'] = Delta_Users_Join_GIA_df['SCB_PSID'].apply(int).apply(str)
 
 # Write recipe outputs
-Email_Attachments_Folder = dataiku.Folder("XXXXXXXX")
+Email_Attachments_Folder = dataiku.Folder("XXXXXXX")
 Email_Attachments_Folder_info = Email_Attachments_Folder.get_info()
 
 # Prepare data for processing
 data = Delta_Users_Join_GIA_df
+data_original = Delta_Users_Join_GIA_df
 data_psid = data[['SCB_PSID']].drop_duplicates().reset_index(drop=True)
 
 def return_rows_for_userid(psid):
@@ -31,6 +32,15 @@ def return_rows_for_userid(psid):
     filtered_data = filtered_data[['Id', 'Title', 'Date_of_event', 'Source_of_event', 'Created',
                                    'Risk_Themes_Original', 'Business_Functions_Original',
                                    'Country_Original', 'Key_Points', 'Name_Group', 'SCB_PSID_Group']]
+    filtered_data = filtered_data.drop_duplicates().reset_index(drop=True)
+    return filtered_data
+
+def prep_data_for_profilereport(psid):
+    df = data_original
+    filtered_data = df[df['SCB_PSID'] == psid]
+    filtered_data = filtered_data[['Id', 'Title', 'Date_of_event', 'Source_of_event', 'Created',
+                                   'Risk_Themes', 'Business_Functions', 'Audit Group',
+                                   'Country', 'Key_Points', 'Name', 'SCB_PSID']]
     filtered_data = filtered_data.drop_duplicates().reset_index(drop=True)
     return filtered_data
 
@@ -77,6 +87,7 @@ def create_pdf_from_dataframe(psid, data):
     return pdf_file_name, pdf_buffer.getvalue()
 
 def create_profile_pdf(psid, data):
+    ## Do we need to remove duplicates
     pdf_buffer = BytesIO()
     pdf_file_name = f"Business_Profile_for_user_{psid}.pdf"
     doc = SimpleDocTemplate(pdf_buffer, pagesize=landscape(A4))
@@ -162,12 +173,12 @@ def create_profile_pdf(psid, data):
 
     # Graphs
     graph_list = []
-    graph_list.append(("Graph 1: Title vs Count Distinct of Id", create_bar_graph(data, 'Title', 'Graph 1: Title vs Count Distinct of Id')))
-    graph_list.append(("Graph 2: Source of Event vs Count Distinct of Id", create_bar_graph(data, 'Source_of_event', 'Graph 2: Source of Event vs Count Distinct of Id')))
-    graph_list.append(("Graph 3: Risk Themes vs Count Distinct of Id", create_bar_graph(data, 'Risk_Themes_Original', 'Graph 3: Risk Themes vs Count Distinct of Id')))
-    graph_list.append(("Graph 4: Country vs Count Distinct of Id", create_bar_graph(data, 'Country_Original', 'Graph 4: Country vs Count Distinct of Id')))
-    graph_list.append(("Graph 5: Business Functions Distribution", create_pie_chart(data, 'Business_Functions_Original', 'Graph 5: Business Functions Distribution')))
-    graph_list.append(("Graph 6: Name Group Distribution", create_pie_chart(data, 'Name_Group', 'Graph 6: Name Group Distribution')))
+    graph_list.append(("Graph 1: Title vs Count Distinct of Id", create_bar_graph(data, 'Country', 'Graph 1: Country')))
+    graph_list.append(("Graph 2: Risk Themes vs Count Distinct of Id", create_bar_graph(data, 'Risk_Themes', 'Graph 2: Risk Themes')))
+    graph_list.append(("Graph 3: Business Functions Distribution", create_bar_graph(data, 'Business_Functions', 'Graph 3: Business Functions Distribution')))
+    graph_list.append(("Graph 4: Source of Event vs Count Distinct of Id", create_pie_chart(data, 'Audit Group', 'Graph 4: Audit Group')))
+    graph_list.append(("Graph 5: Country vs Count Distinct of Id", create_pie_chart(data, 'Country', 'Graph 5: Country vs Count Distinct of Id')))
+    graph_list.append(("Graph 6: Name Group Distribution", create_pie_chart(data, 'Source_of_event', 'Graph 6: Type of Audit')))
 
     for graph_title, graph_buffer in graph_list:
         story.append(Paragraph(graph_title, getSampleStyleSheet()['Heading2']))
@@ -184,7 +195,8 @@ def create_profile_pdf(psid, data):
 # Process and generate outputs for each PSID
 for psid in data_psid['SCB_PSID']:
     user_data = return_rows_for_userid(psid)
-
+    profile_user_data = prep_data_for_profilereport(psid)
+    
     # Generate CSV
     csv_buffer = StringIO()
     csv_file_name = f"Business_Monitoring_Data_for_user_{psid}.csv"
@@ -195,7 +207,7 @@ for psid in data_psid['SCB_PSID']:
     monitoring_pdf_file_name, monitoring_pdf_content = create_pdf_from_dataframe(psid, user_data)
 
     # Generate Profile PDF
-    profile_pdf_file_name, profile_pdf_content = create_profile_pdf(psid, user_data)
+    profile_pdf_file_name, profile_pdf_content = create_profile_pdf(psid, profile_user_data)
 
     # Create a zip file
     zip_file_name = f"Business_Data_and_Reports_for_user_{psid}.zip"
