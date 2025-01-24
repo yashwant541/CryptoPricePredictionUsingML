@@ -140,7 +140,7 @@ def create_profile_pdf(psid, data):
     story.append(Spacer(1, 24))
 
     # Create graphs
-    def create_bar_graph(data, column_name, graph_title):
+    def create_horizontal_bar_graph(data, column_name, graph_title):
         colors_list = [
             "#2fb000", "#91c5fd", "#88ff5e", "#217e00", "#35c800", "#3be100", "#01306c", "#2f92fc",
             "#eef2f5", "#9aff77", "#01245b", "#60abfc", "#479ffc", "#013d7d", "#c2dffe", "#289700",
@@ -148,10 +148,10 @@ def create_profile_pdf(psid, data):
             "#0362c9", "#0371e6", "#0d7cf2", "#1a86fa", "#3495fc", "#a5d0fd", "#a9d2fd", "#e8f4e3"
         ]
         plt.figure(figsize=(10, 6))
-        data[column_name].value_counts().plot(kind='bar', color=colors_list[:len(data[column_name].unique())])
+        data[column_name].value_counts().plot(kind='barh', color=colors_list[:len(data[column_name].unique())])
         plt.title(graph_title)
-        plt.xlabel(column_name)
-        plt.ylabel('Count Distinct of Id')
+        plt.ylabel(column_name)
+        plt.xlabel('Count Distinct of Id')
         plt.tight_layout()
         buffer = BytesIO()
         plt.savefig(buffer, format='png')
@@ -173,9 +173,9 @@ def create_profile_pdf(psid, data):
 
     # Graphs
     graph_list = []
-    graph_list.append(("Graph 1: Title vs Count Distinct of Id", create_bar_graph(data, 'Country', 'Graph 1: Country')))
-    graph_list.append(("Graph 2: Risk Themes vs Count Distinct of Id", create_bar_graph(data, 'Risk_Themes', 'Graph 2: Risk Themes')))
-    graph_list.append(("Graph 3: Business Functions Distribution", create_bar_graph(data, 'Business_Functions', 'Graph 3: Business Functions Distribution')))
+    graph_list.append(("Graph 1: Title vs Count Distinct of Id", create_horizontal_bar_graph(data, 'Country', 'Graph 1: Country')))
+    graph_list.append(("Graph 2: Risk Themes vs Count Distinct of Id", create_horizontal_bar_graph(data, 'Risk_Themes', 'Graph 2: Risk Themes')))
+    graph_list.append(("Graph 3: Business Functions Distribution", create_horizontal_bar_graph(data, 'Business_Functions', 'Graph 3: Business Functions Distribution')))
     graph_list.append(("Graph 4: Source of Event vs Count Distinct of Id", create_pie_chart(data, 'Audit Group', 'Graph 4: Audit Group')))
     graph_list.append(("Graph 5: Country vs Count Distinct of Id", create_pie_chart(data, 'Country', 'Graph 5: Country vs Count Distinct of Id')))
     graph_list.append(("Graph 6: Name Group Distribution", create_pie_chart(data, 'Source_of_event', 'Graph 6: Type of Audit')))
