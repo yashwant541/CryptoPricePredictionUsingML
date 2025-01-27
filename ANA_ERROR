@@ -1,5 +1,4 @@
 import os
-import re
 import pandas as pd
 from dataiku.core.dku_io import Folder
 
@@ -15,13 +14,16 @@ for file_path in file_list:
     if file_path.endswith(".csv"):  # Process only CSV files
         file_name = os.path.basename(file_path)
         
-        # Extract the timestamp (assuming 'YYYYMMDD' format in the name)
-        timestamp = "".join(filter(str.isdigit, file_name))
+        # Get file metadata (including timestamp)
+        file_details = input_folder.get_path_details(file_path)
+        last_modified_time = file_details["lastModified"]  # File last modified time (in milliseconds)
         
-        # Extract the number in the filename using regex
-        number_in_filename = re.search(r'\d+', file_name)
-        number = number_in_filename.group() if number_in_filename else None
-
+        # Convert timestamp to human-readable format
+        timestamp = pd.to_datetime(last_modified_time, unit='ms').strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Extract the number in the filename (e.g., "123" from "file_123.csv")
+        number_in_filename = ''.join(filter(str.isdigit, file_name))
+        
         # Read the CSV file to count records
         with input_folder.get_download_stream(file_path) as stream:
             df = pd.read_csv(stream)
@@ -30,16 +32,16 @@ for file_path in file_list:
         # Append the details
         file_info.append({
             "File Name": file_name,
-            "Number in Filename": number,  # New column
-            "Timestamp": timestamp,
+            "Number in Filename": number_in_filename,  # New column
+            "Timestamp (Last Modified)": timestamp,  # Human-readable timestamp
             "Record Count": record_count
         })
 
 # Create a DataFrame from the collected data
 output_df = pd.DataFrame(file_info)
 
-# Reorder the columns to ensure 'Number in Filename' is the second column
-output_df = output_df[["File Name", "Number in Filename", "Timestamp", "Record Count"]]
+# Reorder columns if necessary
+output_df = output_df[["File Name", "Number in Filename", "Timestamp (Last Modified)", "Record Count"]]
 
 # Write the output DataFrame to the output dataset
 output_dataset = dataiku.Dataset("consolidated_csv_data")  # Create this output dataset in Dataiku
