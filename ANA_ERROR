@@ -1,33 +1,46 @@
-# Import Dataiku and pandas
-import dataiku
+import os
+import re
 import pandas as pd
+from dataiku.core.dku_io import Folder
 
-# Load the datasets
-new_data = dataiku.Dataset("new_data").get_dataframe()
-try:
-    # Load the master log dataset if it exists
-    master_log = dataiku.Dataset("master_log").get_dataframe()
-except:
-    # If master_log doesn't exist yet, create an empty DataFrame
-    master_log = pd.DataFrame(columns=["Name"])
+# Specify the input folder
+input_folder = Folder("dataiku_csv_folder")  # Replace with your input folder's name
 
-# Specify the column containing the names
-name_column = "Name"
+# Get file details from the folder
+file_list = input_folder.list_paths_in_partition()
+file_info = []
 
-# Get unique names from both datasets
-new_names = set(new_data[name_column].unique())
-existing_names = set(master_log[name_column].unique())
+# Process each CSV file in the folder
+for file_path in file_list:
+    if file_path.endswith(".csv"):  # Process only CSV files
+        file_name = os.path.basename(file_path)
+        
+        # Extract the timestamp (assuming 'YYYYMMDD' format in the name)
+        timestamp = "".join(filter(str.isdigit, file_name))
+        
+        # Extract the number in the filename using regex
+        number_in_filename = re.search(r'\d+', file_name)
+        number = number_in_filename.group() if number_in_filename else None
 
-# Find new unique names that are not in the master log
-unique_new_names = list(new_names - existing_names)
+        # Read the CSV file to count records
+        with input_folder.get_download_stream(file_path) as stream:
+            df = pd.read_csv(stream)
+            record_count = len(df)  # Count the rows
 
-# Append new names to the master log
-if unique_new_names:
-    new_entries = pd.DataFrame(unique_new_names, columns=[name_column])
-    updated_master_log = pd.concat([master_log, new_entries], ignore_index=True)
-else:
-    updated_master_log = master_log
+        # Append the details
+        file_info.append({
+            "File Name": file_name,
+            "Number in Filename": number,  # New column
+            "Timestamp": timestamp,
+            "Record Count": record_count
+        })
 
-# Write the updated master log back to the dataset
-output = dataiku.Dataset("master_log")
-output.write_with_schema(updated_master_log)
+# Create a DataFrame from the collected data
+output_df = pd.DataFrame(file_info)
+
+# Reorder the columns to ensure 'Number in Filename' is the second column
+output_df = output_df[["File Name", "Number in Filename", "Timestamp", "Record Count"]]
+
+# Write the output DataFrame to the output dataset
+output_dataset = dataiku.Dataset("consolidated_csv_data")  # Create this output dataset in Dataiku
+output_dataset.write_with_schema(output_df)
