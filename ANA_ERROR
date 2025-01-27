@@ -1,109 +1,33 @@
-import io
-import pandas as pd
+# Import Dataiku and pandas
 import dataiku
-
-# ReportLab imports for creating the in-memory PDF page
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, HRFlowable
 import pandas as pd
-from reportlab.lib.units import inch
 
-# PyPDF2 imports for reading/writing PDF
-from PyPDF2 import PdfReader, PdfWriter
+# Load the datasets
+new_data = dataiku.Dataset("new_data").get_dataframe()
+try:
+    # Load the master log dataset if it exists
+    master_log = dataiku.Dataset("master_log").get_dataframe()
+except:
+    # If master_log doesn't exist yet, create an empty DataFrame
+    master_log = pd.DataFrame(columns=["Name"])
 
-# Read recipe inputs
-Delta_Users_Join_GIA = dataiku.Dataset("Delta_Users_Join_GIA")
-Delta_Users_Join_GIA_df = Delta_Users_Join_GIA.get_dataframe()
+# Specify the column containing the names
+name_column = "Name"
 
+# Get unique names from both datasets
+new_names = set(new_data[name_column].unique())
+existing_names = set(master_log[name_column].unique())
 
-df = pd.DataFrame(Delta_Users_Join_GIA_df)
-df = df[['Id', 'Title', 'Date_of_event', 'Source_of_event', 'Created',
-       'Risk_Themes_Original', 'Business_Functions_Original',
-       'Country_Original', 'Key_Points', 'Name_Group', 'SCB_PSID']]
+# Find new unique names that are not in the master log
+unique_new_names = list(new_names - existing_names)
 
-folder = dataiku.Folder("z9zdl1Pj")
+# Append new names to the master log
+if unique_new_names:
+    new_entries = pd.DataFrame(unique_new_names, columns=[name_column])
+    updated_master_log = pd.concat([master_log, new_entries], ignore_index=True)
+else:
+    updated_master_log = master_log
 
-######################################################################
-
-def convert_to_pdf(input_file):
-    df = input_file
-
-    # Check if there is a date column and sort by latest date to oldest
-    date_column = None
-    for col in df.columns:
-        if 'date' in col.lower():  # Identify date column
-            date_column = col
-            df[date_column] = pd.to_datetime(df[date_column], errors='coerce')  # Convert to datetime
-            df = df.sort_values(by=date_column, ascending=False).reset_index(drop=True)  # Sort by latest date
-            break
-
-    # Create PDF report with landscape orientation
-    doc = SimpleDocTemplate(pdf_file, pagesize=(A4[1], A4[0]))  # A4 landscape
-    story = []
-
-    # Front page with big custom text (first page)
-    front_page_text = "Business Monitoring Report"  # Custom text for the front page
-    front_page_style = ParagraphStyle(
-        'FrontPageStyle',
-        fontName='Helvetica-Bold',
-        fontSize=22,
-        textColor=colors.black,
-        alignment=1  # Center alignment
-    )
-
-    # Add front page text
-    front_page_paragraph = Paragraph(front_page_text, front_page_style)
-    story.append(front_page_paragraph)
-    story.append(Spacer(1, 100))  # Increase space to avoid overlap (adjust as needed)
-
-    # Add content from the second page onward (your report)
-    styles = getSampleStyleSheet()
-
-    # Section style for report text (black text color)
-    section_style = ParagraphStyle(
-        'SectionStyle',
-        fontName='Helvetica',
-        fontSize=12,
-        textColor=colors.black,  # Black text color for fields
-    )
-
-    # Add report data from the DataFrame to the PDF
-    for idx, row in df.iterrows():
-        title_text = row['Title'] if 'Title' in row else f"Record {idx + 1}"  # Use 'Title' column or default to record number
-        title_paragraph = Paragraph(f"Record {idx + 1}: {title_text}", style=styles['Heading2'])
-        story.append(title_paragraph)
-        story.append(Spacer(1, 12))
-
-        # Add data for each column dynamically
-        for col in df.columns:
-            if pd.notna(row[col]):
-                story.append(Paragraph(f"<b>{col}:</b> {row[col]}", section_style))
-                story.append(Spacer(1, 6))
-
-        # Add a line after each record
-        story.append(HRFlowable(width="100%", thickness=1, color=colors.black))
-        story.append(Spacer(1, 12))  # Add some space after the line
-
-        # Add page break after each record (if necessary)
-        if (idx + 1) % 10 == 0:
-            story.append(PageBreak())
-
-    # Build PDF with the collected story content
-    try:
-        doc.build(story)
-        print(f"Dynamic PDF report created successfully: {pdf_file}")
-    except Exception as e:
-        print(f"Error creating PDF: {e}")
-
-
-
-######################################################################
-
-for psid in df['SCB_PSID']:
-    df=df[df['SCB_PSID']==psid]
-    df = df[['Id', 'Title', 'Date_of_event', 'Source_of_event', 'Created',
-       'Risk_Themes_Original', 'Business_Functions_Original',
-       'Country_Original', 'Key_Points', 'Name_Group']]
-    pdf_file = convert_to_pdf(df)
+# Write the updated master log back to the dataset
+output = dataiku.Dataset("master_log")
+output.write_with_schema(updated_master_log)
