@@ -1,48 +1,18 @@
-import os
 import pandas as pd
-from dataiku.core.dku_io import Folder
+from dataiku import pandasutils as pdu
 
-# Specify the input folder
-input_folder = Folder("dataiku_csv_folder")  # Replace with your input folder's name
+# Read the three datasets into DataFrames
+dataset1 = dataiku.Dataset("dataset1_name").get_dataframe()
+dataset2 = dataiku.Dataset("dataset2_name").get_dataframe()
+dataset3 = dataiku.Dataset("dataset3_name").get_dataframe()
 
-# Get file details from the folder
-file_list = input_folder.list_paths_in_partition()
-file_info = []
+# Create an Excel writer object
+output_file_path = dataiku.Folder("your_output_folder_id").get_path() + "/output_file.xlsx"
 
-# Process each CSV file in the folder
-for file_path in file_list:
-    if file_path.endswith(".csv"):  # Process only CSV files
-        file_name = os.path.basename(file_path)
-        
-        # Get file metadata (including timestamp)
-        file_details = input_folder.get_path_details(file_path)
-        last_modified_time = file_details["lastModified"]  # File last modified time (in milliseconds)
-        
-        # Convert timestamp to human-readable format
-        timestamp = pd.to_datetime(last_modified_time, unit='ms').strftime('%Y-%m-%d %H:%M:%S')
-        
-        # Extract the number in the filename (e.g., "123" from "file_123.csv")
-        number_in_filename = ''.join(filter(str.isdigit, file_name))
-        
-        # Read the CSV file to count records
-        with input_folder.get_download_stream(file_path) as stream:
-            df = pd.read_csv(stream)
-            record_count = len(df)  # Count the rows
+with pd.ExcelWriter(output_file_path, engine="openpyxl") as writer:
+    # Save each dataset to a separate sheet, using their names as sheet names
+    dataset1.to_excel(writer, sheet_name="dataset1_name", index=False)
+    dataset2.to_excel(writer, sheet_name="dataset2_name", index=False)
+    dataset3.to_excel(writer, sheet_name="dataset3_name", index=False)
 
-        # Append the details
-        file_info.append({
-            "File Name": file_name,
-            "Number in Filename": number_in_filename,  # New column
-            "Timestamp (Last Modified)": timestamp,  # Human-readable timestamp
-            "Record Count": record_count
-        })
-
-# Create a DataFrame from the collected data
-output_df = pd.DataFrame(file_info)
-
-# Reorder columns if necessary
-output_df = output_df[["File Name", "Number in Filename", "Timestamp (Last Modified)", "Record Count"]]
-
-# Write the output DataFrame to the output dataset
-output_dataset = dataiku.Dataset("consolidated_csv_data")  # Create this output dataset in Dataiku
-output_dataset.write_with_schema(output_df)
+print(f"Excel file saved at {output_file_path}")
