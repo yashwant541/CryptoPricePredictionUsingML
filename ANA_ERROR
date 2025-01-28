@@ -1,4 +1,5 @@
 import pandas as pd
+import io
 from dataiku import pandasutils as pdu
 
 # Read the three datasets into DataFrames
@@ -6,13 +7,19 @@ dataset1 = dataiku.Dataset("dataset1_name").get_dataframe()
 dataset2 = dataiku.Dataset("dataset2_name").get_dataframe()
 dataset3 = dataiku.Dataset("dataset3_name").get_dataframe()
 
-# Create an Excel writer object
-output_file_path = dataiku.Folder("your_output_folder_id").get_path() + "/output_file.xlsx"
+# Create an in-memory buffer for the Excel file
+excel_buffer = io.BytesIO()
 
-with pd.ExcelWriter(output_file_path, engine="openpyxl") as writer:
+with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
     # Save each dataset to a separate sheet, using their names as sheet names
     dataset1.to_excel(writer, sheet_name="dataset1_name", index=False)
     dataset2.to_excel(writer, sheet_name="dataset2_name", index=False)
     dataset3.to_excel(writer, sheet_name="dataset3_name", index=False)
 
-print(f"Excel file saved at {output_file_path}")
+# Save the Excel file from memory to the HDFS folder
+excel_buffer.seek(0)
+output_folder = dataiku.Folder("your_output_folder_id")  # Replace with your folder ID
+with output_folder.get_writer("output_file.xlsx") as writer:
+    writer.write(excel_buffer.read())
+
+print("Excel file successfully written to HDFS folder.")
