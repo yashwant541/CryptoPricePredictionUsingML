@@ -1,168 +1,25 @@
-# -*- coding: utf-8 -*-
-import dataiku
-import pandas as pd
-from io import StringIO, BytesIO
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Image
-import zipfile
-import matplotlib.pyplot as plt
-import os
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, sum as sum_
 
-# Read recipe inputs
-Delta_Users_Join_GIA = dataiku.Dataset("Delta_Users_Join_GIA")
-Delta_Users_Join_GIA_df = Delta_Users_Join_GIA.get_dataframe()
+# Create a Spark session (Dataiku handles this automatically in PySpark)
+spark = SparkSession.builder.appName("DataikuProcessing").getOrCreate()
 
-Delta_Users_Join_GIA_df['SCB_PSID'] = Delta_Users_Join_GIA_df['SCB_PSID'].apply(int).apply(str)
+# Read input dataset from Dataiku
+input_dataset = dataiku.Dataset("your_input_dataset")  # Change to your dataset name
+df = input_dataset.get_dataframe(spark)  # Load as PySpark DataFrame
 
-# Write recipe outputs
-Email_Attachments_Folder = dataiku.Folder("XXXXXXXX")
-Email_Attachments_Folder_info = Email_Attachments_Folder.get_info()
+# Fill null values in 'amount', convert to double, and filter values >= 0
+processed_df = df.fillna(0, subset=["amount"]) \
+                 .withColumn("amount", col("amount").cast("double")) \
+                 .filter(col("amount") >= 0)
 
-# Prepare data for processing
-data = Delta_Users_Join_GIA_df
-data_psid = data[['SCB_PSID']].drop_duplicates().reset_index(drop=True)
+# Group by 'category' and calculate sum of 'amount'
+grouped_df = processed_df.groupBy("category").agg(sum_("amount").alias("total_amount"))
 
-def return_rows_for_userid(psid):
-    df = Delta_Users_Join_GIA_df
-    filtered_data = df[df['SCB_PSID'] == psid]
-    filtered_data = filtered_data[['Id', 'Title', 'Date_of_event', 'Source_of_event', 'Created',
-                                   'Risk_Themes_Original', 'Business_Functions_Original',
-                                   'Country_Original', 'Key_Points', 'Name_Group', 'SCB_PSID_Group']]
-    filtered_data = filtered_data.drop_duplicates().reset_index(drop=True)
-    return filtered_data
+# Write output to Dataiku dataset
+output_dataset = dataiku.Dataset("your_output_dataset")  # Change to your output dataset name
+output_dataset.write_with_schema(grouped_df)
 
-def create_pdf_from_dataframe(psid, data):
-    pdf_buffer = BytesIO()
-    pdf_file_name = f"Business_Monitoring_Data_for_user_{psid}.pdf"
-    doc = SimpleDocTemplate(pdf_buffer, pagesize=A4)
-    story = []
-
-    # Add title
-    front_page_style = ParagraphStyle(
-        'FrontPageStyle',
-        fontName='Helvetica-Bold',
-        fontSize=18,
-        textColor=colors.black,
-        alignment=1
-    )
-    front_page_paragraph = Paragraph(f"Business Monitoring Report for User {psid}", front_page_style)
-    story.append(front_page_paragraph)
-    story.append(Spacer(1, 24))
-
-    # Add data
-    styles = getSampleStyleSheet()
-    section_style = ParagraphStyle(
-        'SectionStyle',
-        fontName='Helvetica',
-        fontSize=12,
-        textColor=colors.black,
-    )
-
-    for idx, row in data.iterrows():
-        story.append(Paragraph(f"Record {idx + 1}", styles['Heading2']))
-        story.append(Spacer(1, 12))
-        for col in data.columns:
-            if pd.notna(row[col]):
-                story.append(Paragraph(f"<b>{col}:</b> {row[col]}", section_style))
-                story.append(Spacer(1, 6))
-        story.append(HRFlowable(width="100%", thickness=1, color=colors.black))
-        story.append(Spacer(1, 12))
-
-    # Generate PDF
-    doc.build(story)
-    pdf_buffer.seek(0)
-    return pdf_file_name, pdf_buffer.getvalue()
-
-def create_profile_pdf(psid, data):
-    pdf_buffer = BytesIO()
-    pdf_file_name = f"Business_Profile_for_user_{psid}.pdf"
-    doc = SimpleDocTemplate(pdf_buffer, pagesize=A4)
-    story = []
-
-    # Add title
-    front_page_style = ParagraphStyle(
-        'FrontPageStyle',
-        fontName='Helvetica-Bold',
-        fontSize=18,
-        textColor=colors.black,
-        alignment=1
-    )
-    front_page_paragraph = Paragraph(f"Quarterly Report for User {psid}", front_page_style)
-    story.append(front_page_paragraph)
-    story.append(Spacer(1, 24))
-
-    # Create graphs
-    def create_column_graph(data, column_name, graph_title):
-        plt.figure(figsize=(8, 5))
-        data[column_name].value_counts().plot(kind='bar', color='skyblue')
-        plt.title(graph_title)
-        plt.xlabel(column_name)
-        plt.ylabel('Count Distinct of Id')
-        plt.tight_layout()
-        buffer = BytesIO()
-        plt.savefig(buffer, format='png')
-        buffer.seek(0)
-        plt.close()
-        return buffer
-
-    def create_pie_chart(data, column_name, graph_title):
-        plt.figure(figsize=(6, 6))
-        data[column_name].value_counts().plot(kind='pie', autopct='%1.1f%%', startangle=90, colors=plt.cm.Paired.colors)
-        plt.title(graph_title)
-        plt.ylabel('')  # Hide y-axis label for pie chart
-        buffer = BytesIO()
-        plt.savefig(buffer, format='png')
-        buffer.seek(0)
-        plt.close()
-        return buffer
-
-    # Graphs
-    graph_list = []
-    graph_list.append(("Graph 1: Title vs Count Distinct of Id", create_column_graph(data, 'Title', 'Graph 1: Title vs Count Distinct of Id')))
-    graph_list.append(("Graph 2: Source of Event vs Count Distinct of Id", create_column_graph(data, 'Source_of_event', 'Graph 2: Source of Event vs Count Distinct of Id')))
-    graph_list.append(("Graph 3: Risk Themes vs Count Distinct of Id", create_column_graph(data, 'Risk_Themes_Original', 'Graph 3: Risk Themes vs Count Distinct of Id')))
-    graph_list.append(("Graph 4: Country vs Count Distinct of Id", create_column_graph(data, 'Country_Original', 'Graph 4: Country vs Count Distinct of Id')))
-    graph_list.append(("Graph 5: Business Functions Distribution", create_pie_chart(data, 'Business_Functions_Original', 'Graph 5: Business Functions Distribution')))
-    graph_list.append(("Graph 6: Name Group Distribution", create_pie_chart(data, 'Name_Group', 'Graph 6: Name Group Distribution')))
-
-    for graph_title, graph_buffer in graph_list:
-        story.append(Paragraph(graph_title, getSampleStyleSheet()['Heading2']))
-        story.append(Spacer(1, 12))
-        img = Image(graph_buffer, width=400, height=300)
-        story.append(img)
-        story.append(Spacer(1, 24))
-
-    # Generate PDF
-    doc.build(story)
-    pdf_buffer.seek(0)
-    return pdf_file_name, pdf_buffer.getvalue()
-
-# Process and generate outputs for each PSID
-for psid in data_psid['SCB_PSID']:
-    user_data = return_rows_for_userid(psid)
-
-    # Generate CSV
-    csv_buffer = StringIO()
-    csv_file_name = f"Business_Monitoring_Data_for_user_{psid}.csv"
-    user_data.to_csv(csv_buffer, index=False)
-    csv_content = csv_buffer.getvalue().encode('utf-8')
-
-    # Generate Business Monitoring PDF
-    monitoring_pdf_file_name, monitoring_pdf_content = create_pdf_from_dataframe(psid, user_data)
-
-    # Generate Profile PDF
-    profile_pdf_file_name, profile_pdf_content = create_profile_pdf(psid, user_data)
-
-    # Create a zip file
-    zip_file_name = f"Business_Data_and_Reports_for_user_{psid}.zip"
-    zip_buffer = BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        zip_file.writestr(csv_file_name, csv_content)
-        zip_file.writestr(monitoring_pdf_file_name, monitoring_pdf_content)
-        zip_file.writestr(profile_pdf_file_name, profile_pdf_content)
-
-    # Save the zip file to the folder
-    zip_buffer.seek(0)
-    Email_Attachments_Folder.upload_stream(zip_file_name, zip_buffer.getvalue())
+# Save output to a CSV file
+output_path = "/home/dataiku/output/grouped_data.csv"  # Adjust path as needed
+grouped_df.write.csv(output_path, header=True)
