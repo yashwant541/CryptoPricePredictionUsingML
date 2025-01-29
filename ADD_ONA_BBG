@@ -1,25 +1,45 @@
+import dataiku
+from dataiku import spark as dkuspark
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, sum as sum_
+from pyspark.sql.functions import col, udf
+from pyspark.sql.types import IntegerType
 
-# Create a Spark session (Dataiku handles this automatically in PySpark)
-spark = SparkSession.builder.appName("DataikuProcessing").getOrCreate()
+# Initialize Spark Session
+spark = SparkSession.builder.appName("DataikuPySpark").getOrCreate()
 
-# Read input dataset from Dataiku
-input_dataset = dataiku.Dataset("your_input_dataset")  # Change to your dataset name
-df = input_dataset.get_dataframe(spark)  # Load as PySpark DataFrame
+# Load dataset from Dataiku
+dataset = dataiku.Dataset("df")  # Ensure "df" is a valid dataset in Dataiku
+df_df = dkuspark.get_dataframe(dataset)
 
-# Fill null values in 'amount', convert to double, and filter values >= 0
-processed_df = df.fillna(0, subset=["amount"]) \
-                 .withColumn("amount", col("amount").cast("double")) \
-                 .filter(col("amount") >= 0)
+# Function to check if a column contains bytes data
+def contains_bytes(df):
+    for col_name in df.columns:
+        first_value = df.select(col_name).first()[0]
+        if isinstance(first_value, bytes):
+            return True
+    return False
 
-# Group by 'category' and calculate sum of 'amount'
-grouped_df = processed_df.groupBy("category").agg(sum_("amount").alias("total_amount"))
+# Function to convert bytes to integer
+def bytes_to_int(byte_value):
+    if isinstance(byte_value, bytes):
+        try:
+            return int(byte_value.decode("utf-8").strip())  # Decode and strip spaces
+        except ValueError:
+            return None  # Handle non-numeric byte values
+    return byte_value  # Return unchanged if not bytes
 
-# Write output to Dataiku dataset
-output_dataset = dataiku.Dataset("your_output_dataset")  # Change to your output dataset name
-output_dataset.write_with_schema(grouped_df)
+# Create UDF for conversion
+udf_bytes_to_int = udf(bytes_to_int, IntegerType())
 
-# Save output to a CSV file
-output_path = "/home/dataiku/output/grouped_data.csv"  # Adjust path as needed
-grouped_df.write.csv(output_path, header=True)
+# Convert all `bytes` columns to integers if found
+for col_name in df_df.columns:
+    first_value = df_df.select(col_name).first()[0]
+    if isinstance(first_value, bytes):
+        print(f"Converting column '{col_name}' from bytes to int...")
+        df_df = df_df.withColumn(col_name, udf_bytes_to_int(col(col_name)))
+
+# Show updated schema
+df_df.printSchema()
+
+# Show first few rows to verify conversion
+df_df.show(5)
