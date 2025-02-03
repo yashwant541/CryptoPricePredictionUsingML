@@ -1,34 +1,12 @@
-SELECT 
-    A.*,
-    CASE 
-        -- 2024-01 to 2024-06 conditions
-        WHEN DATEDIFF(A.Journal_Date, '2024-01-31') < 0 AND DATEDIFF(A.Posted_Date, '2024-01-31') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2024-01-31')
-        WHEN DATEDIFF(A.Journal_Date, '2024-02-29') < 0 AND DATEDIFF(A.Posted_Date, '2024-02-29') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2024-02-29')
-        WHEN DATEDIFF(A.Journal_Date, '2024-03-31') < 0 AND DATEDIFF(A.Posted_Date, '2024-03-31') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2024-03-31')
-        WHEN DATEDIFF(A.Journal_Date, '2024-04-30') < 0 AND DATEDIFF(A.Posted_Date, '2024-04-30') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2024-04-30')
-        WHEN DATEDIFF(A.Journal_Date, '2024-05-31') < 0 AND DATEDIFF(A.Posted_Date, '2024-05-31') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2024-05-31')
-        WHEN DATEDIFF(A.Journal_Date, '2024-06-30') < 0 AND DATEDIFF(A.Posted_Date, '2024-06-30') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2024-06-30')
+IF [JE Amount] < 10000
+THEN
+'JE Amount < 10K USD, a low value JE'
 
-        -- 2023-07 to 2023-12 conditions
-        WHEN DATEDIFF(A.Journal_Date, '2023-07-31') < 0 AND DATEDIFF(A.Posted_Date, '2023-07-31') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2023-07-31')
-        WHEN DATEDIFF(A.Journal_Date, '2023-08-31') < 0 AND DATEDIFF(A.Posted_Date, '2023-08-31') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2023-08-31')
-        WHEN DATEDIFF(A.Journal_Date, '2023-09-30') < 0 AND DATEDIFF(A.Posted_Date, '2023-09-30') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2023-09-30')
-        WHEN DATEDIFF(A.Journal_Date, '2023-10-31') < 0 AND DATEDIFF(A.Posted_Date, '2023-10-31') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2023-10-31')
-        WHEN DATEDIFF(A.Journal_Date, '2023-11-30') < 0 AND DATEDIFF(A.Posted_Date, '2023-11-30') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2023-11-30')
-        WHEN DATEDIFF(A.Journal_Date, '2023-12-31') < 0 AND DATEDIFF(A.Posted_Date, '2023-12-31') > 5 
-        THEN DATEDIFF(A.Posted_Date, '2023-12-31')
+ELSEIF 
+ [JE Amount] >= 10000
+THEN
+'JE Amount >= 10K USD'
 
-        ELSE 0 
-    END AS date_difference
-FROM A
+ELSE
+"NA"
+END
