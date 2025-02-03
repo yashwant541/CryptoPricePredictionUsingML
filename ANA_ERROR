@@ -1,25 +1,106 @@
-import pandas as pd
-import io
-from dataiku import pandasutils as pdu
 
-# Read the three datasets into DataFrames
-dataset1 = dataiku.Dataset("dataset1_name").get_dataframe()
-dataset2 = dataiku.Dataset("dataset2_name").get_dataframe()
-dataset3 = dataiku.Dataset("dataset3_name").get_dataframe()
+//2024-01 to 2024-06
+if 
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2024-01-31# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-01-31# > 5
+)
 
-# Create an in-memory buffer for the Excel file
-excel_buffer = io.BytesIO()
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-01-31# 
+ELSEIF
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2024-02-29# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-02-29# > 5
+)
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-02-29# 
+ELSEIF
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2024-03-31# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-03-31# > 5
+)
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-03-31# 
+ELSEIF
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2024-04-30# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-04-30# > 5
+)
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-04-30# 
+ELSEIF
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2024-05-31# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-05-31# > 5
+)
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-05-31# 
+ELSEIF
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2024-06-30# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-06-30# > 5
+)
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2024-06-30# 
+ELSEIF
 
-with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-    # Save each dataset to a separate sheet, using their names as sheet names
-    dataset1.to_excel(writer, sheet_name="dataset1_name", index=False)
-    dataset2.to_excel(writer, sheet_name="dataset2_name", index=False)
-    dataset3.to_excel(writer, sheet_name="dataset3_name", index=False)
+//2023-07 to 2023-12
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2023-07-31# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-07-31# > 5
+)
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-07-31# 
+ELSEIF
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2023-08-31# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-08-31# > 5
+)
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-08-31# 
+ELSEIF
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2023-09-30# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-09-30# > 5
+)
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-09-30# 
+ELSEIF
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2023-10-31# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-10-31# > 5
+)
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-10-31# 
+ELSEIF
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2023-11-30# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-11-30# > 5
+)
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-11-30# 
+ELSEIF
+(
+[TO_CHAR(A.JOURNAL_DATE,'YYYY-MM-DD')] - #2023-12-31# < 0
+AND
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-12-31# > 5
+)
+THEN 
+[TO_CHAR(A.POSTED_DATE,'YYYY-MM-DD')] - #2023-12-31# 
 
-# Save the Excel file from memory to the HDFS folder
-excel_buffer.seek(0)
-output_folder = dataiku.Folder("your_output_folder_id")  # Replace with your folder ID
-with output_folder.get_writer("output_file.xlsx") as writer:
-    writer.write(excel_buffer.read())
+ELSE
+0
 
-print("Excel file successfully written to HDFS folder.")
+END 
