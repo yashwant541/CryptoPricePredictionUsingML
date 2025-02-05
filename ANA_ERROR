@@ -1,8 +1,5 @@
-SELECT 
-    `JE Amount`,  -- Keep only required columns
-    CASE 
-        WHEN `JE Amount` < 10000 THEN 'JE Amount < 10K USD, a low value JE'
-        WHEN `JE Amount` >= 10000 THEN 'JE Amount >= 10K USD'
-        ELSE 'NA'
-    END AS JE_Amount_Category
-FROM data
+if ISNULL([LINE_DESCR])
+then 'No Description'
+ELSE
+"Length of Description is " + str([length_Desc])
+END
