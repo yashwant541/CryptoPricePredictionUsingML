@@ -1,5 +1,8 @@
-if ISNULL([LINE_DESCR])
-then 'No Description'
-ELSE
-"Length of Description is " + str([length_Desc])
-END
+SELECT 
+    *, 
+    CASE 
+        WHEN LINE_DESCR IS NULL OR TRIM(LINE_DESCR) = '' 
+        THEN 'No Description'
+        ELSE 'Length of Description is ' || LENGTH(LINE_DESCR)
+    END AS Description_Category
+FROM data
