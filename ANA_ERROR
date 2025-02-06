@@ -1,11 +1,9 @@
-WITH RankedDescriptions AS (
-    SELECT 
-        ID, 
-        description,
-        LENGTH(description) AS desc_length,
-        ROW_NUMBER() OVER (PARTITION BY ID ORDER BY LENGTH(description) DESC) AS rn
-    FROM your_table
-)
-SELECT ID, description
-FROM RankedDescriptions
-WHERE rn = 1;
+SELECT 
+    d.ID, 
+    d.line, 
+    d.description, 
+    COLLECT_SET(k.keyword) AS matched_keywords
+FROM data_table d
+LEFT JOIN keywords_table k 
+    ON LOWER(d.description) LIKE CONCAT('%', LOWER(k.keyword), '%')
+GROUP BY d.ID, d.line, d.description;
