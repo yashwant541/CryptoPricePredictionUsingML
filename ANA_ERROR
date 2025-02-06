@@ -1,24 +1,23 @@
-IF 
-abs([MONETARY_AMOUNT]) % 10000000 = 0
-then '10000000'
-ELSEIF
-abs([MONETARY_AMOUNT]) % 1000000 = 0
-then '1000000'
-ELSEIF 
-abs([MONETARY_AMOUNT]) % 100000 = 0
-then '100000'
-ELSEIF
-abs([MONETARY_AMOUNT]) % 10000 = 0
-then '10000'
+WITH data_transformed AS (
+    SELECT 
+        *,
+        ABS(MONETARY_AMOUNT) + 1 AS Amount_plus_1,
+        CASE 
+            WHEN ABS(MONETARY_AMOUNT) % 10000000 = 0 THEN '10000000'
+            WHEN ABS(MONETARY_AMOUNT) % 1000000 = 0 THEN '1000000'
+            WHEN ABS(MONETARY_AMOUNT) % 100000 = 0 THEN '100000'
+            WHEN ABS(MONETARY_AMOUNT) % 10000 = 0 THEN '10000'
 
-ELSEIF [Amount + 1] % 10000000 = 0
-then '9999999'
-ELSEIF [Amount + 1] % 1000000 = 0
-then '999999'
-ELSEIF [Amount + 1] % 100000 = 0
-then '99999'
-ELSEIF [Amount + 1] % 10000 = 0
-then '9999'
+            WHEN (ABS(MONETARY_AMOUNT) + 1) % 10000000 = 0 THEN '9999999'
+            WHEN (ABS(MONETARY_AMOUNT) + 1) % 1000000 = 0 THEN '999999'
+            WHEN (ABS(MONETARY_AMOUNT) + 1) % 100000 = 0 THEN '99999'
+            WHEN (ABS(MONETARY_AMOUNT) + 1) % 10000 = 0 THEN '9999'
 
-ELSE 'NA'
-END
+            ELSE 'NA'
+        END AS Remark
+    FROM data
+)
+SELECT *,
+       'Journal Entry made with specific amounts.' AS Scenario
+FROM data_transformed
+WHERE Remark != 'NA';
