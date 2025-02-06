@@ -1,9 +1,24 @@
-SELECT 
-    d.ID, 
-    d.line, 
-    d.description, 
-    COLLECT_SET(k.keyword) AS matched_keywords
-FROM data_table d
-LEFT JOIN keywords_table k 
-    ON LOWER(d.description) LIKE CONCAT('%', LOWER(k.keyword), '%')
-GROUP BY d.ID, d.line, d.description;
+IF 
+abs([MONETARY_AMOUNT]) % 10000000 = 0
+then '10000000'
+ELSEIF
+abs([MONETARY_AMOUNT]) % 1000000 = 0
+then '1000000'
+ELSEIF 
+abs([MONETARY_AMOUNT]) % 100000 = 0
+then '100000'
+ELSEIF
+abs([MONETARY_AMOUNT]) % 10000 = 0
+then '10000'
+
+ELSEIF [Amount + 1] % 10000000 = 0
+then '9999999'
+ELSEIF [Amount + 1] % 1000000 = 0
+then '999999'
+ELSEIF [Amount + 1] % 100000 = 0
+then '99999'
+ELSEIF [Amount + 1] % 10000 = 0
+then '9999'
+
+ELSE 'NA'
+END
