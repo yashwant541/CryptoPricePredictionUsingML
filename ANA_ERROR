@@ -1,8 +1,11 @@
-SELECT 
-    *, 
-    CASE 
-        WHEN LINE_DESCR IS NULL OR TRIM(LINE_DESCR) = '' 
-        THEN 'No Description'
-        ELSE 'Length of Description is ' || LENGTH(LINE_DESCR)
-    END AS Description_Category
-FROM data
+WITH RankedDescriptions AS (
+    SELECT 
+        ID, 
+        description,
+        LENGTH(description) AS desc_length,
+        ROW_NUMBER() OVER (PARTITION BY ID ORDER BY LENGTH(description) DESC) AS rn
+    FROM your_table
+)
+SELECT ID, description
+FROM RankedDescriptions
+WHERE rn = 1;
