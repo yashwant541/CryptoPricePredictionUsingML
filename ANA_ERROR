@@ -1,23 +1,154 @@
-WITH data_transformed AS (
-    SELECT 
-        *,
-        ABS(MONETARY_AMOUNT) + 1 AS Amount_plus_1,
-        CASE 
-            WHEN ABS(MONETARY_AMOUNT) % 10000000 = 0 THEN '10000000'
-            WHEN ABS(MONETARY_AMOUNT) % 1000000 = 0 THEN '1000000'
-            WHEN ABS(MONETARY_AMOUNT) % 100000 = 0 THEN '100000'
-            WHEN ABS(MONETARY_AMOUNT) % 10000 = 0 THEN '10000'
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, when, count, avg, desc, row_number, udf
+from pyspark.sql.types import StringType
+from pyspark.sql.window import Window
+from pyspark import StorageLevel
 
-            WHEN (ABS(MONETARY_AMOUNT) + 1) % 10000000 = 0 THEN '9999999'
-            WHEN (ABS(MONETARY_AMOUNT) + 1) % 1000000 = 0 THEN '999999'
-            WHEN (ABS(MONETARY_AMOUNT) + 1) % 100000 = 0 THEN '99999'
-            WHEN (ABS(MONETARY_AMOUNT) + 1) % 10000 = 0 THEN '9999'
+def age_category(age):
+    """Simple function to categorize age."""
+    if age < 30:
+        return "young"
+    elif age < 40:
+        return "middle"
+    else:
+        return "old"
 
-            ELSE 'NA'
-        END AS Remark
-    FROM data
-)
-SELECT *,
-       'Journal Entry made with specific amounts.' AS Scenario
-FROM data_transformed
-WHERE Remark != 'NA';
+def main():
+    # Initialize SparkSession
+    spark = SparkSession.builder.appName("PySparkBasicScript").getOrCreate()
+    
+    # -------------------------------
+    # 1. Create a DataFrame from sample data
+    # -------------------------------
+    data = [
+         (1, "Alice", 34, "NY"),
+         (2, "Bob", 45, "CA"),
+         (3, "Cathy", 29, "NY"),
+         (4, "Dave", 35, "TX"),
+         (5, "Eva", 40, "CA"),
+         (6, "Frank", 30, "NY"),
+         (7, "Grace", 25, "TX")
+    ]
+    schema = ["id", "name", "age", "state"]
+    df = spark.createDataFrame(data, schema)
+    
+    print("=== Initial DataFrame ===")
+    df.show()
+
+    # -------------------------------
+    # 2. Caching and Repartitioning
+    # -------------------------------
+    # Cache the DataFrame in memory
+    df.cache()
+    
+    # Repartition the DataFrame by "state" into 3 partitions
+    df_repart = df.repartition(3, "state")
+    print("Number of partitions after repartitioning:", df_repart.rdd.getNumPartitions())
+
+    # -------------------------------
+    # 3. DataFrame Transformations
+    # -------------------------------
+    # a. Filtering rows (age > 30)
+    df_filtered = df.filter(col("age") > 30)
+    print("=== Filtered (age > 30) ===")
+    df_filtered.show()
+
+    # b. Adding a new column using withColumn (flag for adult)
+    df_with_flag = df.withColumn("is_adult", when(col("age") >= 18, True).otherwise(False))
+    print("=== DataFrame with 'is_adult' Column ===")
+    df_with_flag.show()
+
+    # c. Applying a UDF to create a new column 'age_category'
+    age_category_udf = udf(age_category, StringType())
+    df_with_age_cat = df.withColumn("age_category", age_category_udf(col("age")))
+    print("=== DataFrame with 'age_category' Column ===")
+    df_with_age_cat.show()
+
+    # d. GroupBy and Aggregation: Count and average age by state
+    df_grouped = df.groupBy("state").agg(
+       count("id").alias("count"),
+       avg("age").alias("avg_age")
+    )
+    print("=== Grouped Aggregation by State ===")
+    df_grouped.show()
+
+    # e. Pivot: Pivot the age_category counts by state
+    df_pivot = df_with_age_cat.groupBy("state").pivot("age_category").count()
+    print("=== Pivot Table: Age Category Counts by State ===")
+    df_pivot.show()
+
+    # -------------------------------
+    # 4. Window Functions
+    # -------------------------------
+    # Rank employees by age within each state (highest age gets rank 1)
+    windowSpec = Window.partitionBy("state").orderBy(desc("age"))
+    df_ranked = df.withColumn("rank", row_number().over(windowSpec))
+    print("=== DataFrame with Ranking within State ===")
+    df_ranked.show()
+
+    # -------------------------------
+    # 5. Sorting and Joins
+    # -------------------------------
+    # Sorting the DataFrame by age (ascending)
+    df_sorted = df.orderBy("age")
+    print("=== Sorted DataFrame by Age ===")
+    df_sorted.show()
+
+    # Create another DataFrame to demonstrate joins
+    data_states = [
+       ("NY", "New York"),
+       ("CA", "California"),
+       ("TX", "Texas")
+    ]
+    schema_states = ["state", "state_name"]
+    df_states = spark.createDataFrame(data_states, schema_states)
+    
+    # Join the two DataFrames on 'state'
+    df_joined = df.join(df_states, on="state", how="left")
+    print("=== Joined DataFrame with State Names ===")
+    df_joined.show()
+
+    # -------------------------------
+    # 6. Coalesce and Persisting
+    # -------------------------------
+    # Increase partitions then reduce them using coalesce
+    df_more_partitions = df.repartition(10, "state")
+    df_coalesced = df_more_partitions.coalesce(2)
+    print("Number of partitions after coalesce:", df_coalesced.rdd.getNumPartitions())
+
+    # Persist DataFrame with a different storage level
+    df.persist(StorageLevel.MEMORY_AND_DISK)
+
+    # -------------------------------
+    # 7. Actions and RDD Operations
+    # -------------------------------
+    # Basic actions: count, first, and collect
+    print("Total record count:", df.count())
+    print("First record:", df.first())
+    names = df.select("name").rdd.flatMap(lambda x: x).collect()
+    print("Names collected from DataFrame:", names)
+
+    # Working with RDDs directly from DataFrame
+    rdd = df.rdd
+    # Map transformation: create a tuple (name, age)
+    rdd_transformed = rdd.map(lambda row: (row["name"], row["age"]))
+    print("=== RDD Transformation (name, age) ===")
+    print(rdd_transformed.collect())
+
+    # Reduce operation on RDD: sum up all ages
+    total_age = rdd_transformed.map(lambda x: x[1]).reduce(lambda a, b: a + b)
+    print("Total age (summed via RDD reduce):", total_age)
+
+    # -------------------------------
+    # 8. Write DataFrame to Disk
+    # -------------------------------
+    # Save the DataFrame as a CSV file (overwrite if exists)
+    output_path = "output/csv_output"
+    df.write.mode("overwrite").csv(output_path, header=True)
+    print(f"DataFrame written as CSV to: {output_path}")
+
+    # Stop the SparkSession
+    spark.stop()
+
+if __name__ == "__main__":
+    main()
