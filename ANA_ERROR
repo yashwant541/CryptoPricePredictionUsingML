@@ -1,154 +1,112 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when, count, avg, desc, row_number, udf
-from pyspark.sql.types import StringType
-from pyspark.sql.window import Window
-from pyspark import StorageLevel
+/***************************************************************************/
+/* SAS Code for Financial Fraud Detection                                */
+/* This example covers SAS basics: data import, exploration, cleaning,     */
+/* feature engineering, model building (logistic regression & random forest),*/
+/* and evaluation.                                                         */
+/***************************************************************************/
 
-def age_category(age):
-    """Simple function to categorize age."""
-    if age < 30:
-        return "young"
-    elif age < 40:
-        return "middle"
-    else:
-        return "old"
+/* 1. Set up a library pointing to your data directory */
+libname mydata '/path/to/your/data';
 
-def main():
-    # Initialize SparkSession
-    spark = SparkSession.builder.appName("PySparkBasicScript").getOrCreate()
+/* 2. Import your data (e.g., a CSV file with transaction details) */
+proc import datafile='/path/to/your/data/fraud_transactions.csv'
+    out=mydata.frauddata
+    dbms=csv
+    replace;
+    guessingrows= max; /* Ensures that SAS checks all rows for data type inference */
+run;
+
+/* 3. Explore the data: view first 10 observations and get dataset metadata */
+proc print data=mydata.frauddata (obs=10);
+    title "First 10 Observations of Fraud Data";
+run;
+
+proc contents data=mydata.frauddata;
+    title "Dataset Contents";
+run;
+
+/* 4. Get summary statistics for key numeric variables */
+proc means data=mydata.frauddata n mean std min max;
+    var transaction_amount;
+    title "Summary Statistics for Transaction Amount";
+run;
+
+/* 5. Check for missing values and frequency distributions for key variables */
+proc freq data=mydata.frauddata;
+    tables isFraud transaction_amount merchant cardholderID / missing;
+    title "Frequency Distribution for Selected Variables";
+run;
+
+/* 6. Data Cleaning & Feature Engineering */
+/* Create a clean dataset with derived variables such as log transaction amount */
+/* and extract day-of-week from the transaction date */
+data mydata.frauddata_clean;
+    set mydata.frauddata;
     
-    # -------------------------------
-    # 1. Create a DataFrame from sample data
-    # -------------------------------
-    data = [
-         (1, "Alice", 34, "NY"),
-         (2, "Bob", 45, "CA"),
-         (3, "Cathy", 29, "NY"),
-         (4, "Dave", 35, "TX"),
-         (5, "Eva", 40, "CA"),
-         (6, "Frank", 30, "NY"),
-         (7, "Grace", 25, "TX")
-    ]
-    schema = ["id", "name", "age", "state"]
-    df = spark.createDataFrame(data, schema)
+    /* Calculate log of transaction amount if positive */
+    if transaction_amount > 0 then 
+        log_transaction = log(transaction_amount);
+    else 
+        log_transaction = .;
     
-    print("=== Initial DataFrame ===")
-    df.show()
-
-    # -------------------------------
-    # 2. Caching and Repartitioning
-    # -------------------------------
-    # Cache the DataFrame in memory
-    df.cache()
+    /* Convert transaction_date (assumed in 'YYYY-MM-DD' format) to SAS date and extract day of week */
+    transaction_date_sas = input(transaction_date, yymmdd10.);
+    format transaction_date_sas date9.;
+    day_of_week = weekday(transaction_date_sas);
     
-    # Repartition the DataFrame by "state" into 3 partitions
-    df_repart = df.repartition(3, "state")
-    print("Number of partitions after repartitioning:", df_repart.rdd.getNumPartitions())
+    /* Create a binary indicator for high-value transactions */
+    if transaction_amount > 1000 then 
+        high_amount = 1;
+    else 
+        high_amount = 0;
+run;
 
-    # -------------------------------
-    # 3. DataFrame Transformations
-    # -------------------------------
-    # a. Filtering rows (age > 30)
-    df_filtered = df.filter(col("age") > 30)
-    print("=== Filtered (age > 30) ===")
-    df_filtered.show()
+/* 7. Split the data into Training (70%) and Testing (30%) datasets */
+proc surveyselect data=mydata.frauddata_clean 
+                  out=train_test_split
+                  seed=12345 
+                  samprate=0.7 
+                  outall;
+run;
 
-    # b. Adding a new column using withColumn (flag for adult)
-    df_with_flag = df.withColumn("is_adult", when(col("age") >= 18, True).otherwise(False))
-    print("=== DataFrame with 'is_adult' Column ===")
-    df_with_flag.show()
+data training testing;
+    set train_test_split;
+    if selected then output training;
+    else output testing;
+run;
 
-    # c. Applying a UDF to create a new column 'age_category'
-    age_category_udf = udf(age_category, StringType())
-    df_with_age_cat = df.withColumn("age_category", age_category_udf(col("age")))
-    print("=== DataFrame with 'age_category' Column ===")
-    df_with_age_cat.show()
+/* 8. Build a Logistic Regression Model for Fraud Detection */
+/* The model predicts the binary outcome "isFraud" using transaction variables */
+proc logistic data=training;
+    class merchant cardholderID day_of_week high_amount (param=ref);
+    model isFraud(event='1') = transaction_amount log_transaction day_of_week high_amount
+          / selection=stepwise slentry=0.05 slstay=0.05;
+    title "Stepwise Logistic Regression Model for Fraud Detection";
+    /* Score the model on the test dataset and output predictions */
+    score data=testing out=scored;
+run;
 
-    # d. GroupBy and Aggregation: Count and average age by state
-    df_grouped = df.groupBy("state").agg(
-       count("id").alias("count"),
-       avg("age").alias("avg_age")
-    )
-    print("=== Grouped Aggregation by State ===")
-    df_grouped.show()
+/* 9. Evaluate Model Performance */
+/* Re-run the logistic procedure to produce an ROC curve */
+proc logistic data=training plots(only)=roc;
+    class merchant cardholderID day_of_week high_amount (param=ref);
+    model isFraud(event='1') = transaction_amount log_transaction day_of_week high_amount;
+    score data=testing out=scored;
+    title "Model Evaluation: ROC Curve for Fraud Detection Model";
+run;
 
-    # e. Pivot: Pivot the age_category counts by state
-    df_pivot = df_with_age_cat.groupBy("state").pivot("age_category").count()
-    print("=== Pivot Table: Age Category Counts by State ===")
-    df_pivot.show()
+/* 10. Optional: Build a Random Forest Model using PROC HPFOREST for comparison */
+/* This procedure is part of SAS High-Performance procedures */
+proc hpforest data=training;
+    target isFraud / level=binary;
+    input transaction_amount log_transaction day_of_week high_amount;
+    ods output VariableImportance=VarImp;
+    title "Random Forest Model for Fraud Detection";
+run;
 
-    # -------------------------------
-    # 4. Window Functions
-    # -------------------------------
-    # Rank employees by age within each state (highest age gets rank 1)
-    windowSpec = Window.partitionBy("state").orderBy(desc("age"))
-    df_ranked = df.withColumn("rank", row_number().over(windowSpec))
-    print("=== DataFrame with Ranking within State ===")
-    df_ranked.show()
+/* Display Variable Importance from the Random Forest model */
+proc print data=VarImp;
+    title "Variable Importance from Random Forest Model";
+run;
 
-    # -------------------------------
-    # 5. Sorting and Joins
-    # -------------------------------
-    # Sorting the DataFrame by age (ascending)
-    df_sorted = df.orderBy("age")
-    print("=== Sorted DataFrame by Age ===")
-    df_sorted.show()
-
-    # Create another DataFrame to demonstrate joins
-    data_states = [
-       ("NY", "New York"),
-       ("CA", "California"),
-       ("TX", "Texas")
-    ]
-    schema_states = ["state", "state_name"]
-    df_states = spark.createDataFrame(data_states, schema_states)
-    
-    # Join the two DataFrames on 'state'
-    df_joined = df.join(df_states, on="state", how="left")
-    print("=== Joined DataFrame with State Names ===")
-    df_joined.show()
-
-    # -------------------------------
-    # 6. Coalesce and Persisting
-    # -------------------------------
-    # Increase partitions then reduce them using coalesce
-    df_more_partitions = df.repartition(10, "state")
-    df_coalesced = df_more_partitions.coalesce(2)
-    print("Number of partitions after coalesce:", df_coalesced.rdd.getNumPartitions())
-
-    # Persist DataFrame with a different storage level
-    df.persist(StorageLevel.MEMORY_AND_DISK)
-
-    # -------------------------------
-    # 7. Actions and RDD Operations
-    # -------------------------------
-    # Basic actions: count, first, and collect
-    print("Total record count:", df.count())
-    print("First record:", df.first())
-    names = df.select("name").rdd.flatMap(lambda x: x).collect()
-    print("Names collected from DataFrame:", names)
-
-    # Working with RDDs directly from DataFrame
-    rdd = df.rdd
-    # Map transformation: create a tuple (name, age)
-    rdd_transformed = rdd.map(lambda row: (row["name"], row["age"]))
-    print("=== RDD Transformation (name, age) ===")
-    print(rdd_transformed.collect())
-
-    # Reduce operation on RDD: sum up all ages
-    total_age = rdd_transformed.map(lambda x: x[1]).reduce(lambda a, b: a + b)
-    print("Total age (summed via RDD reduce):", total_age)
-
-    # -------------------------------
-    # 8. Write DataFrame to Disk
-    # -------------------------------
-    # Save the DataFrame as a CSV file (overwrite if exists)
-    output_path = "output/csv_output"
-    df.write.mode("overwrite").csv(output_path, header=True)
-    print(f"DataFrame written as CSV to: {output_path}")
-
-    # Stop the SparkSession
-    spark.stop()
-
-if __name__ == "__main__":
-    main()
+/* End of SAS Code */
