@@ -1,112 +1,90 @@
-/***************************************************************************/
-/* SAS Code for Financial Fraud Detection                                */
-/* This example covers SAS basics: data import, exploration, cleaning,     */
-/* feature engineering, model building (logistic regression & random forest),*/
-/* and evaluation.                                                         */
-/***************************************************************************/
+WITH RankedCustomers AS (
+    -- 1️⃣ Rank customers within each country based on total spending
+    SELECT 
+        CustomerID,
+        Country,
+        SUM(TotalAmount) AS TotalSpent,
+        RANK() OVER (PARTITION BY Country ORDER BY SUM(TotalAmount) DESC) AS RankBySpending
+    FROM Orders
+    GROUP BY CustomerID, Country
+),
 
-/* 1. Set up a library pointing to your data directory */
-libname mydata '/path/to/your/data';
+RunningTotal AS (
+    -- 2️⃣ Running total of spending per customer
+    SELECT 
+        CustomerID,
+        OrderID,
+        OrderDate,
+        TotalAmount,
+        SUM(TotalAmount) OVER (PARTITION BY CustomerID ORDER BY OrderDate) AS RunningTotal
+    FROM Orders
+),
 
-/* 2. Import your data (e.g., a CSV file with transaction details) */
-proc import datafile='/path/to/your/data/fraud_transactions.csv'
-    out=mydata.frauddata
-    dbms=csv
-    replace;
-    guessingrows= max; /* Ensures that SAS checks all rows for data type inference */
-run;
+OrderHistory AS (
+    -- 3️⃣ Previous order amount and days since last order
+    SELECT 
+        CustomerID,
+        OrderID,
+        OrderDate,
+        TotalAmount,
+        LAG(TotalAmount) OVER (PARTITION BY CustomerID ORDER BY OrderDate) AS PreviousOrderAmount,
+        OrderDate - LAG(OrderDate) OVER (PARTITION BY CustomerID ORDER BY OrderDate) AS DaysSinceLastOrder
+    FROM Orders
+),
 
-/* 3. Explore the data: view first 10 observations and get dataset metadata */
-proc print data=mydata.frauddata (obs=10);
-    title "First 10 Observations of Fraud Data";
-run;
+CustomerStats AS (
+    -- 4️⃣ First and last order values for each customer
+    SELECT 
+        CustomerID,
+        OrderID,
+        OrderDate,
+        TotalAmount,
+        FIRST_VALUE(TotalAmount) OVER (PARTITION BY CustomerID ORDER BY OrderDate) AS FirstPurchase,
+        LAST_VALUE(TotalAmount) OVER (PARTITION BY CustomerID ORDER BY OrderDate ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS LastPurchase
+    FROM Orders
+),
 
-proc contents data=mydata.frauddata;
-    title "Dataset Contents";
-run;
+SpendingQuartiles AS (
+    -- 5️⃣ Divide customers into spending quartiles
+    SELECT 
+        CustomerID,
+        SUM(TotalAmount) AS TotalSpent,
+        NTILE(4) OVER (ORDER BY SUM(TotalAmount) DESC) AS SpendingQuartile
+    FROM Orders
+    GROUP BY CustomerID
+),
 
-/* 4. Get summary statistics for key numeric variables */
-proc means data=mydata.frauddata n mean std min max;
-    var transaction_amount;
-    title "Summary Statistics for Transaction Amount";
-run;
+SalesPercentage AS (
+    -- 6️⃣ Calculate % contribution of each order to total sales in that country
+    SELECT 
+        OrderID,
+        CustomerID,
+        Country,
+        TotalAmount,
+        TotalAmount * 100.0 / SUM(TotalAmount) OVER (PARTITION BY Country) AS OrderSalesPercentage
+    FROM Orders
+)
 
-/* 5. Check for missing values and frequency distributions for key variables */
-proc freq data=mydata.frauddata;
-    tables isFraud transaction_amount merchant cardholderID / missing;
-    title "Frequency Distribution for Selected Variables";
-run;
-
-/* 6. Data Cleaning & Feature Engineering */
-/* Create a clean dataset with derived variables such as log transaction amount */
-/* and extract day-of-week from the transaction date */
-data mydata.frauddata_clean;
-    set mydata.frauddata;
-    
-    /* Calculate log of transaction amount if positive */
-    if transaction_amount > 0 then 
-        log_transaction = log(transaction_amount);
-    else 
-        log_transaction = .;
-    
-    /* Convert transaction_date (assumed in 'YYYY-MM-DD' format) to SAS date and extract day of week */
-    transaction_date_sas = input(transaction_date, yymmdd10.);
-    format transaction_date_sas date9.;
-    day_of_week = weekday(transaction_date_sas);
-    
-    /* Create a binary indicator for high-value transactions */
-    if transaction_amount > 1000 then 
-        high_amount = 1;
-    else 
-        high_amount = 0;
-run;
-
-/* 7. Split the data into Training (70%) and Testing (30%) datasets */
-proc surveyselect data=mydata.frauddata_clean 
-                  out=train_test_split
-                  seed=12345 
-                  samprate=0.7 
-                  outall;
-run;
-
-data training testing;
-    set train_test_split;
-    if selected then output training;
-    else output testing;
-run;
-
-/* 8. Build a Logistic Regression Model for Fraud Detection */
-/* The model predicts the binary outcome "isFraud" using transaction variables */
-proc logistic data=training;
-    class merchant cardholderID day_of_week high_amount (param=ref);
-    model isFraud(event='1') = transaction_amount log_transaction day_of_week high_amount
-          / selection=stepwise slentry=0.05 slstay=0.05;
-    title "Stepwise Logistic Regression Model for Fraud Detection";
-    /* Score the model on the test dataset and output predictions */
-    score data=testing out=scored;
-run;
-
-/* 9. Evaluate Model Performance */
-/* Re-run the logistic procedure to produce an ROC curve */
-proc logistic data=training plots(only)=roc;
-    class merchant cardholderID day_of_week high_amount (param=ref);
-    model isFraud(event='1') = transaction_amount log_transaction day_of_week high_amount;
-    score data=testing out=scored;
-    title "Model Evaluation: ROC Curve for Fraud Detection Model";
-run;
-
-/* 10. Optional: Build a Random Forest Model using PROC HPFOREST for comparison */
-/* This procedure is part of SAS High-Performance procedures */
-proc hpforest data=training;
-    target isFraud / level=binary;
-    input transaction_amount log_transaction day_of_week high_amount;
-    ods output VariableImportance=VarImp;
-    title "Random Forest Model for Fraud Detection";
-run;
-
-/* Display Variable Importance from the Random Forest model */
-proc print data=VarImp;
-    title "Variable Importance from Random Forest Model";
-run;
-
-/* End of SAS Code */
+-- 🔹 Final Combined Output
+SELECT 
+    r.CustomerID,
+    r.Country,
+    r.TotalSpent,
+    r.RankBySpending,
+    rt.OrderID,
+    rt.OrderDate,
+    rt.TotalAmount,
+    rt.RunningTotal,
+    oh.PreviousOrderAmount,
+    oh.DaysSinceLastOrder,
+    cs.FirstPurchase,
+    cs.LastPurchase,
+    sq.SpendingQuartile,
+    sp.OrderSalesPercentage
+FROM RankedCustomers r
+JOIN RunningTotal rt ON r.CustomerID = rt.CustomerID
+JOIN OrderHistory oh ON r.CustomerID = oh.CustomerID AND rt.OrderID = oh.OrderID
+JOIN CustomerStats cs ON r.CustomerID = cs.CustomerID AND rt.OrderID = cs.OrderID
+JOIN SpendingQuartiles sq ON r.CustomerID = sq.CustomerID
+JOIN SalesPercentage sp ON rt.OrderID = sp.OrderID
+ORDER BY r.Country, r.RankBySpending, rt.OrderDate;
