@@ -1,45 +1,12 @@
-import dataiku
-from dataiku import spark as dkuspark
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, udf
-from pyspark.sql.types import IntegerType
+import pyautogui
+import time
 
-# Initialize Spark Session
-spark = SparkSession.builder.appName("DataikuPySpark").getOrCreate()
+def keep_active():
+    print("Keeping your screen active. Press Ctrl+C to stop.")
+    while True:
+        pyautogui.moveRel(1, 0, duration=0.2)  # Move mouse slightly
+        pyautogui.moveRel(-1, 0, duration=0.2)  # Move it back
+        time.sleep(30)  # Adjust the interval as needed
 
-# Load dataset from Dataiku
-dataset = dataiku.Dataset("df")  # Ensure "df" is a valid dataset in Dataiku
-df_df = dkuspark.get_dataframe(dataset)
-
-# Function to check if a column contains bytes data
-def contains_bytes(df):
-    for col_name in df.columns:
-        first_value = df.select(col_name).first()[0]
-        if isinstance(first_value, bytes):
-            return True
-    return False
-
-# Function to convert bytes to integer
-def bytes_to_int(byte_value):
-    if isinstance(byte_value, bytes):
-        try:
-            return int(byte_value.decode("utf-8").strip())  # Decode and strip spaces
-        except ValueError:
-            return None  # Handle non-numeric byte values
-    return byte_value  # Return unchanged if not bytes
-
-# Create UDF for conversion
-udf_bytes_to_int = udf(bytes_to_int, IntegerType())
-
-# Convert all `bytes` columns to integers if found
-for col_name in df_df.columns:
-    first_value = df_df.select(col_name).first()[0]
-    if isinstance(first_value, bytes):
-        print(f"Converting column '{col_name}' from bytes to int...")
-        df_df = df_df.withColumn(col_name, udf_bytes_to_int(col(col_name)))
-
-# Show updated schema
-df_df.printSchema()
-
-# Show first few rows to verify conversion
-df_df.show(5)
+if __name__ == "__main__":
+    keep_active()
