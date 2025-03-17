@@ -1,90 +1,233 @@
-WITH RankedCustomers AS (
-    -- 1️⃣ Rank customers within each country based on total spending
-    SELECT 
-        CustomerID,
-        Country,
-        SUM(TotalAmount) AS TotalSpent,
-        RANK() OVER (PARTITION BY Country ORDER BY SUM(TotalAmount) DESC) AS RankBySpending
-    FROM Orders
-    GROUP BY CustomerID, Country
-),
+# -*- coding: utf-8 -*-
+import dataiku
+import pandas as pd
+from io import StringIO, BytesIO
+from reportlab.lib.pagesizes import landscape, A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Image, PageBreak
+import zipfile
+import matplotlib.pyplot as plt
+import datetime
+import os
 
-RunningTotal AS (
-    -- 2️⃣ Running total of spending per customer
-    SELECT 
-        CustomerID,
-        OrderID,
-        OrderDate,
-        TotalAmount,
-        SUM(TotalAmount) OVER (PARTITION BY CustomerID ORDER BY OrderDate) AS RunningTotal
-    FROM Orders
-),
+# Read recipe inputs
+Delta_Users_Join_GIA = dataiku.Dataset("Delta_Users_Join_GIA")
+Delta_Users_Join_GIA_df = Delta_Users_Join_GIA.get_dataframe()
 
-OrderHistory AS (
-    -- 3️⃣ Previous order amount and days since last order
-    SELECT 
-        CustomerID,
-        OrderID,
-        OrderDate,
-        TotalAmount,
-        LAG(TotalAmount) OVER (PARTITION BY CustomerID ORDER BY OrderDate) AS PreviousOrderAmount,
-        OrderDate - LAG(OrderDate) OVER (PARTITION BY CustomerID ORDER BY OrderDate) AS DaysSinceLastOrder
-    FROM Orders
-),
+Delta_Users_Join_GIA_df['SCB_PSID'] = Delta_Users_Join_GIA_df['SCB_PSID'].apply(int).apply(str)
 
-CustomerStats AS (
-    -- 4️⃣ First and last order values for each customer
-    SELECT 
-        CustomerID,
-        OrderID,
-        OrderDate,
-        TotalAmount,
-        FIRST_VALUE(TotalAmount) OVER (PARTITION BY CustomerID ORDER BY OrderDate) AS FirstPurchase,
-        LAST_VALUE(TotalAmount) OVER (PARTITION BY CustomerID ORDER BY OrderDate ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS LastPurchase
-    FROM Orders
-),
+# Write recipe outputs
+Email_Attachments_Folder = dataiku.Folder("z9zdl1Pj")
+Email_Attachments_Folder_info = Email_Attachments_Folder.get_info()
 
-SpendingQuartiles AS (
-    -- 5️⃣ Divide customers into spending quartiles
-    SELECT 
-        CustomerID,
-        SUM(TotalAmount) AS TotalSpent,
-        NTILE(4) OVER (ORDER BY SUM(TotalAmount) DESC) AS SpendingQuartile
-    FROM Orders
-    GROUP BY CustomerID
-),
+# Prepare data for processing
+data = Delta_Users_Join_GIA_df
+data_original = Delta_Users_Join_GIA_df
+data_psid = data[['SCB_PSID']].drop_duplicates().reset_index(drop=True)
 
-SalesPercentage AS (
-    -- 6️⃣ Calculate % contribution of each order to total sales in that country
-    SELECT 
-        OrderID,
-        CustomerID,
-        Country,
-        TotalAmount,
-        TotalAmount * 100.0 / SUM(TotalAmount) OVER (PARTITION BY Country) AS OrderSalesPercentage
-    FROM Orders
-)
+def return_rows_for_userid(psid):
+    df = Delta_Users_Join_GIA_df
+    filtered_data = df[df['SCB_PSID'] == psid]
+    filtered_data = filtered_data[['Id', 'Title', 'Date_of_event', 'Source_of_event', 'Created',
+                                   'Risk_Themes_Original', 'Business_Functions_Original',
+                                   'Country_Original', 'Key_Points', 'Name_Group', 'SCB_PSID_Group']]
+    filtered_data = filtered_data.drop_duplicates().reset_index(drop=True)
+    return filtered_data
 
--- 🔹 Final Combined Output
-SELECT 
-    r.CustomerID,
-    r.Country,
-    r.TotalSpent,
-    r.RankBySpending,
-    rt.OrderID,
-    rt.OrderDate,
-    rt.TotalAmount,
-    rt.RunningTotal,
-    oh.PreviousOrderAmount,
-    oh.DaysSinceLastOrder,
-    cs.FirstPurchase,
-    cs.LastPurchase,
-    sq.SpendingQuartile,
-    sp.OrderSalesPercentage
-FROM RankedCustomers r
-JOIN RunningTotal rt ON r.CustomerID = rt.CustomerID
-JOIN OrderHistory oh ON r.CustomerID = oh.CustomerID AND rt.OrderID = oh.OrderID
-JOIN CustomerStats cs ON r.CustomerID = cs.CustomerID AND rt.OrderID = cs.OrderID
-JOIN SpendingQuartiles sq ON r.CustomerID = sq.CustomerID
-JOIN SalesPercentage sp ON rt.OrderID = sp.OrderID
-ORDER BY r.Country, r.RankBySpending, rt.OrderDate;
+def prep_data_for_profilereport(psid):
+    df = data_original
+    filtered_data = df[df['SCB_PSID'] == psid]
+    filtered_data = filtered_data[['Id', 'Title', 'Date_of_event', 'Source_of_event', 'Created',
+                                   'Risk_Themes', 'Business_Functions', 'Audit Group',
+                                   'Country', 'Key_Points', 'Name', 'SCB_PSID']]
+    filtered_data = filtered_data.drop_duplicates().reset_index(drop=True)
+    return filtered_data
+
+def create_pdf_from_dataframe(psid, data):
+    pdf_buffer = BytesIO()
+    pdf_file_name = f"Business_Monitoring_Data_for_user_{psid}.pdf"
+    data = data.drop(columns=['SCB_PSID(s)'], axis=1)
+    data.rename(columns={'Id':'ID','Date_of_event':'Event Date','Source_of_event':'Type of Audit',
+                         'Risk_Themes_Original':'Risk_Themes','Business_Functions_Original':'Business_Functions',
+                         'Country_Original':'Relevant Country(s)','Name':'Relevant Person(s) for update','Country':'Relevant Country(s)',
+                         'Key_Points':'Material Update(s)'}, inplace=True)
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=A4)
+    story = []
+    
+    # Add title
+    front_page_style = ParagraphStyle(
+        'FrontPageStyle',
+        fontName='Helvetica-Bold',
+        fontSize=18,
+        textColor=colors.black,
+        alignment=1
+    )
+    front_page_paragraph = Paragraph(f"Business Monitoring Report for User {psid}", front_page_style)
+    story.append(front_page_paragraph)
+    story.append(Spacer(1, 24))
+
+    # Add data
+    styles = getSampleStyleSheet()
+    section_style = ParagraphStyle(
+        'SectionStyle',
+        fontName='Helvetica',
+        fontSize=12,
+        textColor=colors.black,
+    )
+
+    for idx, row in data.iterrows():
+        story.append(Paragraph(f"Record {idx + 1}", styles['Heading2']))
+        story.append(Spacer(1, 12))
+        for col in data.columns:
+            if pd.notna(row[col]):
+                story.append(Paragraph(f"<b>{col}:</b> {row[col]}", section_style))
+                story.append(Spacer(1, 6))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.black))
+        story.append(Spacer(1, 12))
+
+    # Generate PDF
+    doc.build(story)
+    pdf_buffer.seek(0)
+    return pdf_file_name, pdf_buffer.getvalue()
+
+def create_profile_pdf(psid, data, compressed_data):
+    pdf_buffer = BytesIO()
+    pdf_file_name = f"Visual_Summary_{psid}.pdf"
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=landscape(A4))
+    story = []
+    name = data['Name'].iloc[0]
+
+    # Add user name in big bold font
+    user_name_style = ParagraphStyle(
+        'UserNameStyle',
+        fontName='Helvetica-Bold',
+        fontSize=24,
+        textColor=colors.black,
+        alignment=1
+    )
+    user_name_paragraph = Paragraph(f"User: {name}", user_name_style)
+    story.append(user_name_paragraph)
+    story.append(Spacer(1, 24))
+
+    # Add last quarter
+    current_date = datetime.datetime.now()
+    last_quarter = (current_date.month - 1) // 3
+    if last_quarter == 0:
+        last_quarter = 4
+        year = current_date.year - 1
+    else:
+        year = current_date.year
+    last_quarter_text = f"Quarter - Q{last_quarter} | Year - {year}"
+    quarter_style = ParagraphStyle(
+        'QuarterStyle',
+        fontName='Helvetica-Bold',
+        fontSize=16,
+        textColor=colors.black,
+        alignment=1
+    )
+    quarter_paragraph = Paragraph(last_quarter_text, quarter_style)
+    story.append(quarter_paragraph)
+    story.append(Spacer(1, 12))
+
+    # Add mention count
+    mention_count = len(compressed_data)
+    mention_text = f"You were mentioned in the Business Monitoring Report - {mention_count} times this quarter."
+    mention_style = ParagraphStyle(
+        'MentionStyle',
+        fontName='Helvetica',
+        fontSize=14,
+        textColor=colors.black,
+        alignment=1
+    )
+    mention_paragraph = Paragraph(mention_text, mention_style)
+    story.append(mention_paragraph)
+    story.append(Spacer(1, 24))
+
+    # Create graphs
+    def create_horizontal_bar_graph(data, column_name, graph_title):
+        colors_list = [
+            "#2fb000", "#91c5fd", "#88ff5e", "#217e00", "#35c800", "#3be100", "#01306c", "#2f92fc",
+            "#eef2f5", "#9aff77", "#01245b", "#60abfc", "#479ffc", "#013d7d", "#c2dffe", "#289700",
+            "#024894", "#78b8fc", "#daecfe", "#e9f2fb", "#bfffa8", "#1a6500", "#144d00", "#0254ad",
+            "#0362c9", "#0371e6", "#0d7cf2", "#1a86fa", "#3495fc", "#a5d0fd", "#a9d2fd", "#e8f4e3"
+        ]
+        plt.figure(figsize=(10, 6))
+        data[column_name].value_counts().plot(kind='barh', color=colors_list[:len(data[column_name].unique())])
+        plt.title(graph_title)
+        plt.ylabel(column_name)
+        plt.xlabel('Count Distinct')
+        plt.tight_layout()
+        buffer = BytesIO()
+        plt.savefig(buffer, format='png')
+        buffer.seek(0)
+        plt.close()
+        return buffer
+
+    def create_pie_chart(data, column_name, graph_title):
+        pie_colors = ["#d4d4d4", "#20acff", "#38d200", "#0473ea", "#3beb8d", "#0083b3"]
+        plt.figure(figsize=(8, 8))
+        data[column_name].value_counts().plot(kind='pie', autopct='%1.1f%%', startangle=90, colors=pie_colors[:len(data[column_name].unique())])
+        plt.title(graph_title)
+        plt.ylabel('')  # Hide y-axis label for pie chart
+        buffer = BytesIO()
+        plt.savefig(buffer, format='png')
+        buffer.seek(0)
+        plt.close()
+        return buffer
+
+    # Graphs
+    graph_list = []
+    graph_list.append(("Graph 1: Country Graph", create_horizontal_bar_graph(data, 'Country', 'Graph 1: Country')))
+    graph_list.append(("Graph 2: Risk Themes Graph", create_horizontal_bar_graph(data, 'Risk_Themes', 'Graph 2: Risk Themes')))
+    graph_list.append(("Graph 3: Business Functions Graph", create_horizontal_bar_graph(data, 'Business_Functions', 'Graph 3: Business Functions Distribution')))
+    graph_list.append(("Graph 4: Audit Group Graph", create_pie_chart(data, 'Audit Group', 'Graph 4: Audit Group')))
+    graph_list.append(("Graph 5: Country Graph", create_pie_chart(data, 'Country', 'Graph 5: Country vs Count Distinct of Id')))
+    graph_list.append(("Graph 6: Type of Audit Graph", create_pie_chart(data, 'Source_of_event', 'Graph 6: Type of Audit')))
+
+    for graph_title, graph_buffer in graph_list:
+        story.append(PageBreak())  # Start a new page for each graph
+        story.append(Paragraph(graph_title, getSampleStyleSheet()['Heading2']))
+        story.append(Spacer(1, 12))
+        img = Image(graph_buffer, width=500, height=350)
+        story.append(img)
+        story.append(Spacer(1, 24))
+
+    # Generate PDF
+    doc.build(story)
+    pdf_buffer.seek(0)
+    return pdf_file_name, pdf_buffer.getvalue()
+
+# Process and generate outputs for each PSID
+for psid in data_psid['SCB_PSID']:
+    user_data = return_rows_for_userid(psid)
+    csv_userdata = user_data
+    csv_userdata.rename(columns={'Id':'ID','Date_of_event':'Event Date','Source_of_event':'Type of Audit',
+                         'Risk_Themes_Original':'Risk_Themes','Business_Functions_Original':'Business_Functions',
+                         'Country_Original':'Relevant Country(s)','Name':'Relevant Person(s) for update','Country':'Relevant Country(s)',
+                         'Name_Group':'Relevant Person(s)','SCB_PSID_Group':'SCB_PSID(s)','Key_Points':'Material Update(s)'}, inplace=True)
+    profile_user_data = prep_data_for_profilereport(psid)
+    
+    # Generate CSV
+    csv_buffer = StringIO()
+    csv_file_name = f"Business_Monitoring_Data_for_user_{psid}.csv"
+    csv_userdata.to_csv(csv_buffer, index=False)
+    csv_content = csv_buffer.getvalue().encode('utf-8')
+
+    # Generate Business Monitoring PDF
+    monitoring_pdf_file_name, monitoring_pdf_content = create_pdf_from_dataframe(psid, user_data)
+
+    # Generate Profile PDF
+    profile_pdf_file_name, profile_pdf_content = create_profile_pdf(psid, profile_user_data, user_data)
+
+    # Create a zip file
+    zip_file_name = f"Business_Data_and_Reports_for_user_{psid}.zip"
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        zip_file.writestr(csv_file_name, csv_content)
+        zip_file.writestr(monitoring_pdf_file_name, monitoring_pdf_content)
+        zip_file.writestr(profile_pdf_file_name, profile_pdf_content)
+
+    # Save the zip file to the folder
+    zip_buffer.seek(0)
+    Email_Attachments_Folder.upload_stream(zip_file_name, zip_buffer.getvalue())
