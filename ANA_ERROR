@@ -18,7 +18,7 @@ Delta_Users_Join_GIA_df = Delta_Users_Join_GIA.get_dataframe()
 Delta_Users_Join_GIA_df['SCB_PSID'] = Delta_Users_Join_GIA_df['SCB_PSID'].apply(int).apply(str)
 
 # Write recipe outputs
-Email_Attachments_Folder = dataiku.Folder("z9zdl1Pj")
+Email_Attachments_Folder = dataiku.Folder("XXXXXXX")
 Email_Attachments_Folder_info = Email_Attachments_Folder.get_info()
 
 # Prepare data for processing
@@ -96,7 +96,7 @@ def create_profile_pdf(psid, data, compressed_data):
     pdf_file_name = f"Visual_Summary_{psid}.pdf"
     doc = SimpleDocTemplate(pdf_buffer, pagesize=landscape(A4))
     story = []
-    name = data['Name'].iloc[0]
+    name = data['Name'].iloc[0] 
 
     # Add user name in big bold font
     user_name_style = ParagraphStyle(
