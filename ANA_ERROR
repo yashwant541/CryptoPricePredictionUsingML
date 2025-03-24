@@ -18,7 +18,7 @@ Delta_Users_Join_GIA_df = Delta_Users_Join_GIA.get_dataframe()
 Delta_Users_Join_GIA_df['SCB_PSID'] = Delta_Users_Join_GIA_df['SCB_PSID'].apply(int).apply(str)
 
 # Write recipe outputs
-Email_Attachments_Folder = dataiku.Folder("XXXXXXX")
+Email_Attachments_Folder = dataiku.Folder("z9zdl1Pj")
 Email_Attachments_Folder_info = Email_Attachments_Folder.get_info()
 
 # Prepare data for processing
@@ -143,6 +143,17 @@ def create_profile_pdf(psid, data, compressed_data):
     mention_paragraph = Paragraph(mention_text, mention_style)
     story.append(mention_paragraph)
     story.append(Spacer(1, 24))
+    
+    #Create Frquency table for the columns:
+        
+    #Create Frquency table for the columns:
+    def create_correct_frequency(data, column):
+        field_counts = {}
+        for fields in data[column]:
+            for field in fields.split(', '):
+                field_counts[column] = field_counts.get(column, 0) + 1
+        column_freq_df = pd.DataFrame(list(field_counts.items()), columns=[column, 'Frequency'])
+        return column_freq_df
 
     # Create graphs
     def create_horizontal_bar_graph(data, column_name, graph_title):
@@ -153,7 +164,8 @@ def create_profile_pdf(psid, data, compressed_data):
             "#0362c9", "#0371e6", "#0d7cf2", "#1a86fa", "#3495fc", "#a5d0fd", "#a9d2fd", "#e8f4e3"
         ]
         plt.figure(figsize=(10, 6))
-        data[column_name].value_counts().plot(kind='barh', color=colors_list[:len(data[column_name].unique())])
+        column_freq_df = create_correct_frequency(data, column_name)
+        column_freq_df.set_index(column_name)['Frequency'].plot(kind='barh', color=colors_list[:len(data[column_name].unique())])
         plt.title(graph_title)
         plt.ylabel(column_name)
         plt.xlabel('Count Distinct')
@@ -167,7 +179,8 @@ def create_profile_pdf(psid, data, compressed_data):
     def create_pie_chart(data, column_name, graph_title):
         pie_colors = ["#d4d4d4", "#20acff", "#38d200", "#0473ea", "#3beb8d", "#0083b3"]
         plt.figure(figsize=(8, 8))
-        data[column_name].value_counts().plot(kind='pie', autopct='%1.1f%%', startangle=90, colors=pie_colors[:len(data[column_name].unique())])
+        column_freq_df = create_correct_frequency(data, column_name)
+        column_freq_df.set_index(column_name)['Frequency'].plot(kind='barh', color=colors_list[:len(data[column_name].unique())])
         plt.title(graph_title)
         plt.ylabel('')  # Hide y-axis label for pie chart
         buffer = BytesIO()
@@ -178,12 +191,12 @@ def create_profile_pdf(psid, data, compressed_data):
 
     # Graphs
     graph_list = []
-    graph_list.append(("Graph 1: Country Graph", create_horizontal_bar_graph(data, 'Country', 'Graph 1: Country')))
-    graph_list.append(("Graph 2: Risk Themes Graph", create_horizontal_bar_graph(data, 'Risk_Themes', 'Graph 2: Risk Themes')))
-    graph_list.append(("Graph 3: Business Functions Graph", create_horizontal_bar_graph(data, 'Business_Functions', 'Graph 3: Business Functions Distribution')))
-    graph_list.append(("Graph 4: Audit Group Graph", create_pie_chart(data, 'Audit Group', 'Graph 4: Audit Group')))
-    graph_list.append(("Graph 5: Country Graph", create_pie_chart(data, 'Country', 'Graph 5: Country vs Count Distinct of Id')))
-    graph_list.append(("Graph 6: Type of Audit Graph", create_pie_chart(data, 'Source_of_event', 'Graph 6: Type of Audit')))
+    graph_list.append(("Graph 1: Country Graph", create_horizontal_bar_graph(compressed_data, 'Relevant Country(s)', 'Graph 1: Country')))
+    graph_list.append(("Graph 2: Risk Themes Graph", create_horizontal_bar_graph(compressed_data, 'Risk_Themes', 'Graph 2: Risk Themes')))
+    graph_list.append(("Graph 3: Business Functions Graph", create_horizontal_bar_graph(compressed_data, 'Business_Functions', 'Graph 3: Business Functions Distribution')))
+    #graph_list.append(("Graph 4: Audit Group Graph", create_pie_chart(compressed_data, 'Audit Group', 'Graph 4: Audit Group')))
+    graph_list.append(("Graph 5: Country Graph", create_pie_chart(compressed_data, 'Relevant Country(s)', 'Graph 5: Country vs Count Distinct of Id')))
+    graph_list.append(("Graph 6: Type of Audit Graph", create_pie_chart(compressed_data, 'Type of Audit', 'Graph 6: Type of Audit')))
 
     for graph_title, graph_buffer in graph_list:
         story.append(PageBreak())  # Start a new page for each graph
