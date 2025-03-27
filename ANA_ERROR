@@ -1,6 +1,98 @@
-colors_list = [
-    "#2fb000", "#91c5fd", "#88ff5e", "#217e00", "#35c800", "#3be100", "#01306c", "#2f92fc",
-    "#eef2f5", "#9aff77", "#01245b", "#60abfc", "#479ffc", "#013d7d", "#c2dffe", "#289700",
-    "#024894", "#78b8fc", "#daecfe", "#e9f2fb", "#bfffa8", "#1a6500", "#144d00", "#0254ad",
-    "#0362c9", "#0371e6", "#0d7cf2", "#1a86fa", "#3495fc", "#a5d0fd", "#a9d2fd", "#e8f4e3"
-]
+1. Data Preparation & Optimization
+Use Aggregations & Preprocessing
+Aggregate data at a higher level before loading into Tableau.
+
+Perform calculations and transformations in SQL, Python (Pandas, PySpark), or ETL tools like Dataiku.
+
+If dealing with time-series data, pre-aggregate data at daily, weekly, or monthly levels.
+
+Reduce Columns & Rows
+Remove unnecessary columns and filter irrelevant rows before loading into Tableau.
+
+Use SQL SELECT statements to pick only required fields.
+
+If using a CSV file, split it into smaller chunks before loading.
+
+Use Extracts Instead of Live Connection
+Tableau extracts (.hyper) are optimized for speed.
+
+Schedule periodic refreshes instead of live querying for every dashboard interaction.
+
+2. Database & Query Optimization
+Use an Optimized Database Connection
+Connect Tableau to a high-performance database (Snowflake, Redshift, BigQuery, etc.).
+
+Use indexed tables to speed up query execution.
+
+Partition large tables by date, region, or business category.
+
+Optimize SQL Queries
+Avoid SELECT *; fetch only required fields.
+
+Use database-side indexing and materialized views.
+
+Precompute expensive calculations and store them in the database.
+
+Enable Query Caching
+Enable Tableau’s query cache to store results temporarily.
+
+Use server-side caching in databases like Snowflake or Redshift.
+
+3. Tableau Performance Optimization
+Use Aggregated Extracts
+Convert data to summary-level extracts before visualization.
+
+Use Tableau’s LOD expressions (FIXED, INCLUDE, EXCLUDE) to optimize calculations.
+
+Apply Filters Effectively
+Use Extract Filters to limit the data before loading.
+
+Avoid excessive quick filters; use parameter-based filtering instead.
+
+Apply Context Filters to filter large datasets efficiently.
+
+Optimize Calculations & Joins
+Perform calculations in SQL or database rather than in Tableau.
+
+Use blended data sources instead of full outer joins.
+
+If using joins, prefer indexed keys.
+
+Use Data Source Tuning
+Enable Hyper extracts instead of connecting to large live databases.
+
+Avoid unnecessary blending of multiple data sources.
+
+4. Server & Deployment Strategy
+Use Tableau Server/Tableau Cloud
+Deploy dashboards on Tableau Server for better performance.
+
+Configure scheduled extracts to refresh at non-peak hours.
+
+Parallel Processing & Background Tasks
+Enable multi-threaded processing on Tableau Server.
+
+Schedule extract refreshes during off-hours.
+
+Enable Load Balancing
+Use Tableau's Performance Recorder to identify bottlenecks.
+
+Distribute large datasets across multiple Tableau servers.
+
+5. Alternative Big Data Solutions
+Use Direct Connections with Big Data Engines
+Connect Tableau with Apache Spark, Hadoop, or Presto for distributed data processing.
+
+Use Snowflake or Google BigQuery for massive datasets.
+
+Leverage Hyper Extract API
+Create incremental extracts using Tableau’s Hyper API.
+
+Only update new or changed records instead of full refreshes.
+
+Final Thoughts
+For millions of rows, follow these key takeaways: ✅ Pre-aggregate data in the database before loading.
+✅ Use extracts instead of live connections.
+✅ Optimize filters and calculations inside Tableau.
+✅ Leverage cloud databases like Snowflake, Redshift, or BigQuery.
+✅ Schedule refreshes & caching to reduce query load.
