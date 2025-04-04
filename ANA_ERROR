@@ -1,77 +1,67 @@
-📘 Life & Retirement (LNR) Financial Concepts Cheat Sheet
-________________________________________
-🔹 1. COMMON METRICS & RATIOS
-•	Persistency Ratio = (Policies in force after n months / Total policies issued at start) × 100
-•	Claims Ratio = Claims Paid / Premiums Earned
-•	Solvency Ratio = Available Solvency Margin / Required Solvency Margin
-•	Loss Ratio = Incurred Claims / Earned Premium
-•	Expense Ratio = Underwriting Expenses / Earned Premium
-•	Combined Ratio = Loss Ratio + Expense Ratio
-•	New Business Margin = (Present Value of Future Profits / New Premiums) × 100
-•	Surrender Ratio = (Policies surrendered / Policies in force) × 100
-•	Embedded Value (EV) = Net Asset Value (NAV) + Value of In-force Business (VIF)
-•	Value of New Business (VNB) = Present Value of Future Profits – Cost of Capital
-________________________________________
-🔹 2. TIME VALUE & ANNUITY FORMULAS
-•	Future Value (FV) = PV × (1 + r)^n
-•	Present Value (PV) = FV / (1 + r)^n
-•	PV of Annuity = Pmt × [(1 - (1 + r)^-n) / r]
-•	FV of Annuity = Pmt × [((1 + r)^n - 1) / r]
-•	Perpetuity PV = Pmt / r
-•	Annuity Due (PV) = PV × (1 + r)
-•	Discount Factor = 1 / (1 + r)^n
-________________________________________
-🔹 3. INSURANCE PRODUCT CONCEPTS
-•	Term Insurance: Pure risk, no maturity, low premium
-•	Whole Life Insurance: Life-long cover, includes savings (cash value)
-•	Endowment Plan: Insurance + savings, pays on death or survival
-•	ULIP: Unit Linked Insurance Plan – market-linked investment + insurance
-•	Annuities:
-o	Immediate: Payout starts immediately
-o	Deferred: Payout starts later
-o	Fixed: Guaranteed returns
-o	Variable: Market-driven returns
-________________________________________
-🔹 4. RETIREMENT PRODUCTS & METRICS
-Products:
-•	401(k), IRA, Roth IRA (US)
-•	NPS, EPF, PPF (India)
-•	Pension Funds (Defined Benefit or Contribution)
-Metrics:
-•	Funded Status = Plan Assets – Plan Liabilities
-•	Glide Path: Gradual shift from equity to debt with age
-•	Replacement Ratio = Post-retirement income / Pre-retirement income
-•	Contribution Rate: % of salary invested (e.g., 10–15%)
-•	Withdrawal Rate: Sustainable withdrawal rate (e.g., 4% rule)
-________________________________________
-🔹 5. ACTUARIAL / VALUATION METRICS
-•	Net Premium: Premium covering risk + expenses
-•	Gross Premium: Net premium + loading for profits
-•	Reserve (Liability) = Present value of future claims – future premiums
-•	Mortality Rate: Probability of death at a given age
-•	Lapse Rate: % of discontinued policies
-•	DCF: Discounted Cash Flow to value insurance business
-________________________________________
-🔹 6. DASHBOARDS / KPIs
-For Life Insurance:
-•	Policy count trend
-•	Premium income (Annualized)
-•	Persistency rate
-•	Claims incurred
-•	Sum Assured in force
-•	New Business Value
-For Retirement:
-•	Assets Under Management (AUM) by segment
-•	Goal progress vs target
-•	Contribution vs withdrawal ratio
-•	Client age-band distribution
-•	Annuity vs Lump Sum preference
-________________________________________
-🔹 7. REGULATIONS & STANDARDS
-Regulation	Region	Purpose
-Solvency II	EU	Capital adequacy
-IRDA	India	Life & health insurer compliance
-IFRS 17	Global	Insurance contract accounting
-GAAP / STAT	US	Financial reporting
-SEC Filings (10-K, 10-Q)	US	Disclosures for listed insurers
+Property & Casualty (P&C) Insurance Cheat Sheet
+Key Financial Ratios & Formulas
+Loss Ratio = Incurred Losses / Earned Premiums
 
+Expense Ratio = Underwriting Expenses / Earned Premiums
+
+Combined Ratio = Loss Ratio + Expense Ratio
+
+If < 100% → Underwriting profit
+
+If > 100% → Underwriting loss
+
+Retention Ratio = Renewed Policies / Total Renewable Policies
+
+LAE Ratio = Loss Adjustment Expenses / Incurred Losses
+
+Operating Ratio = Combined Ratio - Investment Income Ratio
+
+Reserve Calculations
+Incurred Losses = Paid Losses + Case Reserves + IBNR
+
+Loss Development Factor (LDF) = Ultimate Loss / Reported Loss to Date
+
+Earned Premium = Written Premium × (Days Passed / Policy Term)
+
+Unearned Premium Reserve (UPR) = Written Premium - Earned Premium
+
+Underwriting Metrics
+Hit Ratio = Number of Policies Written / Number of Quotes Issued
+
+Average Premium = Total Premium / Number of Policies
+
+Claims Metrics
+Claims Frequency = Number of Claims / Number of Policies in Force
+
+Claims Severity = Total Incurred Losses / Number of Claims
+
+Pure Premium = Claims Frequency × Claims Severity
+
+Profitability Metrics
+Loss Cost = Expected Losses / Exposure Units
+
+Investment Income Ratio = Investment Income / Earned Premiums
+
+Catastrophe & Risk Metrics
+Probable Maximum Loss (PML): Estimated maximum loss under worst-case scenario
+
+Exposure: Risk measured by policy limits, insured value, or number of units
+
+Key P&C Terms to Know
+Premium: Amount paid for insurance coverage
+
+Claim: Request for payment due to a covered loss
+
+Underwriting: Risk assessment and pricing process
+
+Reinsurance: Insurance purchased by insurers to manage risk
+
+Deductible: Amount paid out-of-pocket by the insured before coverage starts
+
+Limit: Max amount payable by the insurer for a loss
+
+Subrogation: Insurer recovering costs from a third party
+
+Moral Hazard: Risk due to insured’s behavior post-insurance
+
+Adverse Selection: High-risk individuals more likely to buy insurance
