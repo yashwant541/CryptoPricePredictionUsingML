@@ -1,67 +1,29 @@
-Property & Casualty (P&C) Insurance Cheat Sheet
-Key Financial Ratios & Formulas
-Loss Ratio = Incurred Losses / Earned Premiums
+import pandas as pd
 
-Expense Ratio = Underwriting Expenses / Earned Premiums
+# Sample DataFrame
+df = pd.DataFrame({
+    'description': [
+        'fresh water melon from farm',
+        'pine apple juice in the bottle',
+        'musk melon is tasty',
+        'strawberries are sweet',
+        'random text with no fruits'
+    ]
+})
 
-Combined Ratio = Loss Ratio + Expense Ratio
+# Multi-word keywords
+keywords = ['water melon', 'pine apple', 'musk melon']
 
-If < 100% → Underwriting profit
+# Build regex pattern with word boundaries
+pattern = '|'.join([kw.lower() for kw in keywords])
 
-If > 100% → Underwriting loss
+# Filter matched and unmatched
+matched_df = df[df['description'].str.lower().str.contains(pattern)]
+unmatched_df = df[~df['description'].str.lower().str.contains(pattern)]
 
-Retention Ratio = Renewed Policies / Total Renewable Policies
+# Output
+print("Matched rows:")
+print(matched_df)
 
-LAE Ratio = Loss Adjustment Expenses / Incurred Losses
-
-Operating Ratio = Combined Ratio - Investment Income Ratio
-
-Reserve Calculations
-Incurred Losses = Paid Losses + Case Reserves + IBNR
-
-Loss Development Factor (LDF) = Ultimate Loss / Reported Loss to Date
-
-Earned Premium = Written Premium × (Days Passed / Policy Term)
-
-Unearned Premium Reserve (UPR) = Written Premium - Earned Premium
-
-Underwriting Metrics
-Hit Ratio = Number of Policies Written / Number of Quotes Issued
-
-Average Premium = Total Premium / Number of Policies
-
-Claims Metrics
-Claims Frequency = Number of Claims / Number of Policies in Force
-
-Claims Severity = Total Incurred Losses / Number of Claims
-
-Pure Premium = Claims Frequency × Claims Severity
-
-Profitability Metrics
-Loss Cost = Expected Losses / Exposure Units
-
-Investment Income Ratio = Investment Income / Earned Premiums
-
-Catastrophe & Risk Metrics
-Probable Maximum Loss (PML): Estimated maximum loss under worst-case scenario
-
-Exposure: Risk measured by policy limits, insured value, or number of units
-
-Key P&C Terms to Know
-Premium: Amount paid for insurance coverage
-
-Claim: Request for payment due to a covered loss
-
-Underwriting: Risk assessment and pricing process
-
-Reinsurance: Insurance purchased by insurers to manage risk
-
-Deductible: Amount paid out-of-pocket by the insured before coverage starts
-
-Limit: Max amount payable by the insurer for a loss
-
-Subrogation: Insurer recovering costs from a third party
-
-Moral Hazard: Risk due to insured’s behavior post-insurance
-
-Adverse Selection: High-risk individuals more likely to buy insurance
+print("\nUnmatched rows:")
+print(unmatched_df)
