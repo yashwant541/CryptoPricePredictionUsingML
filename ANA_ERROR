@@ -1,29 +1,59 @@
-import pandas as pd
-
-# Sample DataFrame
-df = pd.DataFrame({
-    'description': [
-        'fresh water melon from farm',
-        'pine apple juice in the bottle',
-        'musk melon is tasty',
-        'strawberries are sweet',
-        'random text with no fruits'
-    ]
-})
-
-# Multi-word keywords
-keywords = ['water melon', 'pine apple', 'musk melon']
-
-# Build regex pattern with word boundaries
-pattern = '|'.join([kw.lower() for kw in keywords])
-
-# Filter matched and unmatched
-matched_df = df[df['description'].str.lower().str.contains(pattern)]
-unmatched_df = df[~df['description'].str.lower().str.contains(pattern)]
-
-# Output
-print("Matched rows:")
-print(matched_df)
-
-print("\nUnmatched rows:")
-print(unmatched_df)
+Dataiku → Tableau Dashboard Handover
+Document
+Project Info
+Project Name: [Project Name]
+Owner: [Your Name or Team]
+Handover Date: [Date]
+Handover To: [Maintenance Team Name / POC]
+Project Overview
+This project processes and prepares data in Dataiku DSS which is exported to Tableau Server to power interactive dashboards.
+Key Components
+Component | Tool | Description
+-----------------|--------------|------------------------------------------
+Data Source | Dataiku | Pulls raw data from [Database / API]
+Data Processing | Dataiku | Data cleaning, joining, transformations
+Output Dataset | Dataiku | Final dataset pushed to Tableau Server Dashboard | Tableau | Visual layer built using the Dataiku output
+Dataiku Flow Summary
+Input Sources: [SQL / S3 / File]
+Core Recipes: Prepare, Join, Python/SQL Script Output Dataset: [Exported path / table]
+Tableau Integration Details
+Integration Type: [Plugin / Export to Shared Folder]
+Export Location: [Path / Table name]
+Tableau Project: [Tableau Project Name]
+Workbook Name: [Workbook Name]
+Refresh Schedule: [Daily / Weekly] Trigger Type: [Scenario / Manual]
+Testing and Validation
+Activity | Status | Comments
+--------------------------|--------|---------
+Data Exported to Tableau | ■ / ■ |
+Dashboard Loads Correctly | ■ / ■ |
+Field Mappings Validated | ■ / ■ |
+Refresh Scenario Working | ■ / ■ | Check scenario logs
+Scenarios
+Scenario Name | Trigger | Purpose
+-------------------|---------------|----------------------------------
+daily_data_refresh | Time-based | Refreshes and pushes output data push_to_tableau | Post-trigger | Ensures Tableau receives latest data
+Known Issues / Considerations
+-	Large volume: may take up to 30 mins
+-	Ensure Tableau connects to expected extract path- Date format must be consistent: YYYY-MM-DD
+Troubleshooting Guide
+Symptom | Cause | Resolution
+--------------------------|----------------------|--------------------------
+Data not showing in Tableau | Scenario failed | Check scenario logs
+Missing columns | Schema change | Match output schema
+Data outdated | Scenario not triggered | Manually rerun scenario
+Access & Permissions
+Platform | User/Group | Access Level
+---------|---------------------------|-------------------
+Dataiku | dataiku_admin | Full
+Tableau | tableau_maintenance_team | Edit / Viewer
+Contact Points
+Type | Name | Email | Role
+------------------|-------------------|---------------------|------------------
+Project Owner | Yashwant Wardhan | yashwant@email.com | Developer
+Maintenance POC | [Name] | [email] | Support
+Tableau Admin | [Name] | [email] | Tableau Support
+Backup & Versioning Info
+-	Dataiku project versions backed up every Sunday at 1 AM.
+-	Tableau dashboards versioned in [Project Name] folder.
+-	Scripts located in: Code > python/ in the Dataiku project.
