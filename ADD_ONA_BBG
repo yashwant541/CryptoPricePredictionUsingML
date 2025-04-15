@@ -1,12 +1,126 @@
-import pyautogui
-import time
+Handover Document – Data Pipeline: SharePoint → Dataiku → Tableau
+1. 🧾 Document Overview
+Purpose: Ensure continuity and smooth maintenance of the SharePoint → Dataiku → Tableau data pipeline.
 
-def keep_active():
-    print("Keeping your screen active. Press Ctrl+C to stop.")
-    while True:
-        pyautogui.moveRel(1, 0, duration=0.2)  # Move mouse slightly
-        pyautogui.moveRel(-1, 0, duration=0.2)  # Move it back
-        time.sleep(30)  # Adjust the interval as needed
+Owner: [Your Name / Team]
 
-if __name__ == "__main__":
-    keep_active()
+Last Updated: [Date]
+
+2. 📦 Pipeline Summary
+Step	Tool	Description
+Step 1	SharePoint	Data resides in a SharePoint list/library.
+Step 2	REST API	Data fetched using SharePoint REST API into Dataiku project.
+Step 3	Dataiku	Data processing (e.g., cleaning, filtering, joining).
+Step 4	Tableau	Final dataset is published to Tableau Server dashboard.
+Step 5	Email	A quarterly report email is triggered via Dataiku scenario.
+3. 🔗 Integration Details
+🟦 SharePoint API
+URL: https://company.sharepoint.com/sites/[site]/_api/web/lists/getbytitle('ListName')/items
+
+Auth Type: OAuth 2.0 / Client Credentials
+
+Client ID / Secret: Stored securely in Dataiku's global variables (Key Vault / Managed Folder)
+
+Token Refresh: Automatic in script using MSAL library
+
+Timeouts / Throttling: SharePoint API may throttle after 5K+ requests. Retry logic added.
+
+🟧 Dataiku (Project: sharepoint_to_tableau)
+Project Name: sharepoint_to_tableau
+
+Key Datasets:
+
+raw_sharepoint_data
+
+processed_data_for_tableau
+
+Recipes Involved:
+
+Python recipe to call SharePoint REST API
+
+Data preparation steps (cleaning, transformation)
+
+Managed Folder: For logs and tokens
+
+Global Variables: client_id, client_secret, site_url, etc.
+
+🟩 Tableau
+Target Dashboard: Quarterly Audit Summary
+
+Published Dataset: Processed_SharePoint_Data
+
+Publish Method: Dataiku Plugin: "Publish to Tableau Server"
+
+Credentials: Service account stored as a Tableau connection in Dataiku
+
+Publishing Project Folder: Audit Dashboards
+
+4. 📅 Scheduling & Automation
+Component	Frequency	Tool	Notes
+Data refresh	Quarterly	Dataiku Scenario	Automatically triggered
+Email report	Quarterly	Dataiku Scenario	Custom HTML email with attached Tableau screenshot / data export
+Token refresh	On expiry	Python Script	Auto-handled, monitored via logs
+5. 📥 What to Do If…
+❌ API Call Fails (Token Expired / Access Denied)
+Check logs in Dataiku > Scenario Run Logs
+
+Regenerate token manually using the Python get_access_token() method
+
+Ensure SharePoint client credentials are valid in Dataiku Global Variables
+
+❌ Dataiku Job Fails
+Go to Dataiku > Scenarios > Logs
+
+Look for failure stage (Python recipe, dataset build, publish step)
+
+Retry manually or fix credentials, then re-run
+
+❌ Tableau Publish Fails
+Confirm Tableau credentials in Dataiku are active
+
+Check project folder access rights on Tableau Server
+
+Retry from the last successful dataset in Dataiku
+
+❌ Email Not Sent
+Go to Scenario > Email Step
+
+Validate recipients, SMTP settings, and attachment size
+
+Re-run Scenario manually if needed
+
+6. 🧪 Monitoring & Maintenance
+Quarterly Check:
+
+Validate SharePoint structure hasn’t changed (column names)
+
+Confirm Dataiku plugin versions are up-to-date
+
+Test Tableau dashboard filters and performance
+
+Logging Location:
+
+Stored in Dataiku Managed Folder: /project/logs/
+
+Includes API logs, error logs, and status reports
+
+Alerting:
+
+Scenario failure triggers email to: [support@example.com]
+
+7. 👥 Team & Contacts
+Role	Name	Email	Backup Person
+Dataiku Owner	[Your Name]	[email@example.com]	[Backup Name]
+SharePoint Admin	[Admin Name]	[email@example.com]	
+Tableau Admin	[Admin Name]	[email@example.com]	
+Business Contact	[Manager Name]	[email@example.com]	
+8. 📁 Appendix (Optional)
+✅ Sample SharePoint JSON Response
+
+✅ Python script snippet for REST API
+
+✅ Screenshot of Dataiku Scenario
+
+✅ Screenshot of Tableau dashboard
+
+✅ Email Template (Quarterly Report)
