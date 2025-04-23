@@ -1,66 +1,87 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Dataiku DSS Notification</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: #f9f9f9;
-        }
-        .email-container {
-            max-width: 600px;
-            margin: 20px auto;
-            background-color: #ffffff;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-        .banner {
-            width: 100%;
-        }
-        .content {
-            padding: 20px;
-        }
-        .content p {
-            line-height: 1.6;
-        }
-        .button {
-            display: inline-block;
-            margin: 20px 0;
-            padding: 10px 20px;
-            background-color: #2a9d8f;
-            color: white;
-            text-decoration: none;
-            font-size: 16px;
-            border-radius: 5px;
-        }
-        .footer {
-            text-align: center;
-            font-size: 12px;
-            color: #666;
-            margin-top: 20px;
-            padding: 10px 20px;
-        }
-    </style>
-</head>
-<body>
-    <div class="email-container">
-        <!-- Banner Image -->
-        <img src="{{ banner_url }}" alt="Email Banner" class="banner">
-        
-        <!-- Email Content -->
-        <div class="content">
-            <p>Hello {{ recipient_name }},</p>
-            <p>{{ email_body }}</p>
-            <a href="{{ link_url }}" target="_blank" class="button">View Report</a>
-        </div>
-        
-        <!-- Footer -->
-        <div class="footer">
-            <p>&copy; 2025 Your Company Name. All rights reserved.</p>
-        </div>
-    </div>
-</body>
-</html>
+import pandas as pd
+import nltk
+from nltk.corpus import wordnet as wn
+from nltk.stem import WordNetLemmatizer
+from itertools import product
+import inflect
+import os
+
+# Download required resources
+nltk.download('punkt')
+nltk.download('wordnet')
+nltk.download('omw-1.4')
+
+# Initialize
+lemmatizer = WordNetLemmatizer()
+inflect_engine = inflect.engine()
+
+def get_wordnet_pos(word):
+    synsets = wn.synsets(word)
+    return synsets[0].pos() if synsets else 'n'
+
+def expand_word(word):
+    word = word.lower()
+    base = lemmatizer.lemmatize(word, get_wordnet_pos(word))
+    synonyms = {base, word}
+    for syn in wn.synsets(word):
+        for lemma in syn.lemmas():
+            synonyms.add(lemma.name().replace('_', ' '))
+    # Add plural/singular forms
+    if inflect_engine.singular_noun(base):
+        synonyms.add(inflect_engine.singular_noun(base))
+    else:
+        synonyms.add(inflect_engine.plural(base))
+    return synonyms
+
+def expand_phrase(phrase):
+    tokens = nltk.word_tokenize(phrase.lower())
+    word_expansions = [expand_word(token) for token in tokens]
+    return {' '.join(combo) for combo in product(*word_expansions)}
+
+def search_keywords_in_df(df, keyword_phrases):
+    expanded_keywords = set()
+    for phrase in keyword_phrases:
+        expanded_keywords |= expand_phrase(phrase)
+
+    # Convert all values to string and lowercase
+    df_str = df.astype(str).applymap(lambda x: x.lower())
+
+    # Check for keyword presence
+    mask = df_str.applymap(lambda cell: any(keyword in cell for keyword in expanded_keywords))
+    
+    # Return rows where at least one match was found
+    return df[mask.any(axis=1)], expanded_keywords
+
+# --- USER INPUT STARTS HERE ---
+
+# File path
+file_path = "your_file_path_here.csv"  # or .xlsx
+
+# Keywords to search
+keyword_phrases = [
+    "statement printing",
+    "document archival",
+    "card embossing"
+]
+
+# --- USER INPUT ENDS HERE ---
+
+# Load file
+if file_path.endswith(".csv"):
+    df = pd.read_csv(file_path, dtype=str)
+elif file_path.endswith(".xlsx"):
+    df = pd.read_excel(file_path, dtype=str)
+else:
+    raise ValueError("Unsupported file format. Use CSV or Excel.")
+
+# Search in DataFrame
+matched_df, all_keywords = search_keywords_in_df(df, keyword_phrases)
+
+# Output results
+print(f"🔍 Total rows matched: {len(matched_df)}")
+print(f"✅ Total unique expanded keywords: {len(all_keywords)}")
+
+# Save results
+output_path = os.path.splitext(file_path)[0] + "_matched_rows.xlsx"
+matched_df.to_excel(output_path, index=False)
+print(f"💾 Matched rows saved to: {output_path}")
