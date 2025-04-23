@@ -1,83 +1,73 @@
 ---------------------------------------------------------------------------
 AttributeError                            Traceback (most recent call last)
-<ipython-input-2-aa45ed0bc8f6> in <module>
-      1 import pandas as pd
-----> 2 import nltk
-      3 from nltk.corpus import wordnet as wn
-      4 from nltk.stem import WordNetLemmatizer
-      5 from itertools import product
+<ipython-input-2-2237f7fcd05c> in <module>
+      7 
+      8 import pandas as pd
+----> 9 import nltk
+     10 from nltk.corpus import wordnet as wn
+     11 from nltk.stem import WordNetLemmatizer
 
 C:\ProgramData\Anaconda3\lib\site-packages\nltk\__init__.py in <module>
-    140 ###########################################################
-    141 
---> 142 from nltk.chunk import *
-    143 from nltk.classify import *
-    144 from nltk.inference import *
+    147 from nltk.tag import *
+    148 from nltk.tokenize import *
+--> 149 from nltk.translate import *
+    150 from nltk.sem import *
+    151 from nltk.stem import *
 
-C:\ProgramData\Anaconda3\lib\site-packages\nltk\chunk\__init__.py in <module>
-    155 from nltk.data import load
-    156 
---> 157 from nltk.chunk.api import ChunkParserI
-    158 from nltk.chunk.util import (
-    159     ChunkScore,
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\translate\__init__.py in <module>
+     21 from nltk.translate.bleu_score import sentence_bleu as bleu
+     22 from nltk.translate.ribes_score import sentence_ribes as ribes
+---> 23 from nltk.translate.meteor_score import meteor_score as meteor
+     24 from nltk.translate.metrics import alignment_error_rate
+     25 from nltk.translate.stack_decoder import StackDecoder
 
-C:\ProgramData\Anaconda3\lib\site-packages\nltk\chunk\api.py in <module>
-     11 ##//////////////////////////////////////////////////////
-     12 
----> 13 from nltk.parse import ParserI
-     14 
-     15 from nltk.chunk.util import ChunkScore
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\translate\meteor_score.py in <module>
+      8 
+      9 
+---> 10 from nltk.stem.porter import PorterStemmer
+     11 from nltk.corpus import wordnet
+     12 from itertools import chain, product
 
-C:\ProgramData\Anaconda3\lib\site-packages\nltk\parse\__init__.py in <module>
-     98 from nltk.parse.malt import MaltParser
-     99 from nltk.parse.evaluate import DependencyEvaluator
---> 100 from nltk.parse.transitionparser import TransitionParser
-    101 from nltk.parse.bllip import BllipParser
-    102 from nltk.parse.corenlp import CoreNLPParser, CoreNLPDependencyParser
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\stem\__init__.py in <module>
+     27 from nltk.stem.isri import ISRIStemmer
+     28 from nltk.stem.porter import PorterStemmer
+---> 29 from nltk.stem.snowball import SnowballStemmer
+     30 from nltk.stem.wordnet import WordNetLemmatizer
+     31 from nltk.stem.rslp import RSLPStemmer
 
-C:\ProgramData\Anaconda3\lib\site-packages\nltk\parse\transitionparser.py in <module>
-     17     from numpy import array
-     18     from scipy import sparse
----> 19     from sklearn.datasets import load_svmlight_file
-     20     from sklearn import svm
-     21 except ImportError:
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\stem\snowball.py in <module>
+     27 import re
+     28 
+---> 29 from nltk.corpus import stopwords
+     30 from nltk.stem import porter
+     31 from nltk.stem.util import suffix_replace, prefix_replace
 
-C:\ProgramData\Anaconda3\lib\site-packages\sklearn\datasets\__init__.py in <module>
-     20 from ._lfw import fetch_lfw_pairs
-     21 from ._lfw import fetch_lfw_people
----> 22 from ._twenty_newsgroups import fetch_20newsgroups
-     23 from ._twenty_newsgroups import fetch_20newsgroups_vectorized
-     24 from ._openml import fetch_openml
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\__init__.py in <module>
+     64 from nltk.tokenize import RegexpTokenizer
+     65 from nltk.corpus.util import LazyCorpusLoader
+---> 66 from nltk.corpus.reader import *
+     67 
+     68 abc = LazyCorpusLoader(
 
-C:\ProgramData\Anaconda3\lib\site-packages\sklearn\datasets\_twenty_newsgroups.py in <module>
-     43 from ._base import _fetch_remote
-     44 from ._base import RemoteFileMetadata
----> 45 from ..feature_extraction.text import CountVectorizer
-     46 from .. import preprocessing
-     47 from ..utils import check_random_state, Bunch
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\reader\__init__.py in <module>
+     54 """
+     55 
+---> 56 from nltk.corpus.reader.plaintext import *
+     57 from nltk.corpus.reader.util import *
+     58 from nltk.corpus.reader.api import *
 
-C:\ProgramData\Anaconda3\lib\site-packages\sklearn\feature_extraction\__init__.py in <module>
-      7 from ._dict_vectorizer import DictVectorizer
-      8 from ._hash import FeatureHasher
-----> 9 from .image import img_to_graph, grid_to_graph
-     10 from . import text
-     11 
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\reader\plaintext.py in <module>
+     19 
+     20 
+---> 21 class PlaintextCorpusReader(CorpusReader):
+     22     """
+     23     Reader for corpora that consist of plaintext documents.  Paragraphs
 
-C:\ProgramData\Anaconda3\lib\site-packages\sklearn\feature_extraction\image.py in <module>
-    170 @_deprecate_positional_args
-    171 def grid_to_graph(n_x, n_y, n_z=1, *, mask=None, return_as=sparse.coo_matrix,
---> 172                   dtype=np.int):
-    173     """Graph of the pixel-to-pixel connections
-    174 
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\reader\plaintext.py in PlaintextCorpusReader()
+     41         fileids,
+     42         word_tokenizer=WordPunctTokenizer(),
+---> 43         sent_tokenizer=nltk.data.LazyLoader("tokenizers/punkt/english.pickle"),
+     44         para_block_reader=read_blankline_block,
+     45         encoding="utf8",
 
-~\AppData\Roaming\Python\Python38\site-packages\numpy\__init__.py in __getattr__(attr)
-    303 
-    304         if attr in __former_attrs__:
---> 305             raise AttributeError(__former_attrs__[attr])
-    306 
-    307         # Importing Tester requires importing all of UnitTest which is not a
-
-AttributeError: module 'numpy' has no attribute 'int'.
-`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
-The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
-    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+AttributeError: partially initialized module 'nltk' has no attribute 'data' (most likely due to a circular import)
