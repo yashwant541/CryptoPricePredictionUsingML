@@ -1,184 +1,83 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
-import pandas as pd
-import re
-import os
+---------------------------------------------------------------------------
+AttributeError                            Traceback (most recent call last)
+<ipython-input-2-aa45ed0bc8f6> in <module>
+      1 import pandas as pd
+----> 2 import nltk
+      3 from nltk.corpus import wordnet as wn
+      4 from nltk.stem import WordNetLemmatizer
+      5 from itertools import product
 
-class ColumnMatcherApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Column Matcher")
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\__init__.py in <module>
+    140 ###########################################################
+    141 
+--> 142 from nltk.chunk import *
+    143 from nltk.classify import *
+    144 from nltk.inference import *
 
-        self.old_file_path = tk.StringVar()
-        self.new_file_path = tk.StringVar()
-        self.output_folder_path = tk.StringVar()
-        self.old_sheet_name = tk.StringVar()
-        self.new_sheet_name = tk.StringVar()
-        self.matched_columns = {}
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\chunk\__init__.py in <module>
+    155 from nltk.data import load
+    156 
+--> 157 from nltk.chunk.api import ChunkParserI
+    158 from nltk.chunk.util import (
+    159     ChunkScore,
 
-        self.create_widgets()
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\chunk\api.py in <module>
+     11 ##//////////////////////////////////////////////////////
+     12 
+---> 13 from nltk.parse import ParserI
+     14 
+     15 from nltk.chunk.util import ChunkScore
 
-    def create_widgets(self):
-        frame = tk.Frame(self.root)
-        frame.pack(pady=10, padx=10)
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\parse\__init__.py in <module>
+     98 from nltk.parse.malt import MaltParser
+     99 from nltk.parse.evaluate import DependencyEvaluator
+--> 100 from nltk.parse.transitionparser import TransitionParser
+    101 from nltk.parse.bllip import BllipParser
+    102 from nltk.parse.corenlp import CoreNLPParser, CoreNLPDependencyParser
 
-        tk.Label(frame, text="Base file path:").grid(row=0, column=0, sticky="e")
-        tk.Entry(frame, textvariable=self.old_file_path, width=50).grid(row=0, column=1)
-        tk.Button(frame, text="Browse", command=self.browse_old_file).grid(row=0, column=2)
+C:\ProgramData\Anaconda3\lib\site-packages\nltk\parse\transitionparser.py in <module>
+     17     from numpy import array
+     18     from scipy import sparse
+---> 19     from sklearn.datasets import load_svmlight_file
+     20     from sklearn import svm
+     21 except ImportError:
 
-        tk.Label(frame, text="New file path:").grid(row=1, column=0, sticky="e")
-        tk.Entry(frame, textvariable=self.new_file_path, width=50).grid(row=1, column=1)
-        tk.Button(frame, text="Browse", command=self.browse_new_file).grid(row=1, column=2)
+C:\ProgramData\Anaconda3\lib\site-packages\sklearn\datasets\__init__.py in <module>
+     20 from ._lfw import fetch_lfw_pairs
+     21 from ._lfw import fetch_lfw_people
+---> 22 from ._twenty_newsgroups import fetch_20newsgroups
+     23 from ._twenty_newsgroups import fetch_20newsgroups_vectorized
+     24 from ._openml import fetch_openml
 
-        tk.Label(frame, text="Output folder path:").grid(row=2, column=0, sticky="e")
-        tk.Entry(frame, textvariable=self.output_folder_path, width=50).grid(row=2, column=1)
-        tk.Button(frame, text="Browse", command=self.browse_output_folder).grid(row=2, column=2)
+C:\ProgramData\Anaconda3\lib\site-packages\sklearn\datasets\_twenty_newsgroups.py in <module>
+     43 from ._base import _fetch_remote
+     44 from ._base import RemoteFileMetadata
+---> 45 from ..feature_extraction.text import CountVectorizer
+     46 from .. import preprocessing
+     47 from ..utils import check_random_state, Bunch
 
-        tk.Button(frame, text="Next", command=self.process_files).grid(row=3, column=1, pady=10)
+C:\ProgramData\Anaconda3\lib\site-packages\sklearn\feature_extraction\__init__.py in <module>
+      7 from ._dict_vectorizer import DictVectorizer
+      8 from ._hash import FeatureHasher
+----> 9 from .image import img_to_graph, grid_to_graph
+     10 from . import text
+     11 
 
-    def browse_old_file(self):
-        filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("Excel files", "*.xlsx")])
-        if filename:
-            self.old_file_path.set(filename)
-            if filename.endswith('.xlsx'):
-                self.prompt_sheet_name(self.old_file_path.get(), self.old_sheet_name)
+C:\ProgramData\Anaconda3\lib\site-packages\sklearn\feature_extraction\image.py in <module>
+    170 @_deprecate_positional_args
+    171 def grid_to_graph(n_x, n_y, n_z=1, *, mask=None, return_as=sparse.coo_matrix,
+--> 172                   dtype=np.int):
+    173     """Graph of the pixel-to-pixel connections
+    174 
 
-    def browse_new_file(self):
-        filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("Excel files", "*.xlsx")])
-        if filename:
-            self.new_file_path.set(filename)
-            if filename.endswith('.xlsx'):
-                self.prompt_sheet_name(self.new_file_path.get(), self.new_sheet_name)
+~\AppData\Roaming\Python\Python38\site-packages\numpy\__init__.py in __getattr__(attr)
+    303 
+    304         if attr in __former_attrs__:
+--> 305             raise AttributeError(__former_attrs__[attr])
+    306 
+    307         # Importing Tester requires importing all of UnitTest which is not a
 
-    def browse_output_folder(self):
-        folder = filedialog.askdirectory()
-        if folder:
-            self.output_folder_path.set(folder)
-
-    def prompt_sheet_name(self, file_path, sheet_var):
-        try:
-            xl = pd.ExcelFile(file_path)
-            sheet_window = tk.Toplevel(self.root)
-            sheet_window.title("Select Sheet Name")
-
-            tk.Label(sheet_window, text="Select Sheet Name:").pack(pady=10)
-
-            sheet_dropdown = ttk.Combobox(sheet_window, textvariable=sheet_var, values=xl.sheet_names)
-            sheet_dropdown.pack(pady=10)
-            sheet_dropdown.current(0)
-
-            tk.Button(sheet_window, text="Confirm", command=sheet_window.destroy).pack(pady=10)
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to read Excel file sheets: {e}")
-
-    def process_files(self):
-        if not self.old_file_path.get() or not self.new_file_path.get() or not self.output_folder_path.get():
-            messagebox.showerror("Error", "Please select both files and output folder.")
-            return
-
-        try:
-            if self.old_file_path.get().endswith('.csv'):
-                old_df = pd.read_csv(self.old_file_path.get())
-            else:
-                old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get())
-
-            if self.new_file_path.get().endswith('.csv'):
-                new_df = pd.read_csv(self.new_file_path.get())
-            else:
-                new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get())
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to read files: {e}")
-            return
-
-        matches = self.match_columns(old_df, new_df)
-        old_columns = old_df.columns.tolist()
-        new_columns = new_df.columns.tolist()
-
-        self.show_match_page(matches, old_columns, new_columns)
-
-    def clean_column_name(self, col):
-        return re.sub(r'[^a-z0-9]', '', col.lower())
-
-    def match_columns(self, file_a, file_b):
-        matches = {}
-        for col_a in file_a.columns:
-            best_match = None
-            best_score = 0
-            for col_b in file_b.columns:
-                score = 0
-
-                # Compare data types
-                if file_a[col_a].dtype == file_b[col_b].dtype:
-                    score += 1
-                
-                # Compare non-null lengths
-                len_a = file_a[col_a].dropna().shape[0]
-                len_b = file_b[col_b].dropna().shape[0]
-                length_score = 1 - abs(len_a - len_b) / max(len_a, len_b)
-                score += length_score
-                
-                # Compare data match percentage
-                common_values = set(file_a[col_a].dropna()).intersection(set(file_b[col_b].dropna()))
-                match_percentage = len(common_values) / max(len(file_a[col_a].dropna()), len(file_b[col_b].dropna()))
-                score += match_percentage
-                
-                if score > best_score:
-                    best_score = score
-                    best_match = col_b
-            
-            matches[col_a] = best_match
-        return matches
-
-    def show_match_page(self, matches, old_columns, new_columns):
-        match_window = tk.Toplevel(self.root)
-        match_window.title("Match Columns")
-
-        frame = tk.Frame(match_window)
-        frame.pack(pady=10, padx=10)
-
-        self.matched_columns = matches
-        self.dropdown_vars = {col: tk.StringVar(value=match) for col, match in matches.items()}
-
-        for idx, old_col in enumerate(old_columns):
-            tk.Label(frame, text=f"Old Column: {old_col}").grid(row=idx, column=0, sticky="e")
-            dropdown = ttk.Combobox(frame, textvariable=self.dropdown_vars[old_col], values=new_columns)
-            dropdown.grid(row=idx, column=1, padx=10, pady=5)
-
-        tk.Button(frame, text="Confirm", command=self.confirm_matches).grid(row=idx + 1, column=1, pady=10)
-
-    def confirm_matches(self):
-        for old_col, var in self.dropdown_vars.items():
-            self.matched_columns[old_col] = var.get()
-
-        self.save_matched_file()
-        messagebox.showinfo("Success", "Columns matched and file saved successfully!")
-        self.root.quit()
-
-    def save_matched_file(self):
-        try:
-            if self.old_file_path.get().endswith('.csv'):
-                old_df = pd.read_csv(self.old_file_path.get())
-            else:
-                old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get())
-
-            new_df = pd.read_csv(self.new_file_path.get()) if self.new_file_path.get().endswith('.csv') else pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get())
-
-            matched_df = pd.DataFrame()
-            for old_col in old_df.columns:
-                new_col = self.matched_columns.get(old_col)
-                if new_col and new_col in new_df.columns:
-                    matched_df[old_col] = new_df[new_col]
-
-            output_path = os.path.join(self.output_folder_path.get(), os.path.basename(self.old_file_path.get()))
-            if output_path.endswith('.csv'):
-                matched_df.to_csv(output_path, index=False)
-            else:
-                with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-                    matched_df.to_excel(writer, sheet_name=self.old_sheet_name.get(), index=False)
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to save matched file: {e}")
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = ColumnMatcherApp(root)
-    root.mainloop()
+AttributeError: module 'numpy' has no attribute 'int'.
+`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
+The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
+    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
