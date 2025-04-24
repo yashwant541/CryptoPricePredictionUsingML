@@ -1,38 +1,92 @@
-(base) C:\Users\2011747>pip uninstall nltk
-Found existing installation: nltk 3.5
-Uninstalling nltk-3.5:
-  Would remove:
-    c:\programdata\anaconda3\lib\site-packages\nltk-3.5.dist-info\*
-    c:\programdata\anaconda3\lib\site-packages\nltk\*
-    c:\programdata\anaconda3\scripts\nltk
-Proceed (Y/n)? Y
-ERROR: Exception:
-Traceback (most recent call last):
-  File "C:\ProgramData\Anaconda3\lib\shutil.py", line 788, in move
-    os.rename(src, real_dst)
-PermissionError: [WinError 5] Access is denied: 'c:\\programdata\\anaconda3\\lib\\site-packages\\nltk-3.5.dist-info\\' -> 'C:\\ProgramData\\Anaconda3\\Lib\\site-packages\\~ltk-3.5.dist-info'
+1. Statement Printing
+Root Concepts:
 
-During handling of the above exception, another exception occurred:
+statement
 
-Traceback (most recent call last):
-  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_internal\cli\base_command.py", line 180, in exc_logging_wrapper
-    status = run_func(*args)
-  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_internal\commands\uninstall.py", line 105, in run
-    uninstall_pathset = req.uninstall(
-  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_internal\req\req_install.py", line 687, in uninstall
-    uninstalled_pathset.remove(auto_confirm, verbose)
-  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_internal\req\req_uninstall.py", line 381, in remove
-    moved.stash(path)
-  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_internal\req\req_uninstall.py", line 272, in stash
-    renames(path, new_path)
-  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_internal\utils\misc.py", line 315, in renames
-    shutil.move(old, new)
-  File "C:\ProgramData\Anaconda3\lib\shutil.py", line 800, in move
-    rmtree(src)
-  File "C:\ProgramData\Anaconda3\lib\shutil.py", line 737, in rmtree
-    return _rmtree_unsafe(path, onerror)
-  File "C:\ProgramData\Anaconda3\lib\shutil.py", line 615, in _rmtree_unsafe
-    onerror(os.unlink, fullname, sys.exc_info())
-  File "C:\ProgramData\Anaconda3\lib\shutil.py", line 613, in _rmtree_unsafe
-    os.unlink(fullname)
-PermissionError: [WinError 5] Access is denied: 'c:\\programdata\\anaconda3\\lib\\site-packages\\nltk-3.5.dist-info\\direct_url.json'
+print
+
+Expanded Terms:
+
+statements
+
+print
+
+printing
+
+printed
+
+printout
+
+printed statement
+
+statement print
+
+printing service
+
+document printing
+
+hardcopy statement
+
+printed communication
+
+🔹 2. Document Archival
+Root Concepts:
+
+document
+
+archive
+
+Expanded Terms:
+
+documents
+
+archiving
+
+archived
+
+archival
+
+document archive
+
+digital archiving
+
+document storage
+
+archive storage
+
+records archiving
+
+data archival
+
+archived documents
+
+🔹 3. Card Embossing
+Root Concepts:
+
+card
+
+emboss
+
+Expanded Terms:
+
+cards
+
+embossed
+
+embossing
+
+card embossed
+
+emboss
+
+embossed card
+
+plastic card personalization
+
+card printing
+
+raised print
+
+custom card
+
+personalization service
