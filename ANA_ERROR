@@ -1,59 +1,260 @@
-Dataiku → Tableau Dashboard Handover
-Document
-Project Info
-Project Name: [Project Name]
-Owner: [Your Name or Team]
-Handover Date: [Date]
-Handover To: [Maintenance Team Name / POC]
-Project Overview
-This project processes and prepares data in Dataiku DSS which is exported to Tableau Server to power interactive dashboards.
-Key Components
-Component | Tool | Description
------------------|--------------|------------------------------------------
-Data Source | Dataiku | Pulls raw data from [Database / API]
-Data Processing | Dataiku | Data cleaning, joining, transformations
-Output Dataset | Dataiku | Final dataset pushed to Tableau Server Dashboard | Tableau | Visual layer built using the Dataiku output
-Dataiku Flow Summary
-Input Sources: [SQL / S3 / File]
-Core Recipes: Prepare, Join, Python/SQL Script Output Dataset: [Exported path / table]
-Tableau Integration Details
-Integration Type: [Plugin / Export to Shared Folder]
-Export Location: [Path / Table name]
-Tableau Project: [Tableau Project Name]
-Workbook Name: [Workbook Name]
-Refresh Schedule: [Daily / Weekly] Trigger Type: [Scenario / Manual]
-Testing and Validation
-Activity | Status | Comments
---------------------------|--------|---------
-Data Exported to Tableau | ■ / ■ |
-Dashboard Loads Correctly | ■ / ■ |
-Field Mappings Validated | ■ / ■ |
-Refresh Scenario Working | ■ / ■ | Check scenario logs
-Scenarios
-Scenario Name | Trigger | Purpose
--------------------|---------------|----------------------------------
-daily_data_refresh | Time-based | Refreshes and pushes output data push_to_tableau | Post-trigger | Ensures Tableau receives latest data
-Known Issues / Considerations
--	Large volume: may take up to 30 mins
--	Ensure Tableau connects to expected extract path- Date format must be consistent: YYYY-MM-DD
-Troubleshooting Guide
-Symptom | Cause | Resolution
---------------------------|----------------------|--------------------------
-Data not showing in Tableau | Scenario failed | Check scenario logs
-Missing columns | Schema change | Match output schema
-Data outdated | Scenario not triggered | Manually rerun scenario
-Access & Permissions
-Platform | User/Group | Access Level
----------|---------------------------|-------------------
-Dataiku | dataiku_admin | Full
-Tableau | tableau_maintenance_team | Edit / Viewer
-Contact Points
-Type | Name | Email | Role
-------------------|-------------------|---------------------|------------------
-Project Owner | Yashwant Wardhan | yashwant@email.com | Developer
-Maintenance POC | [Name] | [email] | Support
-Tableau Admin | [Name] | [email] | Tableau Support
-Backup & Versioning Info
--	Dataiku project versions backed up every Sunday at 1 AM.
--	Tableau dashboards versioned in [Project Name] folder.
--	Scripts located in: Code > python/ in the Dataiku project.
+import re
+import csv
+from email.parser import Parser
+from email.policy import default
+from typing import List, Dict, Optional, Tuple
+
+class EmailChainProcessor:
+    def __init__(self):
+        # Keywords to identify request/approval patterns
+        self.REQUEST_PATTERNS = [
+            r'request(?:ing|ed)?\s+(?:your|for)\s+approval',
+            r'kindly\s+approve',
+            r'please\s+(?:review|approve)',
+            r'seeking\s+approval',
+            r'request\s+to\s+approve'
+        ]
+        
+        self.APPROVAL_PATTERNS = [
+            r'approved?\b',
+            r'approv(?:ing|al)\s+granted',
+            r'request\s+approved',
+            r'has\s+been\s+approved',
+            r'you\s+may\s+proceed'
+        ]
+        
+        self.REJECTION_PATTERNS = [
+            r'rejected?\b',
+            r'not\s+approved',
+            r'declined?\b',
+            r'cannot\s+approve',
+            r'denied?\b'
+        ]
+        
+        # Common approval phrases
+        self.APPROVAL_PHRASES = [
+            'approved',
+            'approved your request',
+            'this is approved',
+            'go ahead',
+            'permission granted'
+        ]
+
+    def process_file(self, file_path: str) -> List[Dict]:
+        """Process either a text file or CSV file containing email data"""
+        if file_path.endswith('.csv'):
+            return self._process_csv(file_path)
+        else:
+            return self._process_text_file(file_path)
+
+    def _process_text_file(self, file_path: str) -> List[Dict]:
+        """Process a text file containing raw email content"""
+        with open(file_path, 'r', encoding='utf-8') as f:
+            email_content = f.read()
+        return self.analyze_email_chain(email_content)
+
+    def _process_csv(self, file_path: str) -> List[Dict]:
+        """Process a CSV file with email data"""
+        results = []
+        with open(file_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if 'email_content' in row:
+                    email_content = row['email_content']
+                    analysis = self.analyze_email_chain(email_content)
+                    analysis['source_row'] = row  # Keep original CSV data
+                    results.append(analysis)
+        return results
+
+    def analyze_email_chain(self, email_text: str) -> Dict:
+        """Analyze an email chain and identify requester/approver"""
+        emails = self._parse_email_chain(email_text)
+        requester, approver = self._identify_requester_approver(emails)
+        
+        return {
+            'email_chain': emails,
+            'requester': requester,
+            'approver': approver,
+            'status': self._determine_approval_status(emails)
+        }
+
+    def _parse_email_chain(self, raw_email: str) -> List[Dict]:
+        """Parse email chain into structured components"""
+        emails = []
+        email_parts = self._split_email_chain(raw_email)
+        
+        for part in email_parts:
+            if not part.strip():
+                continue
+                
+            try:
+                msg = Parser(policy=default).parsestr(part)
+            except:
+                msg = Parser(policy=default).parsestr(f"From: \nTo: \nSubject: \n\n{part}")
+            
+            email_data = {
+                'sender': self._extract_email_address(msg['from']),
+                'to': self._extract_all_email_addresses(msg['to']),
+                'cc': self._extract_all_email_addresses(msg['cc']),
+                'bcc': self._extract_all_email_addresses(msg['bcc']),
+                'subject': msg['subject'] or '',
+                'body': self._clean_email_body(msg.get_payload()),
+                'original_content': part.strip()
+            }
+            emails.append(email_data)
+        
+        return emails
+
+    def _split_email_chain(self, text: str) -> List[str]:
+        """Split email chain into individual messages"""
+        # Try different splitting patterns
+        patterns = [
+            r'(?m)^From:\s.*\n^Sent:\s.*\n^To:\s.*\n^Subject:\s.*$',  # Outlook format
+            r'(?m)^On.*wrote:$',                                     # Gmail format
+            r'(?m)^-+\s*Original Message\s*-+$',                     # Generic format
+            r'(?m)^From:.*\n^Date:.*\n^To:.*\n^Subject:.*$'          # Unix mail format
+        ]
+        
+        for pattern in patterns:
+            parts = re.split(pattern, text)
+            if len(parts) > 1:
+                return parts
+                
+        return [text]  # If no splitting worked, treat as single email
+
+    def _clean_email_body(self, body: str) -> str:
+        """Clean and normalize email body text"""
+        if not body:
+            return ""
+            
+        # Remove quoted text and signatures
+        body = re.sub(r'(?m)^>.*$', '', body)  # Quoted lines
+        body = re.sub(r'(?m)^On.*wrote:.*$', '', body)
+        body = re.sub(r'(?m)^From:.*$', '', body)
+        body = re.sub(r'(?m)^Sent:.*$', '', body)
+        body = re.sub(r'(?m)^To:.*$', '', body)
+        body = re.sub(r'(?m)^Subject:.*$', '', body)
+        body = re.sub(r'(?m)^--+\s*$', '', body)  # Signature delimiter
+        body = re.sub(r'(?m)^\s*Best regards.*$', '', body, flags=re.I)
+        
+        # Normalize whitespace
+        body = re.sub(r'\s+', ' ', body).strip()
+        
+        return body
+
+    def _identify_requester_approver(self, emails: List[Dict]) -> Tuple[Optional[str], Optional[str]]:
+        """Core logic to identify requester and approver"""
+        if not emails:
+            return None, None
+            
+        # Initialize candidates
+        requester = None
+        approver = None
+        
+        # Strategy 1: First email analysis (likely the request)
+        first_email = emails[0]
+        requester = first_email['sender']
+        
+        # Strategy 2: Subsequent emails for approval patterns
+        for email in emails[1:]:
+            if self._contains_approval(email['body']):
+                approver = email['sender']
+                break
+                
+        # Strategy 3: If no clear approval, look for hierarchical patterns
+        if not approver and len(emails) > 1:
+            approver = self._find_hierarchical_approver(emails)
+            
+        return requester, approver
+
+    def _contains_approval(self, text: str) -> bool:
+        """Check if text contains approval language"""
+        text = text.lower()
+        
+        # Check for approval patterns
+        for pattern in self.APPROVAL_PATTERNS:
+            if re.search(pattern, text, re.IGNORECASE):
+                return True
+                
+        # Check for approval phrases
+        for phrase in self.APPROVAL_PHRASES:
+            if phrase in text.lower():
+                return True
+                
+        return False
+
+    def _find_hierarchical_approver(self, emails: List[Dict]) -> Optional[str]:
+        """Find approver based on organizational hierarchy patterns"""
+        first_sender = emails[0]['sender']
+        first_domain = self._extract_domain(first_sender)
+        
+        # Look for someone higher in the organization (simple heuristic)
+        for email in emails[1:]:
+            current_sender = email['sender']
+            current_domain = self._extract_domain(current_sender)
+            
+            # Different domain might indicate higher authority
+            if current_domain and first_domain and current_domain != first_domain:
+                return current_sender
+                
+            # Check if sender is in management (simple pattern matching)
+            if any(title in email['body'].lower() 
+                  for title in ['manager', 'director', 'vp', 'head of']):
+                return current_sender
+                
+        return None
+
+    def _determine_approval_status(self, emails: List[Dict]) -> str:
+        """Determine overall approval status of the chain"""
+        for email in reversed(emails):  # Check most recent first
+            body = email['body'].lower()
+            
+            if any(re.search(pattern, body) for pattern in self.APPROVAL_PATTERNS):
+                return "Approved"
+            if any(re.search(pattern, body) for pattern in self.REJECTION_PATTERNS):
+                return "Rejected"
+                
+        return "Pending"
+
+    def _extract_email_address(self, text: str) -> Optional[str]:
+        """Extract the first email address from text"""
+        if not text:
+            return None
+        matches = re.findall(r'[\w\.-]+@[\w\.-]+', text)
+        return matches[0] if matches else None
+
+    def _extract_all_email_addresses(self, text: str) -> List[str]:
+        """Extract all email addresses from text"""
+        if not text:
+            return []
+        return re.findall(r'[\w\.-]+@[\w\.-]+', text)
+
+    def _extract_domain(self, email: str) -> Optional[str]:
+        """Extract domain from email address"""
+        if not email or '@' not in email:
+            return None
+        return email.split('@')[-1].lower()
+
+
+# Example usage
+if __name__ == "__main__":
+    processor = EmailChainProcessor()
+    
+    # Process text file
+    print("Processing text file...")
+    text_results = processor.process_file('email_chain.txt')
+    print(f"Requester: {text_results[0]['requester']}")
+    print(f"Approver: {text_results[0]['approver']}")
+    print(f"Status: {text_results[0]['status']}")
+    
+    # Process CSV file (if available)
+    try:
+        print("\nProcessing CSV file...")
+        csv_results = processor.process_file('email_data.csv')
+        for i, result in enumerate(csv_results, 1):
+            print(f"\nEmail Chain {i}:")
+            print(f"Requester: {result['requester']}")
+            print(f"Approver: {result['approver']}")
+            print(f"Status: {result['status']}")
+    except FileNotFoundError:
+        print("CSV file not found - skipping CSV example")
