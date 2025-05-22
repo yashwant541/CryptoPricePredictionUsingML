@@ -1,97 +1,115 @@
 import re
 import csv
-import os
 import sys
+import os
 from datetime import datetime
 
-def extract_emails(text):
-    # Split the email chain based on common separators
-    split_pattern = re.compile(r"(?=\n*From: )", re.IGNORECASE)
-    return [email.strip() for email in split_pattern.split(text) if email.strip()]
+def parse_email_chain(text):
+    email_pattern = re.compile(
+        r"(From:.*?)(?=(?:\nFrom:|\Z))", re.DOTALL | re.IGNORECASE
+    )
+    emails = re.findall(email_pattern, text)
 
-def extract_field(pattern, text):
+    parsed_emails = []
+
+    for idx, email in enumerate(emails):
+        sender = extract_field(email, r"From: (.*)")
+        receiver = extract_field(email, r"To: (.*)")
+        cc = extract_field(email, r"Cc: (.*)")
+        bcc = extract_field(email, r"Bcc: (.*)")
+        subject = extract_field(email, r"Subject: (.*)")
+        date_raw = extract_field(email, r"Sent: (.*)")
+
+        date, time = parse_date_time(date_raw)
+        body = extract_body(email)
+
+        parsed_emails.append({
+            "Email Sequence": idx + 1,
+            "Sender": sender,
+            "Receiver": receiver,
+            "cc": cc,
+            "bcc": bcc,
+            "subject": subject,
+            "email body": body,
+            "date": date,
+            "time": time
+        })
+
+    return parsed_emails
+
+def extract_field(text, pattern):
     match = re.search(pattern, text, re.IGNORECASE)
     return match.group(1).strip() if match else ""
 
-def clean_body(email_text):
-    header_end = re.search(r"\n\s*\n", email_text)
-    if header_end:
-        return email_text[header_end.end():].strip()
+def parse_date_time(date_str):
+    if not date_str:
+        return "", ""
+    try:
+        dt = datetime.strptime(date_str.strip(), "%A, %B %d, %Y %I:%M %p")
+        return dt.date().isoformat(), dt.time().isoformat()
+    except:
+        return date_str.strip(), ""
+
+def extract_body(email):
+    parts = email.split("\n\n", 1)
+    if len(parts) > 1:
+        return parts[1].strip()
     return ""
 
-def parse_email(email_text, sequence):
-    sender = extract_field(r"From:\s*(.*)", email_text)
-    receiver = extract_field(r"To:\s*(.*)", email_text)
-    cc = extract_field(r"Cc:\s*(.*)", email_text)
-    bcc = extract_field(r"Bcc:\s*(.*)", email_text)
-    subject = extract_field(r"Subject:\s*(.*)", email_text)
-    date_line = extract_field(r"Sent:\s*(.*)", email_text) or extract_field(r"Date:\s*(.*)", email_text)
-
-    date_str = ""
-    time_str = ""
-    if date_line:
-        try:
-            dt = datetime.strptime(date_line, "%A, %B %d, %Y %I:%M %p")
-        except ValueError:
-            try:
-                dt = datetime.strptime(date_line, "%d %B %Y %H:%M")
-            except ValueError:
-                dt = None
-
-        if dt:
-            date_str = dt.strftime("%Y-%m-%d")
-            time_str = dt.strftime("%H:%M:%S")
-
-    body = clean_body(email_text)
-
-    return {
-        "Email Sequence": sequence,
-        "Sender": sender,
-        "Receiver": receiver,
-        "cc": cc,
-        "bcc": bcc,
-        "subject": subject,
-        "email body": body,
-        "date": date_str,
-        "time": time_str
-    }
-
-def parse_email_chain(email_chain_text):
-    email_parts = extract_emails(email_chain_text)
-    parsed_emails = []
-    for i, email_text in enumerate(email_parts, 1):
-        parsed = parse_email(email_text, i)
-        parsed_emails.append(parsed)
-    return parsed_emails
-
-def save_to_csv(parsed_emails, output_path="parsed_emails.csv"):
+def save_to_csv(parsed_emails, output_file="parsed_emails.csv"):
     if not parsed_emails:
-        print("No emails parsed.")
+        print("❌ No emails found.")
         return
 
-    keys = parsed_emails[0].keys()
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=keys)
+    fieldnames = parsed_emails[0].keys()
+    with open(output_file, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(parsed_emails)
+        for row in parsed_emails:
+            writer.writerow(row)
+    print(f"✅ CSV saved: {output_file}")
 
-    print(f"✅ CSV saved at: {os.path.abspath(output_path)}")
-
-def save_summary(parsed_emails, output_path="summary_output.txt"):
-    with open(output_path, "w", encoding="utf-8") as f:
+def save_summary(parsed_emails, summary_file="summary_output.txt"):
+    with open(summary_file, "w", encoding="utf-8") as f:
         for email in parsed_emails:
-            f.write(f"Email #{email['Email Sequence']}\n")
+            f.write(f"\n--- Email #{email['Email Sequence']} ---\n")
             f.write(f"From: {email['Sender']}\n")
             f.write(f"To: {email['Receiver']}\n")
-            f.write(f"Cc: {email['cc']}\n")
-            f.write(f"Bcc: {email['bcc']}\n")
+            f.write(f"CC: {email['cc']}\n")
             f.write(f"Subject: {email['subject']}\n")
             f.write(f"Date: {email['date']} {email['time']}\n")
             f.write("Body:\n")
-            f.write(email['email body'])
-            f.write("\n" + "-"*80 + "\n")
+            f.write(email["email body"] + "\n")
+    print(f"✅ Summary saved: {summary_file}")
 
-    print(f"✅ Summary saved at: {os.path.abspath(output_path)}")
+def identify_requester_approver(parsed_emails):
+    approver_keywords = [
+        "approved", "approve", "looks good", "go ahead", "fine with me",
+        "i'm fine", "i agree", "okay", "ok", "sounds good"
+    ]
+    approver = ""
+    requester = ""
+
+    # Find approver (who sent an approval-like message)
+    for email in parsed_emails:
+        body = email["email body"].lower()
+        if any(keyword in body for keyword in approver_keywords):
+            approver = email["Sender"]
+            break
+
+    # Find requester (earliest sender who is not the approver)
+    for email in parsed_emails:
+        if email["Sender"] != approver:
+            requester = email["Sender"]
+            break
+
+    return requester, approver
+
+def save_roles(requester, approver, output_file="requester_approver.txt"):
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(f"Requester: {requester}\n")
+        f.write(f"Approver: {approver}\n")
+    print(f"✅ Roles saved: {output_file}")
 
 def main():
     if len(sys.argv) != 2:
@@ -103,12 +121,21 @@ def main():
         print(f"❌ File not found: {filepath}")
         return
 
-    with open(filepath, "r", encoding="windows-1252", errors="replace") as f:
+    # Handle encoding errors using fallback
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
         email_text = f.read()
 
     parsed_emails = parse_email_chain(email_text)
+
+    requester, approver = identify_requester_approver(parsed_emails)
+
+    print("\n🔍 Identified Roles:")
+    print(f"Requester: {requester}")
+    print(f"Approver: {approver}")
+
     save_to_csv(parsed_emails)
     save_summary(parsed_emails)
+    save_roles(requester, approver)
 
 if __name__ == "__main__":
     main()
