@@ -32,7 +32,6 @@ def split_emails(raw_text):
     return parts
 
 def extract_field(email, field):
-    # Handles multiline fields until next known header or end
     pattern = rf"{field}:(.*?)(?=\n\S+:|\Z)"
     match = re.search(pattern, email, re.IGNORECASE | re.DOTALL)
     return match.group(1).strip().replace('\n', ' ') if match else ""
@@ -115,36 +114,15 @@ def save_summary(parsed_emails, summary_file="summary_output.txt"):
             f.write(email["tokens"] + "\n")
     print(f"✅ Summary saved: {summary_file}")
 
-approval_keywords = [
-    "approved", "accepted", "authorized", "endorsed", "sanctioned", "confirmed",
-    "looks good", "go ahead", "proceed", "continue", "carry on", "move forward",
-    "approve", "please proceed", "okay with me", "works for me", "noted", "acknowledged",
-    "approved by me", "authorized by me"
-]
-
-request_keywords = [
-    "please approve", "can you approve", "requesting approval", "need your approval",
-    "seeking approval", "approval needed", "kindly approve", "requesting your review",
-    "for your review", "approval request"
-]
-
 def identify_requester_approver(parsed_emails):
-    approver = ""
-    requester = ""
-
-    for email in parsed_emails:
-        token_text = email["tokens"].lower()
-        if any(k in token_text for k in approval_keywords):
-            approver = email["Sender"]
-        if any(k in token_text for k in request_keywords):
-            requester = email["Sender"]
-
-    if not requester:
-        for email in reversed(parsed_emails):
-            if email["Sender"] != approver:
-                requester = email["Sender"]
-                break
-
+    if len(parsed_emails) >= 2:
+        requester = parsed_emails[0]["Sender"]
+        approver = parsed_emails[1]["Sender"]
+    elif len(parsed_emails) == 1:
+        requester = parsed_emails[0]["Sender"]
+        approver = ""
+    else:
+        requester = approver = ""
     return requester, approver
 
 def save_roles(requester, approver, output_file="requester_approver.txt"):
@@ -167,8 +145,19 @@ def main():
         text = f.read()
 
     parsed_emails = parse_email_chain(text)
+
+    # Add datetime object to each email
+    for email in parsed_emails:
+        try:
+            email['datetime_obj'] = datetime.strptime(f"{email['date']} {email['time']}", "%Y-%m-%d %H:%M:%S")
+        except:
+            email['datetime_obj'] = datetime.max  # fallback if date parsing fails
+
+    # Sort emails chronologically
+    parsed_emails.sort(key=lambda x: x['datetime_obj'])
+
     print(f"📩 Parsed {len(parsed_emails)} emails in the chain.")
-    print("🧠 Analyzing tokens and detecting roles...")
+    print("🧠 Identifying requester and approver based on chronological order...")
 
     requester, approver = identify_requester_approver(parsed_emails)
 
