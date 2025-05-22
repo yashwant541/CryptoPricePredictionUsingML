@@ -1,71 +1,169 @@
-C:\Users\2011747\Desktop\TEST>python email_parser.py email.txt
-[nltk_data] Error loading stopwords: <urlopen error [Errno 11001]
-[nltk_data]     getaddrinfo failed>
-[nltk_data] Error loading punkt: <urlopen error [Errno 11001]
-[nltk_data]     getaddrinfo failed>
-Traceback (most recent call last):
-  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\util.py", line 83, in __load
-    root = nltk.data.find("{}/{}".format(self.subdir, zip_name))
-  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\data.py", line 585, in find
-    raise LookupError(resource_not_found)
-LookupError:
-**********************************************************************
-  Resource ←[93mstopwords←[0m not found.
-  Please use the NLTK Downloader to obtain the resource:
+import numpy as np
+np.int = int
+np.float = float
 
-  ←[31m>>> import nltk
-  >>> nltk.download('stopwords')
-  ←[0m
-  For more information see: https://www.nltk.org/data.html
+import nltk
 
-  Attempted to load ←[93mcorpora/stopwords.zip/stopwords/←[0m
+nltk.data.path.append(r'C:\Users\2011747\nltk_library')
 
-  Searched in:
-    - 'C:\\Users\\2011747/nltk_data'
-    - 'C:\\ProgramData\\Anaconda3\\nltk_data'
-    - 'C:\\ProgramData\\Anaconda3\\share\\nltk_data'
-    - 'C:\\ProgramData\\Anaconda3\\lib\\nltk_data'
-    - 'C:\\Users\\2011747\\AppData\\Roaming\\nltk_data'
-    - 'C:\\nltk_data'
-    - 'D:\\nltk_data'
-    - 'E:\\nltk_data'
-    - 'C:\\Users\\2011747\\nltk_library'
-**********************************************************************
+import re
+import csv
+import sys
+import os
+from datetime import datetime
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+import string
+import nltk
 
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "email_parser.py", line 25, in <module>
+# Ensure stopwords are downloaded
+try:
     stop_words = set(stopwords.words('english'))
-  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\util.py", line 120, in __getattr__
-    self.__load()
-  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\util.py", line 85, in __load
-    raise e
-  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\util.py", line 80, in __load
-    root = nltk.data.find("{}/{}".format(self.subdir, self.__name))
-  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\data.py", line 585, in find
-    raise LookupError(resource_not_found)
-LookupError:
-**********************************************************************
-  Resource ←[93mstopwords←[0m not found.
-  Please use the NLTK Downloader to obtain the resource:
+except LookupError:
+    nltk.download('stopwords')
+    nltk.download('punkt')
+    stop_words = set(stopwords.words('english'))
 
-  ←[31m>>> import nltk
-  >>> nltk.download('stopwords')
-  ←[0m
-  For more information see: https://www.nltk.org/data.html
+def split_emails(raw_text):
+    parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
+    if not parts[0].strip().lower().startswith("from:"):
+        first = parts.pop(0)
+        parts = [first] + parts
+    return parts
 
-  Attempted to load ←[93mcorpora/stopwords←[0m
+def extract_field(email, field):
+    pattern = rf"{field}:(.*)"
+    match = re.search(pattern, email, re.IGNORECASE)
+    return match.group(1).strip() if match else ""
 
-  Searched in:
-    - 'C:\\Users\\2011747/nltk_data'
-    - 'C:\\ProgramData\\Anaconda3\\nltk_data'
-    - 'C:\\ProgramData\\Anaconda3\\share\\nltk_data'
-    - 'C:\\ProgramData\\Anaconda3\\lib\\nltk_data'
-    - 'C:\\Users\\2011747\\AppData\\Roaming\\nltk_data'
-    - 'C:\\nltk_data'
-    - 'D:\\nltk_data'
-    - 'E:\\nltk_data'
-    - 'C:\\Users\\2011747\\nltk_library'
-**********************************************************************
+def parse_date_time(date_str):
+    if not date_str:
+        return "", ""
+    try:
+        dt = datetime.strptime(date_str.strip(), "%A, %B %d, %Y %I:%M %p")
+        return dt.date().isoformat(), dt.time().isoformat()
+    except:
+        return date_str.strip(), ""
+
+def extract_body(email):
+    split_point = re.search(r"\n\s*\n", email)
+    if split_point:
+        return email[split_point.end():].strip()
+    return ""
+
+def tokenize_body(text):
+    text = text.lower()
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    words = word_tokenize(text)
+    cleaned = [w for w in words if w not in stop_words and w.isalpha()]
+    return cleaned
+
+def parse_email_chain(text):
+    email_chunks = split_emails(text)
+    parsed = []
+    for i, email in enumerate(email_chunks):
+        sender = extract_field(email, "From")
+        receiver = extract_field(email, "To")
+        cc = extract_field(email, "Cc")
+        bcc = extract_field(email, "Bcc")
+        subject = extract_field(email, "Subject")
+        date_raw = extract_field(email, "Sent")
+
+        date, time = parse_date_time(date_raw)
+        body = extract_body(email)
+        tokens = tokenize_body(body)
+
+        parsed.append({
+            "Email Sequence": i + 1,
+            "Sender": sender,
+            "Receiver": receiver,
+            "cc": cc,
+            "bcc": bcc,
+            "subject": subject,
+            "email body": body,
+            "tokens": ", ".join(tokens),
+            "date": date,
+            "time": time
+        })
+    return parsed
+
+def save_to_csv(parsed_emails, output_file="parsed_emails.csv"):
+    if not parsed_emails:
+        print("❌ No emails found.")
+        return
+    fieldnames = parsed_emails[0].keys()
+    with open(output_file, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in parsed_emails:
+            writer.writerow(row)
+    print(f"✅ CSV saved: {output_file}")
+
+def save_summary(parsed_emails, summary_file="summary_output.txt"):
+    with open(summary_file, "w", encoding="utf-8") as f:
+        for email in parsed_emails:
+            f.write(f"\n--- Email #{email['Email Sequence']} ---\n")
+            f.write(f"From: {email['Sender']}\n")
+            f.write(f"To: {email['Receiver']}\n")
+            f.write(f"CC: {email['cc']}\n")
+            f.write(f"Subject: {email['subject']}\n")
+            f.write(f"Date: {email['date']} {email['time']}\n")
+            f.write("Body:\n")
+            f.write(email["email body"] + "\n")
+            f.write("Tokens:\n")
+            f.write(email["tokens"] + "\n")
+    print(f"✅ Summary saved: {summary_file}")
+
+def identify_requester_approver(parsed_emails):
+    approval_keywords = [
+        "approved","accepted","authorized","endorsed","sanctioned","confirmed","looks good","appears fine","seems good","looks fine","seems okay","appears satisfactory","go ahead","proceed","continue","carry on","move forward","advance","consent","approve","accept","please proceed","please continue","go ahead","move forward","carry on","advance","fine with me","okay with me","all right with me","no problem","suits me","works for me","noted","acknowledged","recognized","recorded","approved by me","authorized by me","endorsed by me","sanctioned by me","confirmed by me","accepted by me"
+    ]
+    approver = ""
+    requester = ""
+
+    for email in parsed_emails:
+        token_list = email["tokens"].lower()
+        if any(k in token_list for k in approval_keywords):
+            approver = email["Sender"]
+            break
+
+    for email in reversed(parsed_emails):
+        if email["Sender"] != approver:
+            requester = email["Sender"]
+            break
+
+    return requester, approver
+
+def save_roles(requester, approver, output_file="requester_approver.txt"):
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(f"Requester: {requester}\n")
+        f.write(f"Approver: {approver}\n")
+    print(f"✅ Roles saved: {output_file}")
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python email_parser.py <email_chain.txt>")
+        return
+
+    filepath = sys.argv[1]
+    if not os.path.exists(filepath):
+        print(f"❌ File not found: {filepath}")
+        return
+
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+
+    parsed_emails = parse_email_chain(text)
+
+    requester, approver = identify_requester_approver(parsed_emails)
+
+    print("\n🔍 Identified Roles:")
+    print(f"Requester: {requester}")
+    print(f"Approver: {approver}")
+
+    save_to_csv(parsed_emails)
+    save_summary(parsed_emails)
+    save_roles(requester, approver)
+
+if __name__ == "__main__":
+    main()
