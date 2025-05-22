@@ -1,92 +1,262 @@
-1. Statement Printing
-Root Concepts:
+import re
+import csv
+import sys
+import os
+from datetime import datetime
+from fuzzywuzzy import fuzz
+import nltk
+from nltk import word_tokenize, pos_tag
 
-statement
+# Download required NLTK data once
+nltk.download('punkt')
+nltk.download('averaged_perceptron_tagger')
 
-print
+# Weighted keyword lists
+APPROVER_KEYWORDS = {
+    "approved": 100, "granted": 95, "confirmed": 90, "accepted": 90,
+    "authorized": 95, "approve": 80, "confirm": 80, "accept": 80,
+    "approval": 50, "clearance": 70, "endorsed": 75, "signed off": 85,
+    "cleared": 80, "validated": 85, "ratified": 90, "sanctioned": 90
+}
 
-Expanded Terms:
+REQUESTER_KEYWORDS = {
+    "request": 100, "require": 95, "seek approval": 90, "need approval": 90,
+    "asking": 80, "petition": 75, "approval": 30, "pending": 60,
+    "remind": 70, "follow up": 65, "submitted": 85, "application": 80,
+    "awaiting": 75, "petition": 70, "seeking": 85
+}
 
-statements
+PRONOUN_PATTERNS = [
+    (r"\byou\b.*\bapprove\b", "approver", 50),
+    (r"\byour\b.*\bapproval\b", "approver", 40),
+    (r"\bplease\b.*\bapprove\b", "approver", 60),
+    (r"\bi\b.*\brequest\b", "requester", 55),
+    (r"\bwe\b.*\brequest\b", "requester", 50),
+    (r"\bplease\b.*\breview\b", "approver", 40),
+    (r"\bkindly\b.*\bapprove\b", "approver", 70)
+]
 
-print
+def split_emails(raw_text):
+    parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
+    if parts and not parts[0].strip().lower().startswith("from:"):
+        first = parts.pop(0)
+        parts = [first] + parts
+    return parts
 
-printing
+def extract_field(email, field):
+    pattern = rf"{field}:(.*)"
+    match = re.search(pattern, email, re.IGNORECASE)
+    return match.group(1).strip() if match else ""
 
-printed
+def parse_date_time(date_str):
+    if not date_str:
+        return "", ""
+    try:
+        dt = datetime.strptime(date_str.strip(), "%A, %B %d, %Y %I:%M %p")
+        return dt.date().isoformat(), dt.time().isoformat()
+    except Exception:
+        return date_str.strip(), ""
 
-printout
+def extract_body(email):
+    split_point = re.search(r"\n\s*\n", email)
+    return email[split_point.end():].strip() if split_point else ""
 
-printed statement
+def find_matching_statement(email_body, keywords, threshold=80):
+    sentences = re.split(r'(?<=[.!?])\s+', email_body.strip())
+    exact_matches = []
+    fuzzy_matches = []
 
-statement print
+    for sentence in sentences:
+        clean_sentence = sentence.lower()
+        for kw in keywords:
+            if kw in clean_sentence:
+                exact_matches.append(sentence.strip())
+            else:
+                ratio = fuzz.partial_ratio(kw, clean_sentence)
+                if ratio >= threshold:
+                    fuzzy_matches.append((sentence.strip(), kw, ratio))
 
-printing service
+    if exact_matches:
+        return "; ".join(exact_matches), "exact"
+    elif fuzzy_matches:
+        best_match = max(fuzzy_matches, key=lambda x: x[2])
+        return best_match[0], "fuzzy"
+    return "", ""
 
-document printing
+def calculate_role_scores(parsed_emails):
+    role_scores = {}
+    total_emails = len(parsed_emails)
+    first_sender = parsed_emails[0]["Sender"] if parsed_emails else None
+    
+    for i, email in enumerate(parsed_emails):
+        sender = email["Sender"]
+        body = email["email body"].lower()
+        subject = email["subject"].lower()
+        
+        if sender not in role_scores:
+            role_scores[sender] = {"approver": 0, "requester": 0, "details": []}
+        
+        # Temporal Scoring (20%)
+        position_score = (total_emails - i) / total_emails
+        if sender != first_sender:
+            role_scores[sender]["approver"] += 20 * (1 - position_score)
+            role_scores[sender]["details"].append(
+                f"+{20*(1-position_score):.1f} (temporal position)")
+        role_scores[sender]["requester"] += 20 * position_score
+        role_scores[sender]["details"].append(
+            f"+{20*position_score:.1f} (temporal position)")
+        
+        # Keyword Scoring (50%)
+        # Approval scoring
+        for kw, weight in APPROVER_KEYWORDS.items():
+            if kw in body:
+                adjusted_weight = weight
+                if kw == "approval" and i < total_emails/2:
+                    adjusted_weight *= 0.6
+                role_scores[sender]["approver"] += adjusted_weight
+                role_scores[sender]["details"].append(
+                    f"+{adjusted_weight} (approver keyword: '{kw}')")
+        
+        # Request scoring
+        for kw, weight in REQUESTER_KEYWORDS.items():
+            if kw in body:
+                adjusted_weight = weight
+                if kw == "approval" and ("request" in body or "need" in body):
+                    adjusted_weight *= 1.5
+                role_scores[sender]["requester"] += adjusted_weight
+                role_scores[sender]["details"].append(
+                    f"+{adjusted_weight} (requester keyword: '{kw}')")
+        
+        # Contextual Rules (30%)
+        if sender == first_sender:
+            role_scores[sender]["details"].append(
+                "0 (first sender cannot be approver)")
+            role_scores[sender]["approver"] = 0
+        
+        # Pronoun patterns
+        for pattern, role, weight in PRONOUN_PATTERNS:
+            if re.search(pattern, body, re.IGNORECASE):
+                role_scores[sender][role] += weight
+                role_scores[sender]["details"].append(
+                    f"+{weight} (pronoun pattern: '{pattern}')")
+        
+        # Clear approval statements
+        if re.search(r"\b(i|we) (have |'ve )?(approved|granted)", body):
+            if sender != first_sender:
+                role_scores[sender]["approver"] += 100
+                role_scores[sender]["details"].append(
+                    "+100 (explicit approval statement)")
+    
+    return role_scores
 
-hardcopy statement
+def identify_requester_approver(parsed_emails):
+    if not parsed_emails:
+        return "", "", {}
+    
+    first_sender = parsed_emails[0]["Sender"]
+    scores = calculate_role_scores(parsed_emails)
+    
+    # Get potential approvers (excluding first sender)
+    potential_approvers = [
+        (sender, score["approver"]) 
+        for sender, score in scores.items() 
+        if sender != first_sender and score["approver"] > 0
+    ]
+    potential_approvers.sort(key=lambda x: x[1], reverse=True)
+    
+    # Get potential requesters
+    potential_requesters = [
+        (sender, score["requester"]) 
+        for sender, score in scores.items() 
+        if score["requester"] > 0
+    ]
+    potential_requesters.sort(key=lambda x: x[1], reverse=True)
+    
+    # Determine roles
+    approver = potential_approvers[0][0] if potential_approvers else ""
+    requester = first_sender if any(
+        sender == first_sender for sender, _ in potential_requesters
+    ) else (potential_requesters[0][0] if potential_requesters else "")
+    
+    # Fallback if no approver found
+    if not approver and potential_requesters:
+        for email in reversed(parsed_emails):
+            if email["Sender"] != requester:
+                approver = email["Sender"]
+                scores[approver]["details"].append(
+                    "+50 (fallback: last non-requester sender)")
+                scores[approver]["approver"] += 50
+                break
+    
+    return requester, approver, scores
 
-printed communication
+def save_to_csv(parsed_emails, output_file="parsed_emails.csv"):
+    if not parsed_emails:
+        print("❌ No emails found.")
+        return
 
-🔹 2. Document Archival
-Root Concepts:
+    fieldnames = parsed_emails[0].keys()
+    with open(output_file, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in parsed_emails:
+            writer.writerow(row)
+    print(f"✅ CSV saved: {output_file}")
 
-document
+def save_summary(parsed_emails, scores, summary_file="summary_output.txt"):
+    requester, approver, _ = identify_requester_approver(parsed_emails)
+    
+    with open(summary_file, "w", encoding="utf-8") as f:
+        f.write("=== ROLE ANALYSIS SUMMARY ===\n")
+        f.write(f"Identified Requester: {requester}\n")
+        f.write(f"Identified Approver: {approver}\n\n")
+        
+        f.write("=== DETAILED SCORE BREAKDOWN ===\n")
+        for sender, score_data in scores.items():
+            f.write(f"\nSender: {sender}\n")
+            f.write(f"Total Approver Score: {score_data['approver']}\n")
+            f.write(f"Total Requester Score: {score_data['requester']}\n")
+            f.write("Score Components:\n")
+            for detail in score_data["details"]:
+                f.write(f"  - {detail}\n")
+        
+        f.write("\n=== EMAIL CHAIN DETAILS ===\n")
+        for email in parsed_emails:
+            f.write(f"\n--- Email #{email['Email Sequence']} ---\n")
+            f.write(f"From: {email['Sender']}\n")
+            f.write(f"To: {email['Receiver']}\n")
+            f.write(f"Subject: {email['subject']}\n")
+            f.write(f"Date: {email['date']} {email['time']}\n")
+            f.write(f"Approval Statement: {email['approval statement']}\n")
+            f.write(f"Request Statement: {email['request statement']}\n")
+    
+    print(f"✅ Summary saved: {summary_file}")
 
-archive
+def main(input_file):
+    if not os.path.exists(input_file):
+        print(f"❌ File not found: {input_file}")
+        return
+    
+    with open(input_file, "r", encoding="utf-8") as f:
+        email_text = f.read()
+    
+    parsed_emails = parse_email_chain(email_text)
+    if not parsed_emails:
+        print("❌ No emails could be parsed from the input file.")
+        return
+    
+    save_to_csv(parsed_emails)
+    
+    requester, approver, scores = identify_requester_approver(parsed_emails)
+    save_summary(parsed_emails, scores)
+    
+    print("\n🔍 Identified Roles:")
+    print(f"Requester: {requester}")
+    print(f"Approver: {approver}")
+    print(f"\nDetailed analysis saved to summary_output.txt")
 
-Expanded Terms:
-
-documents
-
-archiving
-
-archived
-
-archival
-
-document archive
-
-digital archiving
-
-document storage
-
-archive storage
-
-records archiving
-
-data archival
-
-archived documents
-
-🔹 3. Card Embossing
-Root Concepts:
-
-card
-
-emboss
-
-Expanded Terms:
-
-cards
-
-embossed
-
-embossing
-
-card embossed
-
-emboss
-
-embossed card
-
-plastic card personalization
-
-card printing
-
-raised print
-
-custom card
-
-personalization service
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python email_parse.py <input_email_text_file>")
+    else:
+        main(sys.argv[1])
