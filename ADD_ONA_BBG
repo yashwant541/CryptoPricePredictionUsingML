@@ -3,9 +3,6 @@ np.int = int
 np.float = float
 
 import nltk
-
-nltk.data.path.append(r'C:\Users\2011747\nltk_library')
-
 import re
 import csv
 import sys
@@ -14,9 +11,12 @@ from datetime import datetime
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 import string
-import nltk
+from dateutil.parser import parse as parse_date
 
-# Ensure stopwords are downloaded
+# Setup NLTK path (optional: update as needed)
+nltk.data.path.append(r'C:\Users\2011747\nltk_library')
+
+# Ensure stopwords are available
 try:
     stop_words = set(stopwords.words('english'))
 except LookupError:
@@ -32,15 +32,16 @@ def split_emails(raw_text):
     return parts
 
 def extract_field(email, field):
-    pattern = rf"{field}:(.*)"
-    match = re.search(pattern, email, re.IGNORECASE)
-    return match.group(1).strip() if match else ""
+    # Handles multiline fields until next known header or end
+    pattern = rf"{field}:(.*?)(?=\n\S+:|\Z)"
+    match = re.search(pattern, email, re.IGNORECASE | re.DOTALL)
+    return match.group(1).strip().replace('\n', ' ') if match else ""
 
 def parse_date_time(date_str):
     if not date_str:
         return "", ""
     try:
-        dt = datetime.strptime(date_str.strip(), "%A, %B %d, %Y %I:%M %p")
+        dt = parse_date(date_str.strip(), fuzzy=True)
         return dt.date().isoformat(), dt.time().isoformat()
     except:
         return date_str.strip(), ""
@@ -49,7 +50,7 @@ def extract_body(email):
     split_point = re.search(r"\n\s*\n", email)
     if split_point:
         return email[split_point.end():].strip()
-    return ""
+    return email.strip()
 
 def tokenize_body(text):
     text = text.lower()
@@ -114,23 +115,35 @@ def save_summary(parsed_emails, summary_file="summary_output.txt"):
             f.write(email["tokens"] + "\n")
     print(f"✅ Summary saved: {summary_file}")
 
+approval_keywords = [
+    "approved", "accepted", "authorized", "endorsed", "sanctioned", "confirmed",
+    "looks good", "go ahead", "proceed", "continue", "carry on", "move forward",
+    "approve", "please proceed", "okay with me", "works for me", "noted", "acknowledged",
+    "approved by me", "authorized by me"
+]
+
+request_keywords = [
+    "please approve", "can you approve", "requesting approval", "need your approval",
+    "seeking approval", "approval needed", "kindly approve", "requesting your review",
+    "for your review", "approval request"
+]
+
 def identify_requester_approver(parsed_emails):
-    approval_keywords = [
-        "approved","accepted","authorized","endorsed","sanctioned","confirmed","looks good","appears fine","seems good","looks fine","seems okay","appears satisfactory","go ahead","proceed","continue","carry on","move forward","advance","consent","approve","accept","please proceed","please continue","go ahead","move forward","carry on","advance","fine with me","okay with me","all right with me","no problem","suits me","works for me","noted","acknowledged","recognized","recorded","approved by me","authorized by me","endorsed by me","sanctioned by me","confirmed by me","accepted by me"
-    ]
     approver = ""
     requester = ""
 
     for email in parsed_emails:
-        token_list = email["tokens"].lower()
-        if any(k in token_list for k in approval_keywords):
+        token_text = email["tokens"].lower()
+        if any(k in token_text for k in approval_keywords):
             approver = email["Sender"]
-            break
-
-    for email in reversed(parsed_emails):
-        if email["Sender"] != approver:
+        if any(k in token_text for k in request_keywords):
             requester = email["Sender"]
-            break
+
+    if not requester:
+        for email in reversed(parsed_emails):
+            if email["Sender"] != approver:
+                requester = email["Sender"]
+                break
 
     return requester, approver
 
@@ -154,6 +167,8 @@ def main():
         text = f.read()
 
     parsed_emails = parse_email_chain(text)
+    print(f"📩 Parsed {len(parsed_emails)} emails in the chain.")
+    print("🧠 Analyzing tokens and detecting roles...")
 
     requester, approver = identify_requester_approver(parsed_emails)
 
