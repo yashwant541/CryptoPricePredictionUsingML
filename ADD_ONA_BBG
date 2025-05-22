@@ -1,9 +1,114 @@
-(base) C:\Users\2011747\Desktop\TEST>python email_parser.py email.txt
-Traceback (most recent call last):
-  File "email_parser.py", line 171, in <module>
+import re
+import csv
+import os
+import sys
+from datetime import datetime
+
+def extract_emails(text):
+    # Split the email chain based on common separators
+    split_pattern = re.compile(r"(?=\n*From: )", re.IGNORECASE)
+    return [email.strip() for email in split_pattern.split(text) if email.strip()]
+
+def extract_field(pattern, text):
+    match = re.search(pattern, text, re.IGNORECASE)
+    return match.group(1).strip() if match else ""
+
+def clean_body(email_text):
+    header_end = re.search(r"\n\s*\n", email_text)
+    if header_end:
+        return email_text[header_end.end():].strip()
+    return ""
+
+def parse_email(email_text, sequence):
+    sender = extract_field(r"From:\s*(.*)", email_text)
+    receiver = extract_field(r"To:\s*(.*)", email_text)
+    cc = extract_field(r"Cc:\s*(.*)", email_text)
+    bcc = extract_field(r"Bcc:\s*(.*)", email_text)
+    subject = extract_field(r"Subject:\s*(.*)", email_text)
+    date_line = extract_field(r"Sent:\s*(.*)", email_text) or extract_field(r"Date:\s*(.*)", email_text)
+
+    date_str = ""
+    time_str = ""
+    if date_line:
+        try:
+            dt = datetime.strptime(date_line, "%A, %B %d, %Y %I:%M %p")
+        except ValueError:
+            try:
+                dt = datetime.strptime(date_line, "%d %B %Y %H:%M")
+            except ValueError:
+                dt = None
+
+        if dt:
+            date_str = dt.strftime("%Y-%m-%d")
+            time_str = dt.strftime("%H:%M:%S")
+
+    body = clean_body(email_text)
+
+    return {
+        "Email Sequence": sequence,
+        "Sender": sender,
+        "Receiver": receiver,
+        "cc": cc,
+        "bcc": bcc,
+        "subject": subject,
+        "email body": body,
+        "date": date_str,
+        "time": time_str
+    }
+
+def parse_email_chain(email_chain_text):
+    email_parts = extract_emails(email_chain_text)
+    parsed_emails = []
+    for i, email_text in enumerate(email_parts, 1):
+        parsed = parse_email(email_text, i)
+        parsed_emails.append(parsed)
+    return parsed_emails
+
+def save_to_csv(parsed_emails, output_path="parsed_emails.csv"):
+    if not parsed_emails:
+        print("No emails parsed.")
+        return
+
+    keys = parsed_emails[0].keys()
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=keys)
+        writer.writeheader()
+        writer.writerows(parsed_emails)
+
+    print(f"✅ CSV saved at: {os.path.abspath(output_path)}")
+
+def save_summary(parsed_emails, output_path="summary_output.txt"):
+    with open(output_path, "w", encoding="utf-8") as f:
+        for email in parsed_emails:
+            f.write(f"Email #{email['Email Sequence']}\n")
+            f.write(f"From: {email['Sender']}\n")
+            f.write(f"To: {email['Receiver']}\n")
+            f.write(f"Cc: {email['cc']}\n")
+            f.write(f"Bcc: {email['bcc']}\n")
+            f.write(f"Subject: {email['subject']}\n")
+            f.write(f"Date: {email['date']} {email['time']}\n")
+            f.write("Body:\n")
+            f.write(email['email body'])
+            f.write("\n" + "-"*80 + "\n")
+
+    print(f"✅ Summary saved at: {os.path.abspath(output_path)}")
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python email_parser.py <email_chain.txt>")
+        return
+
+    filepath = sys.argv[1]
+    if not os.path.exists(filepath):
+        print(f"❌ File not found: {filepath}")
+        return
+
+    with open(filepath, "r", encoding="windows-1252", errors="replace") as f:
+        email_text = f.read()
+
+    parsed_emails = parse_email_chain(email_text)
+    save_to_csv(parsed_emails)
+    save_summary(parsed_emails)
+
+if __name__ == "__main__":
     main()
-  File "email_parser.py", line 159, in main
-    email_text = f.read()
-  File "C:\ProgramData\Anaconda3\lib\codecs.py", line 322, in decode
-    (result, consumed) = self._buffer_decode(data, self.errors, final)
-UnicodeDecodeError: 'utf-8' codec can't decode byte 0x96 in position 3204: invalid start byte
