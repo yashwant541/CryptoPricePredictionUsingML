@@ -1,39 +1,152 @@
-import pandas as pd
+import numpy as np
+np.int = int
+np.float = float
 
-def add_row_number_column(file_path, sheet_name):
-    try:
-        # Read the specific sheet into a DataFrame
-        df = pd.read_excel(file_path, sheet_name=sheet_name)
-    except ValueError as e:
-        print(f"Error reading the sheet: {e}")
-        return
+import nltk
+import re
+import csv
+import sys
+import os
+import math
+from datetime import datetime
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk import pos_tag
+import string
+from dateutil.parser import parse as parse_date
+# Setup NLTK path (optional: update as needed)
+nltk.data.path.append(r'C:\Users\2011747\nltk_library')
+from fuzzywuzzy import fuzz
 
-    # Check if 'ColumnA' exists in the DataFrame
-    if 'ColumnA' not in df.columns:
-        print("Column 'ColumnA' not found in the sheet.")
-        return
+# Weighted keyword lists
+APPROVER_KEYWORDS = {
+    "approved": 100, "granted": 95, "confirmed": 90, "accepted": 90,
+    "authorized": 95, "approve": 80, "confirm": 80, "accept": 80,
+    "approval": 50, "clearance": 70, "endorsed": 75, "signed off": 85,
+    "cleared": 80, "validated": 85, "ratified": 90, "sanctioned": 90
+}
 
-    # Initialize the Row Number column
-    df['Row Number'] = 1
+REQUESTER_KEYWORDS = {
+    "request": 100, "require": 95, "seek approval": 90, "need approval": 90,
+    "asking": 80, "petition": 75, "approval": 30, "pending": 60,
+    "remind": 70, "follow up": 65, "submitted": 85, "application": 80,
+    "awaiting": 75, "petition": 70, "seeking": 85
+}
 
-    # Iterate over the DataFrame to update the Row Number column
-    for i in range(1, len(df)):
-        if df.loc[i, 'ColumnA'] != df.loc[i - 1, 'ColumnA']:
-            df.loc[i, 'Row Number'] = df.loc[i - 1, 'Row Number'] + 1
+PRONOUN_PATTERNS = [
+    (r"\byou\b.*\bapprove\b", "approver", 50),
+    (r"\byour\b.*\bapproval\b", "approver", 40),
+    (r"\bplease\b.*\bapprove\b", "approver", 60),
+    (r"\bi\b.*\brequest\b", "requester", 55),
+    (r"\bwe\b.*\brequest\b", "requester", 50),
+    (r"\bplease\b.*\breview\b", "approver", 40),
+    (r"\bkindly\b.*\bapprove\b", "approver", 70)
+]
+
+# Enhanced Temporal Weighting Functions
+def sigmoid(x, steepness=10, midpoint=0.5):
+    """Smooth S-curve transition between requester and approver weights"""
+    return 1 / (1 + math.exp(-steepness * (x - midpoint)))
+
+def logarithmic_weight(position, total_emails):
+    """More sensitive to early positions in thread"""
+    if total_emails <= 1:
+        return 0.5
+    normalized_pos = position / (total_emails - 1)
+    return 1 - math.log(1 + (1 - normalized_pos) * 9, 10)
+
+def hybrid_temporal_weight(position, total_emails, sigmoid_ratio=0.7):
+    """Combine both sigmoid and logarithmic weights"""
+    if total_emails <= 1:
+        return (0.5, 0.5)
+    
+    normalized_pos = position / (total_emails - 1)
+    req_sig, app_sig = (1 - sigmoid(normalized_pos)), sigmoid(normalized_pos)
+    log_weight = logarithmic_weight(position, total_emails)
+    
+    # Blend them
+    requester_weight = sigmoid_ratio * (1 - log_weight) + (1 - sigmoid_ratio) * req_sig
+    approver_weight = sigmoid_ratio * log_weight + (1 - sigmoid_ratio) * app_sig
+    
+    # Normalize
+    total = requester_weight + approver_weight
+    return (requester_weight/total, approver_weight/total)
+
+def time_decay_weight(email_datetime, thread_start, thread_end, half_life_hours=24):
+    """Weight based on absolute time differences"""
+    total_span = (thread_end - thread_start).total_seconds()
+    if total_span <= 0:
+        return (0.5, 0.5)
+    
+    elapsed = (email_datetime - thread_start).total_seconds()
+    decay_factor = 0.5 ** (elapsed / (half_life_hours * 3600))
+    return (decay_factor, 1 - decay_factor)
+
+# [All your existing functions remain unchanged until calculate_role_scores]
+
+def calculate_role_scores(parsed_emails):
+    role_scores = {}
+    total_emails = len(parsed_emails)
+    
+    # Get thread time bounds
+    valid_emails = [e for e in parsed_emails if e["datetime"]]
+    if valid_emails:
+        thread_start = min(e["datetime"] for e in valid_emails)
+        thread_end = max(e["datetime"] for e in valid_emails)
+    else:
+        thread_start = thread_end = None
+    
+    # Get first sender based on datetime
+    first_email = min(parsed_emails, key=lambda x: x["datetime"] if x["datetime"] else datetime.max)
+    first_sender = clean_participant_name(first_email["Sender"])
+
+    for i, email in enumerate(parsed_emails):
+        sender = clean_participant_name(email["Sender"])
+        body = email["email body"].lower()
+        subject = email["subject"].lower()
+        
+        if not sender:
+            continue
+            
+        if sender not in role_scores:
+            role_scores[sender] = {"approver": 0, "requester": 0, "details": []}
+        
+        # Enhanced Temporal Scoring (20% weight)
+        # Calculate position-based weights
+        pos_weight_req, pos_weight_app = hybrid_temporal_weight(i, total_emails)
+        
+        # Calculate time-decay weights if we have datetimes
+        if email["datetime"] and thread_start and thread_end:
+            time_weight_req, time_weight_app = time_decay_weight(
+                email["datetime"], thread_start, thread_end
+            )
         else:
-            df.loc[i, 'Row Number'] = df.loc[i - 1, 'Row Number']
+            time_weight_req, time_weight_app = 0.5, 0.5
+        
+        # Combine weights (50% position, 50% time decay)
+        combined_req = 0.5 * pos_weight_req + 0.5 * time_weight_req
+        combined_app = 0.5 * pos_weight_app + 0.5 * time_weight_app
+        
+        # Apply to scores (20% of total score)
+        temporal_requester_score = 20 * combined_req
+        temporal_approver_score = 20 * combined_app
+        
+        role_scores[sender]["requester"] += temporal_requester_score
+        role_scores[sender]["approver"] += temporal_approver_score
+        role_scores[sender]["details"].append(
+            f"+{temporal_requester_score:.1f} (temporal requester weight)")
+        role_scores[sender]["details"].append(
+            f"+{temporal_approver_score:.1f} (temporal approver weight)")
+        
+        # [Rest of your existing scoring logic remains exactly the same]
+        # ULTRA WINNER BONUS, HARD RULE, Keyword Scoring, etc.
+        
+    return role_scores, first_sender
 
-    # Save the DataFrame back to the Excel file
-    try:
-        df.to_excel(file_path, sheet_name=sheet_name, index=False)
-    except Exception as e:
-        print(f"Error writing to the Excel file: {e}")
-        return
+# [All remaining functions stay exactly the same as in your original code]
 
-    print(f"Row Number column added and saved to '{sheet_name}' sheet in the file '{file_path}'.")
-
-# Prompt the user for the file path and sheet name
-file_path = input("Enter the path to the Excel file: ")
-sheet_name = input("Enter the sheet name: ")
-
-add_row_number_column(file_path, sheet_name)
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python email_parse.py <input_email_text_file>")
+    else:
+        main(sys.argv[1])
