@@ -1,32 +1,11 @@
-Processing text file...
----------------------------------------------------------------------------
-UnicodeDecodeError                        Traceback (most recent call last)
-<ipython-input-1-fa026f664576> in <module>
-    243     # Process text file
-    244     print("Processing text file...")
---> 245     text_results = processor.process_file(r'C:\Users\2011747\Desktop\TEST\email.txt')
-    246     print(f"Requester: {text_results[0]['requester']}")
-    247     print(f"Approver: {text_results[0]['approver']}")
-
-<ipython-input-1-fa026f664576> in process_file(self, file_path)
-     46             return self._process_csv(file_path)
-     47         else:
----> 48             return self._process_text_file(file_path)
-     49 
-     50     def _process_text_file(self, file_path: str) -> List[Dict]:
-
-<ipython-input-1-fa026f664576> in _process_text_file(self, file_path)
-     51         """Process a text file containing raw email content"""
-     52         with open(file_path, 'r', encoding='utf-8') as f:
----> 53             email_content = f.read()
-     54         return self.analyze_email_chain(email_content)
-     55 
-
-C:\ProgramData\Anaconda3\lib\codecs.py in decode(self, input, final)
-    320         # decode input (taking the buffer into account)
-    321         data = self.buffer + input
---> 322         (result, consumed) = self._buffer_decode(data, self.errors, final)
-    323         # keep undecoded input until the next call
-    324         self.buffer = data[consumed:]
-
-UnicodeDecodeError: 'utf-8' codec can't decode byte 0x96 in position 3204: invalid start byte
+def _process_text_file(self, file_path: str) -> List[Dict]:
+    """Process a text file with basic encoding fallback"""
+    try:
+        # First try UTF-8
+        with open(file_path, 'r', encoding='utf-8') as f:
+            email_content = f.read()
+    except UnicodeDecodeError:
+        # Fall back to Windows-1252 (common for Outlook emails)
+        with open(file_path, 'r', encoding='windows-1252') as f:
+            email_content = f.read()
+    return self.analyze_email_chain(email_content)
