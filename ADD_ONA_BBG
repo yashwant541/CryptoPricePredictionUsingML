@@ -4,41 +4,20 @@ import sys
 import os
 from datetime import datetime
 
-def parse_email_chain(text):
-    email_pattern = re.compile(
-        r"(From:.*?)(?=(?:\nFrom:|\Z))", re.DOTALL | re.IGNORECASE
-    )
-    emails = re.findall(email_pattern, text)
+def split_emails(raw_text):
+    # Pattern to split emails - starts with "From: " and is followed by headers
+    parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
+    
+    # Handle the first chunk if it doesn't begin with "From:"
+    if not parts[0].strip().lower().startswith("from:"):
+        # Treat first chunk as latest email
+        first = parts.pop(0)
+        parts = [first] + parts
+    return parts
 
-    parsed_emails = []
-
-    for idx, email in enumerate(emails):
-        sender = extract_field(email, r"From: (.*)")
-        receiver = extract_field(email, r"To: (.*)")
-        cc = extract_field(email, r"Cc: (.*)")
-        bcc = extract_field(email, r"Bcc: (.*)")
-        subject = extract_field(email, r"Subject: (.*)")
-        date_raw = extract_field(email, r"Sent: (.*)")
-
-        date, time = parse_date_time(date_raw)
-        body = extract_body(email)
-
-        parsed_emails.append({
-            "Email Sequence": idx + 1,
-            "Sender": sender,
-            "Receiver": receiver,
-            "cc": cc,
-            "bcc": bcc,
-            "subject": subject,
-            "email body": body,
-            "date": date,
-            "time": time
-        })
-
-    return parsed_emails
-
-def extract_field(text, pattern):
-    match = re.search(pattern, text, re.IGNORECASE)
+def extract_field(email, field):
+    pattern = rf"{field}:(.*)"
+    match = re.search(pattern, email, re.IGNORECASE)
     return match.group(1).strip() if match else ""
 
 def parse_date_time(date_str):
@@ -51,10 +30,40 @@ def parse_date_time(date_str):
         return date_str.strip(), ""
 
 def extract_body(email):
-    parts = email.split("\n\n", 1)
-    if len(parts) > 1:
-        return parts[1].strip()
+    # Attempt to extract everything after the headers
+    split_point = re.search(r"\n\s*\n", email)
+    if split_point:
+        return email[split_point.end():].strip()
     return ""
+
+def parse_email_chain(text):
+    email_chunks = split_emails(text)
+
+    parsed = []
+    for i, email in enumerate(email_chunks):
+        sender = extract_field(email, "From")
+        receiver = extract_field(email, "To")
+        cc = extract_field(email, "Cc")
+        bcc = extract_field(email, "Bcc")
+        subject = extract_field(email, "Subject")
+        date_raw = extract_field(email, "Sent")
+
+        date, time = parse_date_time(date_raw)
+        body = extract_body(email)
+
+        parsed.append({
+            "Email Sequence": i + 1,
+            "Sender": sender,
+            "Receiver": receiver,
+            "cc": cc,
+            "bcc": bcc,
+            "subject": subject,
+            "email body": body,
+            "date": date,
+            "time": time
+        })
+
+    return parsed
 
 def save_to_csv(parsed_emails, output_file="parsed_emails.csv"):
     if not parsed_emails:
@@ -83,22 +92,22 @@ def save_summary(parsed_emails, summary_file="summary_output.txt"):
     print(f"✅ Summary saved: {summary_file}")
 
 def identify_requester_approver(parsed_emails):
-    approver_keywords = [
-        "approved", "approve", "looks good", "go ahead", "fine with me",
-        "i'm fine", "i agree", "okay", "ok", "sounds good"
+    approval_keywords = [
+        "approved", "looks good", "go ahead", "i'm fine", "agree", "sounds good",
+        "please proceed", "okay", "ok", "fine with me", "noted", "approved by me"
     ]
+
     approver = ""
     requester = ""
 
-    # Find approver (who sent an approval-like message)
+    # Look for approver from latest to oldest
     for email in parsed_emails:
-        body = email["email body"].lower()
-        if any(keyword in body for keyword in approver_keywords):
+        if any(k in email["email body"].lower() for k in approval_keywords):
             approver = email["Sender"]
             break
 
-    # Find requester (earliest sender who is not the approver)
-    for email in parsed_emails:
+    # Requester is the first person who is not the approver
+    for email in reversed(parsed_emails):
         if email["Sender"] != approver:
             requester = email["Sender"]
             break
@@ -121,11 +130,10 @@ def main():
         print(f"❌ File not found: {filepath}")
         return
 
-    # Handle encoding errors using fallback
     with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-        email_text = f.read()
+        text = f.read()
 
-    parsed_emails = parse_email_chain(email_text)
+    parsed_emails = parse_email_chain(text)
 
     requester, approver = identify_requester_approver(parsed_emails)
 
