@@ -292,6 +292,150 @@ def save_roles(requester, approver, output_file="requester_approver.txt"):
         f.write(f"Approver: {approver}\n")
     print(f"✅ Roles saved: {output_file}")
 
+def save_analysis(parsed_emails, requester, approver, output_file="detailed_analysis.txt"):
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write("EMAIL CHAIN ANALYSIS REPORT\n")
+        f.write("="*40 + "\n\n")
+        
+        # Basic chain info
+        f.write(f"Total emails in chain: {len(parsed_emails)}\n")
+        f.write(f"Identified Requester: {requester}\n")
+        f.write(f"Identified Approver: {approver}\n\n")
+        
+        # Special case for 2-email chains
+        if len(parsed_emails) == 2:
+            f.write("ANALYSIS METHOD: 2-EMAIL SPECIAL CASE\n")
+            f.write("-"*40 + "\n")
+            try:
+                date1 = datetime.strptime(parsed_emails[0]["date"], "%Y-%m-%d").date()
+                date2 = datetime.strptime(parsed_emails[1]["date"], "%Y-%m-%d").date()
+                
+                if date1 < date2:
+                    f.write(f"Email 1 ({date1}) is older than Email 2 ({date2})\n")
+                    f.write(f"-> Sender of Email 1 ({parsed_emails[0]['Sender']}) designated as Requester\n")
+                    f.write(f"-> Sender of Email 2 ({parsed_emails[1]['Sender']}) designated as Approver\n")
+                else:
+                    f.write(f"Email 2 ({date2}) is older than Email 1 ({date1})\n")
+                    f.write(f"-> Sender of Email 2 ({parsed_emails[1]['Sender']}) designated as Requester\n")
+                    f.write(f"-> Sender of Email 1 ({parsed_emails[0]['Sender']}) designated as Approver\n")
+            except:
+                f.write("Could not parse dates - fell back to standard scoring method\n\n")
+        
+        # For chains with more than 2 emails
+        if len(parsed_emails) > 2:
+            f.write("ANALYSIS METHOD: COMPREHENSIVE SCORING\n")
+            f.write("-"*40 + "\n")
+            
+            # Calculate and show scores
+            role_scores = calculate_role_scores(parsed_emails)
+            sender_timelines = {}
+            
+            for email in parsed_emails:
+                sender = email["Sender"]
+                try:
+                    email_date = datetime.strptime(email["date"], "%Y-%m-%d").date()
+                    if sender not in sender_timelines:
+                        sender_timelines[sender] = {
+                            "min_date": email_date,
+                            "max_date": email_date,
+                            "email_count": 1
+                        }
+                    else:
+                        if email_date < sender_timelines[sender]["min_date"]:
+                            sender_timelines[sender]["min_date"] = email_date
+                        if email_date > sender_timelines[sender]["max_date"]:
+                            sender_timelines[sender]["max_date"] = email_date
+                        sender_timelines[sender]["email_count"] += 1
+                except:
+                    continue
+            
+            # Show timeline info
+            f.write("\nEMAIL TIMELINES:\n")
+            for sender, timeline in sender_timelines.items():
+                f.write(f"- {sender}: {timeline['email_count']} emails from {timeline['min_date']} to {timeline['max_date']}\n")
+            
+            # Show scores
+            f.write("\nSCORE BREAKDOWN:\n")
+            f.write("(Format: Sender: ApproverScore/RequesterScore)\n")
+            for sender, scores in role_scores.items():
+                f.write(f"- {sender}: {scores['approver']:.1f}/{scores['requester']:.1f}\n")
+            
+            # Show selection logic
+            f.write("\nSELECTION PROCESS:\n")
+            if requester and approver:
+                f.write(f"1. Top Approver Candidate: {approver} (Score: {role_scores[approver]['approver']:.1f})\n")
+                f.write(f"2. Top Requester Candidate (excluding approver): {requester} (Score: {role_scores[requester]['requester']:.1f})\n")
+                
+                # Temporal validation
+                if sender_timelines and requester in sender_timelines and approver in sender_timelines:
+                    if sender_timelines[requester]["max_date"] >= sender_timelines[approver]["min_date"]:
+                        f.write("\nWARNING: Temporal constraint violated - requester's last email is not before approver's first email\n")
+                        f.write(f"- Requester {requester}'s last email: {sender_timelines[requester]['max_date']}\n")
+                        f.write(f"- Approver {approver}'s first email: {sender_timelines[approver]['min_date']}\n")
+                        f.write("-> Falling back to alternative requester that satisfies temporal constraint\n")
+            
+            # Show key statements found
+            f.write("\nKEY STATEMENTS IDENTIFIED:\n")
+            for email in parsed_emails:
+                f.write(f"\nEmail {email['Email Sequence']} from {email['Sender']}:\n")
+                if email["approval_statement"]:
+                    f.write(f"- Approval statement ({email['approval_match_type']}): {email['approval_statement']}\n")
+                if email["request_statement"]:
+                    f.write(f"- Request statement ({email['request_match_type']}): {email['request_statement']}\n")
+        
+        f.write("\nSCORING METHODOLOGY:\n")
+        f.write("-"*40 + "\n")
+        f.write("1. Temporal Analysis (30% weight)\n")
+        f.write("   - Earlier emails contribute more to requester score\n")
+        f.write("   - Later emails contribute more to approver score\n\n")
+        f.write("2. Keyword Matching (25% weight)\n")
+        f.write("   - Exact matches: +2 points\n")
+        f.write("   - Fuzzy matches (80%+ similarity): +1 point\n\n")
+        f.write("3. Pronoun Analysis (20% weight)\n")
+        f.write("   - 'You' referring to approver: +1 per instance\n")
+        f.write("   - 'I' suggesting request: +1 per instance\n")
+        f.write("   - Phrases like 'your approval': +3 points\n\n")
+        f.write("4. Structural Analysis (15% weight)\n")
+        f.write("   - Job titles in signature: +5 for approver\n")
+        f.write("   - Formal language: +3 for approver\n\n")
+        f.write("5. Attachment Analysis (10% weight)\n")
+        f.write("   - 'request' in filename: +5 for requester\n")
+        f.write("   - 'approval' in filename: +5 for approver\n")
+    
+    print(f"✅ Detailed analysis saved: {output_file}")
+
+# Update main() to call this new function
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python email_parser.py <email_chain.txt>")
+        return
+
+    filepath = sys.argv[1]
+    if not os.path.exists(filepath):
+        print(f"❌ File not found: {filepath}")
+        return
+
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+
+    parsed_emails = parse_email_chain(text)
+
+    requester, approver = identify_requester_approver(parsed_emails)
+
+    print("\n🔍 Identified Roles:")
+    print(f"Requester: {requester}")
+    print(f"Approver: {approver}")
+
+    save_to_csv(parsed_emails)
+    save_summary(parsed_emails)
+    save_roles(requester, approver)
+    save_analysis(parsed_emails, requester, approver)  # Add this line
+
+if __name__ == "__main__":
+    main()
+
+
+
 def main():
     if len(sys.argv) != 2:
         print("Usage: python email_parser.py <email_chain.txt>")
