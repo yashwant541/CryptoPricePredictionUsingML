@@ -1,6 +1,6 @@
-spacy==3.5.4
-cymem==2.0.7
-murmurhash==1.0.9
-preshed==3.0.8
-blis==0.7.9
-thinc==8.1.10
+Installing collected packages: cymem, typer, spacy-loggers, spacy-legacy, smart-open, pathlib-abc, murmurhash, marisa-trie, colorama, catalogue, blis, wasabi, srsly, preshed, pathy, language-data, langcodes, confection, thinc, spacy
+  Attempting uninstall: colorama
+    Found existing installation: colorama 0.4.4
+    Uninstalling colorama-0.4.4:
+ERROR: Could not install packages due to an OSError: [WinError 5] Access is denied: 'c:\\programdata\\anaconda3\\lib\\site-packages\\colorama-0.4.4.dist-info\\direct_url.json'
+Consider using the `--user` option or check the permissions.
