@@ -4,6 +4,7 @@ import sys
 import os
 from datetime import datetime
 from fuzzywuzzy import fuzz
+from sentence_transformers import SentenceTransformer, util
 
 def split_emails(raw_text):
     parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
@@ -125,23 +126,58 @@ def save_summary(parsed_emails, summary_file="summary_output.txt"):
     print(f"✅ Summary saved: {summary_file}")
 
 def identify_requester_approver(parsed_emails):
-    approval_keywords = [
-        "approved", "looks good", "go ahead", "i'm fine", "agree", "sounds good",
-        "please proceed", "okay", "ok", "fine with me", "noted", "approved by me"
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+
+    approval_phrases = [
+        "This is approved.",
+        "You can proceed.",
+        "Looks good to me.",
+        "I'm okay with this.",
+        "I approve this request."
+    ]
+    request_phrases = [
+        "Please approve this.",
+        "Requesting your approval.",
+        "Can you review this?",
+        "Need your input.",
+        "Seeking your approval."
     ]
 
     approver = ""
     requester = ""
 
-    for email in parsed_emails:
-        if any(k in email["email body"].lower() for k in approval_keywords):
-            approver = email["Sender"]
-            break
+    # Compute embeddings for intent reference phrases
+    approval_embeddings = model.encode(approval_phrases, convert_to_tensor=True)
+    request_embeddings = model.encode(request_phrases, convert_to_tensor=True)
 
-    for email in reversed(parsed_emails):
-        if email["Sender"] != approver:
-            requester = email["Sender"]
-            break
+    best_approval_score = 0
+    best_request_score = 0
+
+    approval_email = None
+    request_email = None
+
+    for email in parsed_emails:
+        body = email["email body"]
+        if not body:
+            continue
+        body_embedding = model.encode(body, convert_to_tensor=True)
+
+        # Approval match
+        approval_sim = util.max_cos_sim(body_embedding, approval_embeddings).item()
+        if approval_sim > best_approval_score:
+            best_approval_score = approval_sim
+            approval_email = email
+
+        # Request match
+        request_sim = util.max_cos_sim(body_embedding, request_embeddings).item()
+        if request_sim > best_request_score:
+            best_request_score = request_sim
+            request_email = email
+
+    if approval_email:
+        approver = approval_email["Sender"]
+    if request_email and request_email["Sender"] != approver:
+        requester = request_email["Sender"]
 
     return requester, approver
 
