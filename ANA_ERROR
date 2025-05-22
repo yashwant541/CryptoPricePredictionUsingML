@@ -1,6 +1,6 @@
-pip install spacy==3.5.4 \
-    cymem==2.0.7 \
-    murmurhash==1.0.9 \
-    preshed==3.0.8 \
-    blis==0.7.9 \
-    thinc==8.1.10
+spacy==3.5.4
+cymem==2.0.7
+murmurhash==1.0.9
+preshed==3.0.8
+blis==0.7.9
+thinc==8.1.10
