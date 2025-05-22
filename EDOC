@@ -59,18 +59,33 @@ def find_matching_statement(email_body, keywords, threshold=80):
     else:
         return "", ""
 
+# Enhanced keyword lists
+APPROVER_KEYWORDS = [
+    "approve", "approved", "approval", "grant", "granted", "authorize", 
+    "authorized", "confirm", "confirmed", "accept", "accepted", "endorse", 
+    "endorsed", "agree", "agreed", "looks good", "go ahead", "i'm fine", 
+    "sounds good", "please proceed", "okay", "ok", "fine with me", "noted"
+]
+
+REQUESTER_KEYWORDS = [
+    "request", "requested", "seek", "seeking", "require", "required", 
+    "ask", "asked", "submit", "submitted", "apply", "applied", "petition",
+    "please review", "can you approve", "need your approval", "could you review",
+    "seeking approval", "for your review", "your input"
+]
+
+PRONOUN_PATTERNS = [
+    (r"\byou\b.*\bapprove\b", "approver"),
+    (r"\byour\b.*\bapproval\b", "approver"),
+    (r"\bplease\b.*\bapprove\b", "approver"),
+    (r"\bi\b.*\brequest\b", "requester"),
+    (r"\bwe\b.*\brequest\b", "requester"),
+    (r"\bplease\b.*\breview\b", "approver")
+]
+
 def parse_email_chain(text):
     email_chunks = split_emails(text)
-
-    approval_keywords = [
-        "approved", "looks good", "go ahead", "i'm fine", "agree", "sounds good",
-        "please proceed", "okay", "ok", "fine with me", "noted", "approved by me"
-    ]
-    request_keywords = [
-        "please review", "can you approve", "requesting", "need your approval",
-        "could you review", "seeking approval", "for your review", "your input"
-    ]
-
+    
     parsed = []
     for i, email in enumerate(email_chunks):
         sender = extract_field(email, "From")
@@ -83,8 +98,8 @@ def parse_email_chain(text):
         date, time = parse_date_time(date_raw)
         body = extract_body(email)
 
-        approval_statement, approval_type = find_matching_statement(body, approval_keywords)
-        request_statement, request_type = find_matching_statement(body, request_keywords)
+        approval_statement, approval_type = find_matching_statement(body, APPROVER_KEYWORDS)
+        request_statement, request_type = find_matching_statement(body, REQUESTER_KEYWORDS)
 
         parsed.append({
             "Email Sequence": i + 1,
@@ -130,38 +145,71 @@ def save_summary(parsed_emails, summary_file="summary_output.txt"):
             f.write(email["email body"] + "\n")
     print(f"✅ Summary saved: {summary_file}")
 
-def analyze_statement_subject(statement):
-    tokens = word_tokenize(statement)
-    pos_tags = pos_tag(tokens)
-
-    for i, (word, tag) in enumerate(pos_tags):
-        word_lower = word.lower()
-        if word_lower in {"approve", "agreed", "proceed"}:
-            if i > 0 and pos_tags[i-1][0].lower() == "i":
-                return "approver"
-        elif word_lower in {"review", "approve", "look"}:
-            if i > 1 and pos_tags[i-2][0].lower() in {"can", "could", "would"} and pos_tags[i-1][0].lower() == "you":
-                return "requester"
-
-    return None
+def calculate_role_scores(parsed_emails):
+    role_scores = {}
+    total_emails = len(parsed_emails)
+    
+    for i, email in enumerate(parsed_emails):
+        sender = email["Sender"]
+        body = email["email body"].lower()
+        subject = email["subject"].lower()
+        
+        if sender not in role_scores:
+            role_scores[sender] = {"approver": 0, "requester": 0}
+        
+        # Temporal scoring (30%)
+        position_score = (total_emails - i) / total_emails
+        role_scores[sender]["approver"] += 30 * (1 - position_score)
+        role_scores[sender]["requester"] += 30 * position_score
+        
+        # Keyword matching (25%)
+        # Approver keywords
+        for kw in APPROVER_KEYWORDS:
+            if kw in body:
+                role_scores[sender]["approver"] += 2
+            elif fuzz.partial_ratio(kw, body) >= 80:
+                role_scores[sender]["approver"] += 1
+                
+        # Requester keywords
+        for kw in REQUESTER_KEYWORDS:
+            if kw in body:
+                role_scores[sender]["requester"] += 2
+            elif fuzz.partial_ratio(kw, body) >= 80:
+                role_scores[sender]["requester"] += 1
+        
+        # Pronoun analysis (20%)
+        for pattern, role in PRONOUN_PATTERNS:
+            if re.search(pattern, body, re.IGNORECASE):
+                role_scores[sender][role] += 3
+        
+        # Structural analysis (15%)
+        if any(title in body for title in ["manager", "director", "vp", "head of"]):
+            role_scores[sender]["approver"] += 5
+        
+        # Attachment analysis (10%)
+        if "request" in subject or "request" in body:
+            role_scores[sender]["requester"] += 5
+        if "approval" in subject or "approval" in body:
+            role_scores[sender]["approver"] += 5
+    
+    return role_scores
 
 def identify_requester_approver(parsed_emails):
-    role_scores = {}
-
-    for email in parsed_emails:
-        body = email["email body"]
-        sender = email["Sender"]
-        sentences = re.split(r'(?<=[.!?])\s+', body.strip())
-
-        for sentence in sentences:
-            role = analyze_statement_subject(sentence)
-            if role:
-                role_scores.setdefault(sender, {"approver": 0, "requester": 0})
-                role_scores[sender][role] += 1
-
-    approver = max(role_scores.items(), key=lambda x: x[1].get("approver", 0))[0] if role_scores else ""
-    requester = max(role_scores.items(), key=lambda x: x[1].get("requester", 0) if x[0] != approver else -1)[0] if role_scores else ""
-
+    if not parsed_emails:
+        return "", ""
+    
+    role_scores = calculate_role_scores(parsed_emails)
+    
+    # Get top approver
+    approver = max(role_scores.items(), key=lambda x: x[1]["approver"])[0]
+    
+    # Get top requester (excluding the approver)
+    requester_candidates = {k:v for k,v in role_scores.items() if k != approver}
+    if requester_candidates:
+        requester = max(requester_candidates.items(), key=lambda x: x[1]["requester"])[0]
+    else:
+        requester = ""
+    
     return requester, approver
 
 def save_roles(requester, approver, output_file="requester_approver.txt"):
