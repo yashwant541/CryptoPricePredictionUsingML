@@ -1,120 +1,184 @@
+import numpy as np
+np.int = int
+np.float = float
+
+import nltk
 import re
+import csv
+import sys
+import os
 from datetime import datetime
-from typing import List, Dict, Optional
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+import string
+from dateutil.parser import parse as parse_date
 
-def parse_email_chain(email_text: str) -> List[Dict]:
-    """
-    Split the email chain into individual emails and extract metadata + body.
-    Handles dates in any order and sorts them chronologically.
-    """
-    # Split emails by common separators (e.g., "---", "Forwarded message")
-    email_separator = re.compile(
-        r'\n-+\s*Forwarded message\s*-+\n|\n-+\s*Original Message\s*-+\n|\nOn.*wrote:\n|\nFrom:.*\n',
-        re.IGNORECASE
-    )
-    emails = re.split(email_separator, email_text.strip())
-    parsed_emails = []
+# Setup NLTK path (optional: update as needed)
+nltk.data.path.append(r'C:\Users\2011747\nltk_library')
 
-    for email in emails:
-        if not email.strip():
-            continue
+# Ensure stopwords are available
+try:
+    stop_words = set(stopwords.words('english'))
+except LookupError:
+    nltk.download('stopwords')
+    nltk.download('punkt')
+    stop_words = set(stopwords.words('english'))
 
-        # Extract sender, date, and body
-        sender_match = re.search(r'From:\s*(.*?)\n', email, re.IGNORECASE)
-        date_match = re.search(r'Date:\s*(.*?)\n', email, re.IGNORECASE)
-        body_match = re.search(r'(?:\n\s*){2,}(.*)', email, re.DOTALL)
+def split_emails(raw_text):
+    parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
+    if not parts[0].strip().lower().startswith("from:"):
+        first = parts.pop(0)
+        parts = [first] + parts
+    return parts
 
-        sender = sender_match.group(1).strip() if sender_match else "Unknown"
-        date_str = date_match.group(1).strip() if date_match else None
-        body = body_match.group(1).strip() if body_match else email.strip()
+def extract_field(email, field):
+    # Handles multiline fields until next known header or end
+    pattern = rf"{field}:(.*?)(?=\n\S+:|\Z)"
+    match = re.search(pattern, email, re.IGNORECASE | re.DOTALL)
+    return match.group(1).strip().replace('\n', ' ') if match else ""
 
-        # Parse date (supports multiple formats)
-        date = None
-        if date_str:
-            try:
-                date = datetime.strptime(date_str, '%a, %d %b %Y %H:%M:%S %z')  # RFC 2822
-            except ValueError:
-                try:
-                    date = datetime.strptime(date_str, '%d %b %Y %H:%M:%S %z')
-                except ValueError:
-                    try:
-                        date = datetime.strptime(date_str, '%m/%d/%Y %I:%M %p')
-                    except ValueError:
-                        pass  # Keep date as None if parsing fails
+def parse_date_time(date_str):
+    if not date_str:
+        return "", ""
+    try:
+        dt = parse_date(date_str.strip(), fuzzy=True)
+        return dt.date().isoformat(), dt.time().isoformat()
+    except:
+        return date_str.strip(), ""
 
-        parsed_emails.append({
-            'sender': sender,
-            'date': date,
-            'body': body
+def extract_body(email):
+    split_point = re.search(r"\n\s*\n", email)
+    if split_point:
+        return email[split_point.end():].strip()
+    return email.strip()
+
+def tokenize_body(text):
+    text = text.lower()
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    words = word_tokenize(text)
+    cleaned = [w for w in words if w not in stop_words and w.isalpha()]
+    return cleaned
+
+def parse_email_chain(text):
+    email_chunks = split_emails(text)
+    parsed = []
+    for i, email in enumerate(email_chunks):
+        sender = extract_field(email, "From")
+        receiver = extract_field(email, "To")
+        cc = extract_field(email, "Cc")
+        bcc = extract_field(email, "Bcc")
+        subject = extract_field(email, "Subject")
+        date_raw = extract_field(email, "Sent")
+
+        date, time = parse_date_time(date_raw)
+        body = extract_body(email)
+        tokens = tokenize_body(body)
+
+        parsed.append({
+            "Email Sequence": i + 1,
+            "Sender": sender,
+            "Receiver": receiver,
+            "cc": cc,
+            "bcc": bcc,
+            "subject": subject,
+            "email body": body,
+            "tokens": ", ".join(tokens),
+            "date": date,
+            "time": time
         })
+    return parsed
 
-    # Sort emails by date (oldest first). If no date, assume order is correct.
-    parsed_emails.sort(key=lambda x: x['date'] if x['date'] else datetime.min)
-    return parsed_emails
+def save_to_csv(parsed_emails, output_file="parsed_emails.csv"):
+    if not parsed_emails:
+        print("❌ No emails found.")
+        return
+    fieldnames = parsed_emails[0].keys()
+    with open(output_file, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in parsed_emails:
+            writer.writerow(row)
+    print(f"✅ CSV saved: {output_file}")
 
-def detect_roles(emails: List[Dict]) -> Dict[str, Optional[str]]:
-    """
-    Identify requester and approver based on email content and order.
-    """
-    requester = None
-    approver = None
+def save_summary(parsed_emails, summary_file="summary_output.txt"):
+    with open(summary_file, "w", encoding="utf-8") as f:
+        for email in parsed_emails:
+            f.write(f"\n--- Email #{email['Email Sequence']} ---\n")
+            f.write(f"From: {email['Sender']}\n")
+            f.write(f"To: {email['Receiver']}\n")
+            f.write(f"CC: {email['cc']}\n")
+            f.write(f"Subject: {email['subject']}\n")
+            f.write(f"Date: {email['date']} {email['time']}\n")
+            f.write("Body:\n")
+            f.write(email["email body"] + "\n")
+            f.write("Tokens:\n")
+            f.write(email["tokens"] + "\n")
+    print(f"✅ Summary saved: {summary_file}")
 
-    # Keywords to detect intent (regex)
-    request_phrases = [
-        r'please approve', r'kindly approve', r'request your approval',
-        r'needs? your approval', r'could you approve', r'approval required',
-        r'can you approve', r'would you approve'
-    ]
-    approval_phrases = [
-        r'\bapproved\b', r'\bgranted\b', r'\baccepted\b',
-        r'\bapproval confirmed\b', r'\bgo ahead\b', r'\bI approve\b',
-        r'\bapproved this\b', r'\bapproval granted\b'
-    ]
+approval_keywords = [
+    "approved", "accepted", "authorized", "endorsed", "sanctioned", "confirmed",
+    "looks good", "go ahead", "proceed", "continue", "carry on", "move forward",
+    "approve", "please proceed", "okay with me", "works for me", "noted", "acknowledged",
+    "approved by me", "authorized by me"
+]
 
-    for email in emails:
-        body = email['body'].lower()
-        sender = email['sender']
+request_keywords = [
+    "please approve", "can you approve", "requesting approval", "need your approval",
+    "seeking approval", "approval needed", "kindly approve", "requesting your review",
+    "for your review", "approval request"
+]
 
-        # Detect requester (first email with a request phrase)
-        if not requester:
-            for phrase in request_phrases:
-                if re.search(phrase, body, re.IGNORECASE):
-                    requester = sender
-                    break
+def identify_requester_approver(parsed_emails):
+    approver = ""
+    requester = ""
 
-        # Detect approver (last email with an approval phrase)
-        for phrase in approval_phrases:
-            if re.search(phrase, body, re.IGNORECASE):
-                approver = sender
+    for email in parsed_emails:
+        token_text = email["tokens"].lower()
+        if any(k in token_text for k in approval_keywords):
+            approver = email["Sender"]
+        if any(k in token_text for k in request_keywords):
+            requester = email["Sender"]
+
+    if not requester:
+        for email in reversed(parsed_emails):
+            if email["Sender"] != approver:
+                requester = email["Sender"]
                 break
 
-    # Fallback 1: If no approval found, last replier is approver
-    if not approver and len(emails) > 1:
-        approver = emails[-1]['sender']
+    return requester, approver
 
-    # Fallback 2: If no requester found, first email sender is requester
-    if not requester and emails:
-        requester = emails[0]['sender']
+def save_roles(requester, approver, output_file="requester_approver.txt"):
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(f"Requester: {requester}\n")
+        f.write(f"Approver: {approver}\n")
+    print(f"✅ Roles saved: {output_file}")
 
-    return {
-        'requester': requester,
-        'approver': approver
-    }
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python email_parser.py <email_chain.txt>")
+        return
 
-def analyze_email_chain(file_path: str) -> Dict[str, Optional[str]]:
-    """
-    Main function: Read file, parse emails, and detect roles.
-    """
-    with open(file_path, 'r', encoding='utf-8') as file:
-        email_text = file.read()
+    filepath = sys.argv[1]
+    if not os.path.exists(filepath):
+        print(f"❌ File not found: {filepath}")
+        return
 
-    emails = parse_email_chain(email_text)
-    roles = detect_roles(emails)
-    return roles
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
 
-# Example Usage
+    parsed_emails = parse_email_chain(text)
+    print(f"📩 Parsed {len(parsed_emails)} emails in the chain.")
+    print("🧠 Analyzing tokens and detecting roles...")
+
+    requester, approver = identify_requester_approver(parsed_emails)
+
+    print("\n🔍 Identified Roles:")
+    print(f"Requester: {requester}")
+    print(f"Approver: {approver}")
+
+    save_to_csv(parsed_emails)
+    save_summary(parsed_emails)
+    save_roles(requester, approver)
+
 if __name__ == "__main__":
-    file_path = "email_chain.txt"  # Replace with your file path
-    roles = analyze_email_chain(file_path)
-    print(f"Requester: {roles['requester']}")
-    print(f"Approver: {roles['approver']}")
+    main()
