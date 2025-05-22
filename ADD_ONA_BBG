@@ -1,4 +1,289 @@
-  File "<ipython-input-4-04a28cd6bd5d>", line 206
+import re
+import csv
+from email.parser import Parser
+from email.policy import default
+from typing import List, Dict, Optional, Tuple
+import logging
+
+class EmailChainProcessor:
+    def __init__(self):
+        # Configure logging
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger(__name__)
+        
+        # Keywords to identify request/approval patterns
+        self.REQUEST_PATTERNS = [
+            r'request(?:ing|ed)?\s+(?:your|for)\s+approval',
+            r'kindly\s+approve',
+            r'please\s+(?:review|approve)',
+            r'seeking\s+approval',
+            r'request\s+to\s+approve'
+        ]
+        
+        self.APPROVAL_PATTERNS = [
+            r'approved?\b',
+            r'approv(?:ing|al)\s+granted',
+            r'request\s+approved',
+            r'has\s+been\s+approved',
+            r'you\s+may\s+proceed'
+        ]
+        
+        self.REJECTION_PATTERNS = [
+            r'rejected?\b',
+            r'not\s+approved',
+            r'declined?\b',
+            r'cannot\s+approve',
+            r'denied?\b'
+        ]
+
+    def process_file(self, file_path: str) -> List[Dict]:
+        """Process either a text file or CSV file containing email data"""
+        try:
+            if file_path.lower().endswith('.csv'):
+                return self._process_csv(file_path)
+            else:
+                return self._process_text_file(file_path)
+        except Exception as e:
+            self.logger.error(f"Error processing file {file_path}: {str(e)}")
+            return []
+
+    def _process_text_file(self, file_path: str) -> List[Dict]:
+        """Process a text file containing raw email content with robust encoding handling"""
+        try:
+            # Try multiple encodings
+            encodings = ['utf-8', 'windows-1252', 'iso-8859-1', 'ascii']
+            last_error = None
+            
+            for encoding in encodings:
+                try:
+                    with open(file_path, 'r', encoding=encoding) as f:
+                        email_content = f.read()
+                    
+                    if not email_content.strip():
+                        continue
+                        
+                    analysis = self.analyze_email_chain(email_content)
+                    if analysis.get('email_chain'):
+                        return [analysis]
+                        
+                except UnicodeDecodeError as e:
+                    last_error = e
+                    continue
+            
+            self.logger.warning(f"Failed to read {file_path} with encodings: {encodings}")
+            return []
+            
+        except Exception as e:
+            self.logger.error(f"Error processing text file {file_path}: {str(e)}")
+            return []
+
+    def _process_csv(self, file_path: str) -> List[Dict]:
+        """Process a CSV file with email data"""
+        results = []
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if 'email_content' in row:
+                        analysis = self.analyze_email_chain(row['email_content'])
+                        if analysis:
+                            analysis['source_row'] = row
+                            results.append(analysis)
+            return results
+        except Exception as e:
+            self.logger.error(f"Error processing CSV file {file_path}: {str(e)}")
+            return []
+
+    def analyze_email_chain(self, email_text: str) -> Dict:
+        """Analyze an email chain and identify requester/approver"""
+        try:
+            emails = self._parse_email_chain(email_text)
+            if not emails:
+                return {}
+                
+            requester, approver = self._identify_requester_approver(emails)
+            
+            return {
+                'email_chain': emails,
+                'requester': requester,
+                'approver': approver,
+                'status': self._determine_approval_status(emails),
+                'participants': self._get_participants(emails),
+                'dates': self._extract_dates_from_chain(emails)
+            }
+        except Exception as e:
+            self.logger.error(f"Error analyzing email chain: {str(e)}")
+            return {}
+
+    def _parse_email_chain(self, raw_email: str) -> List[Dict]:
+        """Parse email chain into structured components"""
+        emails = []
+        email_parts = self._split_email_chain(raw_email)
+        
+        for part in email_parts:
+            if not part.strip():
+                continue
+                
+            try:
+                msg = Parser(policy=default).parsestr(part)
+            except Exception as e:
+                self.logger.warning(f"Error parsing email part: {str(e)}")
+                msg = Parser(policy=default).parsestr(f"From: \nTo: \nSubject: \n\n{part}")
+            
+            email_data = {
+                'sender': self._extract_email_address(msg['from']),
+                'to': self._extract_all_email_addresses(msg['to']),
+                'cc': self._extract_all_email_addresses(msg['cc']),
+                'bcc': self._extract_all_email_addresses(msg['bcc']),
+                'subject': msg['subject'] or '',
+                'body': self._clean_email_body(msg.get_payload()),
+                'headers': dict(msg.items()),
+                'original_content': part.strip()
+            }
+            emails.append(email_data)
+        
+        return emails
+
+    def _split_email_chain(self, text: str) -> List[str]:
+        """Split email chain into individual messages"""
+        patterns = [
+            r'(?m)^From:\s.*\n^Sent:\s.*\n^To:\s.*\n^Subject:\s.*$',
+            r'(?m)^On.*wrote:$',
+            r'(?m)^-+\s*Original Message\s*-+$',
+            r'(?m)^From:.*\n^Date:.*\n^To:.*\n^Subject:.*$'
+        ]
+        
+        for pattern in patterns:
+            parts = re.split(pattern, text)
+            if len(parts) > 1:
+                return parts
+                
+        return [text]
+
+    def _clean_email_body(self, body: str) -> str:
+        """Clean and normalize email body text"""
+        if not body:
+            return ""
+            
+        # Remove quoted text and signatures
+        body = re.sub(r'(?m)^>.*$', '', body)
+        body = re.sub(r'(?m)^On.*wrote:.*$', '', body)
+        body = re.sub(r'(?m)^From:.*$', '', body)
+        body = re.sub(r'(?m)^Sent:.*$', '', body)
+        body = re.sub(r'(?m)^To:.*$', '', body)
+        body = re.sub(r'(?m)^Subject:.*$', '', body)
+        body = re.sub(r'(?m)^--+\s*$', '', body)
+        body = re.sub(r'(?m)^\s*Best regards.*$', '', body, flags=re.I)
+        
+        return re.sub(r'\s+', ' ', body).strip()
+
+    def _identify_requester_approver(self, emails: List[Dict]) -> Tuple[Optional[str], Optional[str]]:
+        """Core logic to identify requester and approver"""
+        if not emails:
+            return None, None
+            
+        # First email sender is likely the requester
+        requester = emails[0]['sender']
+        
+        # Look for approval in subsequent emails
+        approver = None
+        for email in emails[1:]:
+            if self._contains_approval(email['body']):
+                approver = email['sender']
+                break
+                
+        # Fallback: Look for hierarchical patterns
+        if not approver and len(emails) > 1:
+            approver = self._find_hierarchical_approver(emails)
+            
+        return requester, approver
+
+    def _contains_approval(self, text: str) -> bool:
+        """Check if text contains approval language"""
+        text = text.lower()
+        return any(re.search(pattern, text, re.I) for pattern in self.APPROVAL_PATTERNS)
+
     def _find_hierarchical_approver(self, emails: List[Dict]) -> Optional[str]:
-    ^
-SyntaxError: invalid syntax
+        """Find approver based on organizational hierarchy patterns"""
+        first_domain = self._extract_domain(emails[0]['sender'])
+        
+        for email in emails[1:]:
+            current_domain = self._extract_domain(email['sender'])
+            if current_domain and first_domain and current_domain != first_domain:
+                return email['sender']
+                
+            if any(title in email['body'].lower() 
+                  for title in ['manager', 'director', 'vp', 'head of']):
+                return email['sender']
+                
+        return None
+
+    def _determine_approval_status(self, emails: List[Dict]) -> str:
+        """Determine overall approval status of the chain"""
+        for email in reversed(emails):
+            body = email['body'].lower()
+            if any(re.search(pattern, body) for pattern in self.APPROVAL_PATTERNS):
+                return "Approved"
+            if any(re.search(pattern, body) for pattern in self.REJECTION_PATTERNS):
+                return "Rejected"
+        return "Pending"
+
+    def _get_participants(self, emails: List[Dict]) -> List[str]:
+        """Get all participants in the email chain"""
+        participants = set()
+        for email in emails:
+            participants.add(email['sender'])
+            participants.update(email['to'])
+            participants.update(email['cc'])
+        return list(participants)
+
+    def _extract_dates_from_chain(self, emails: List[Dict]) -> List[str]:
+        """Extract dates mentioned in email chain"""
+        dates = set()
+        date_pattern = r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4}\b'
+        
+        for email in emails:
+            dates.update(re.findall(date_pattern, email['body']))
+            if 'Date' in email['headers']:
+                dates.add(email['headers']['Date'])
+                
+        return list(dates)
+
+    def _extract_email_address(self, text: str) -> Optional[str]:
+        """Extract the first email address from text"""
+        if not text:
+            return None
+        matches = re.findall(r'[\w\.-]+@[\w\.-]+', text)
+        return matches[0] if matches else None
+
+    def _extract_all_email_addresses(self, text: str) -> List[str]:
+        """Extract all email addresses from text"""
+        if not text:
+            return []
+        return re.findall(r'[\w\.-]+@[\w\.-]+', text)
+
+    def _extract_domain(self, email: str) -> Optional[str]:
+        """Extract domain from email address"""
+        if not email or '@' not in email:
+            return None
+        return email.split('@')[-1].lower()
+
+
+if __name__ == "__main__":
+    # Example usage
+    processor = EmailChainProcessor()
+    
+    # Process a text file
+    text_results = processor.process_file('email_chain.txt')
+    if text_results:
+        analysis = text_results[0]
+        print("\nAnalysis Results:")
+        print(f"Requester: {analysis.get('requester', 'Not found')}")
+        print(f"Approver: {analysis.get('approver', 'Not found')}")
+        print(f"Status: {analysis.get('status', 'Unknown')}")
+        
+        print("\nParticipants:")
+        for participant in analysis.get('participants', []):
+            print(f"- {participant}")
+    else:
+        print("No results could be extracted from the file.")
