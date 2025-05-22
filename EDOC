@@ -7,7 +7,7 @@ from fuzzywuzzy import fuzz
 import nltk
 from nltk import word_tokenize, pos_tag
 
-# Download these once
+# Download once
 nltk.download('punkt')
 nltk.download('averaged_perceptron_tagger')
 
@@ -131,21 +131,15 @@ def save_summary(parsed_emails, summary_file="summary_output.txt"):
     print(f"✅ Summary saved: {summary_file}")
 
 def analyze_statement_subject(statement):
-    """
-    Uses NLTK to identify subject pronouns and modal verbs in a sentence.
-    Returns 'approver' if subject is 'I' and verb is an approval verb.
-    Returns 'requester' if subject is 'you' with a modal verb like 'can', 'could'.
-    """
     tokens = word_tokenize(statement)
     pos_tags = pos_tag(tokens)
 
     for i, (word, tag) in enumerate(pos_tags):
         word_lower = word.lower()
-        if word_lower in {"approve", "agree", "proceed"}:
+        if word_lower in {"approve", "agreed", "proceed"}:
             if i > 0 and pos_tags[i-1][0].lower() == "i":
                 return "approver"
         elif word_lower in {"review", "approve", "look"}:
-            # Look for pattern like "can you approve"
             if i > 1 and pos_tags[i-2][0].lower() in {"can", "could", "would"} and pos_tags[i-1][0].lower() == "you":
                 return "requester"
 
