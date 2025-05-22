@@ -1,11 +1,11 @@
-def _process_text_file(self, file_path: str) -> List[Dict]:
-    """Process a text file with basic encoding fallback"""
-    try:
-        # First try UTF-8
-        with open(file_path, 'r', encoding='utf-8') as f:
-            email_content = f.read()
-    except UnicodeDecodeError:
-        # Fall back to Windows-1252 (common for Outlook emails)
-        with open(file_path, 'r', encoding='windows-1252') as f:
-            email_content = f.read()
-    return self.analyze_email_chain(email_content)
+Processing text file...
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+<ipython-input-3-1047b082c881> in <module>
+    250     print("Processing text file...")
+    251     text_results = processor.process_file(r'C:\Users\2011747\Desktop\TEST\email.txt')
+--> 252     print(f"Requester: {text_results[0]['requester']}")
+    253     print(f"Approver: {text_results[0]['approver']}")
+    254     print(f"Status: {text_results[0]['status']}")
+
+KeyError: 0
