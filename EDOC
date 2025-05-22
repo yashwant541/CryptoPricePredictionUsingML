@@ -3,14 +3,11 @@ import csv
 import sys
 import os
 from datetime import datetime
+from fuzzywuzzy import fuzz
 
 def split_emails(raw_text):
-    # Pattern to split emails - starts with "From: " and is followed by headers
     parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
-    
-    # Handle the first chunk if it doesn't begin with "From:"
     if not parts[0].strip().lower().startswith("from:"):
-        # Treat first chunk as latest email
         first = parts.pop(0)
         parts = [first] + parts
     return parts
@@ -30,14 +27,43 @@ def parse_date_time(date_str):
         return date_str.strip(), ""
 
 def extract_body(email):
-    # Attempt to extract everything after the headers
     split_point = re.search(r"\n\s*\n", email)
     if split_point:
         return email[split_point.end():].strip()
     return ""
 
+def find_matching_statement(email_body, keywords, threshold=80):
+    sentences = re.split(r'(?<=[.!?])\s+', email_body.strip())
+    exact_matches = []
+    fuzzy_matches = []
+
+    for sentence in sentences:
+        clean_sentence = sentence.strip().lower()
+        for kw in keywords:
+            if kw in clean_sentence:
+                exact_matches.append(sentence.strip())
+            elif fuzz.partial_ratio(kw, clean_sentence) >= threshold:
+                fuzzy_matches.append((sentence.strip(), kw, fuzz.partial_ratio(kw, clean_sentence)))
+
+    if exact_matches:
+        return "; ".join(exact_matches), "exact"
+    elif fuzzy_matches:
+        best_match = max(fuzzy_matches, key=lambda x: x[2])
+        return best_match[0], "fuzzy"
+    else:
+        return "", ""
+
 def parse_email_chain(text):
     email_chunks = split_emails(text)
+
+    approval_keywords = [
+        "approved", "looks good", "go ahead", "i'm fine", "agree", "sounds good",
+        "please proceed", "okay", "ok", "fine with me", "noted", "approved by me"
+    ]
+    request_keywords = [
+        "please review", "can you approve", "requesting", "need your approval",
+        "could you review", "seeking approval", "for your review", "your input"
+    ]
 
     parsed = []
     for i, email in enumerate(email_chunks):
@@ -51,6 +77,9 @@ def parse_email_chain(text):
         date, time = parse_date_time(date_raw)
         body = extract_body(email)
 
+        approval_statement, approval_type = find_matching_statement(body, approval_keywords)
+        request_statement, request_type = find_matching_statement(body, request_keywords)
+
         parsed.append({
             "Email Sequence": i + 1,
             "Sender": sender,
@@ -59,6 +88,10 @@ def parse_email_chain(text):
             "bcc": bcc,
             "subject": subject,
             "email body": body,
+            "approval statement": approval_statement,
+            "approval match type": approval_type,
+            "request statement": request_statement,
+            "request match type": request_type,
             "date": date,
             "time": time
         })
@@ -100,13 +133,11 @@ def identify_requester_approver(parsed_emails):
     approver = ""
     requester = ""
 
-    # Look for approver from latest to oldest
     for email in parsed_emails:
         if any(k in email["email body"].lower() for k in approval_keywords):
             approver = email["Sender"]
             break
 
-    # Requester is the first person who is not the approver
     for email in reversed(parsed_emails):
         if email["Sender"] != approver:
             requester = email["Sender"]
