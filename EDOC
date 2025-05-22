@@ -7,7 +7,7 @@ from fuzzywuzzy import fuzz
 import nltk
 from nltk import word_tokenize, pos_tag
 
-# Download required NLTK data once (you can comment out after first run)
+# Download required NLTK data once (comment out after first run)
 nltk.download('punkt')
 nltk.download('averaged_perceptron_tagger')
 
@@ -64,11 +64,13 @@ def find_matching_statement(email_body, keywords, threshold=80):
         return "", ""
 
 # Keywords for approval and request detection
+# Put "approved" and similar more specific words before ambiguous "approval"
 APPROVER_KEYWORDS = [
-    "approve", "approved", "approval", "grant", "granted", "authorize", 
+    "approved", "approve", "grant", "granted", "authorize", 
     "authorized", "confirm", "confirmed", "accept", "accepted", "endorse", 
     "endorsed", "agree", "agreed", "looks good", "go ahead", "i'm fine", 
-    "sounds good", "please proceed", "okay", "ok", "fine with me", "noted"
+    "sounds good", "please proceed", "okay", "ok", "fine with me", "noted",
+    "approval"  # added last because it's ambiguous
 ]
 
 REQUESTER_KEYWORDS = [
@@ -170,12 +172,14 @@ def calculate_role_scores(parsed_emails):
         def keyword_score(text, keywords):
             score = 0
             for kw in keywords:
+                # Boost "approved" keywords higher than ambiguous "approval"
+                boost = 5 if kw in ["approved", "approve", "granted", "grant", "authorized", "authorize"] else 4
                 if kw in text:
-                    score += 4
+                    score += boost
                 else:
                     ratio = fuzz.partial_ratio(kw, text)
                     if ratio >= 90:
-                        score += 3
+                        score += boost - 1
                     elif ratio >= 80:
                         score += 1
             return score
@@ -204,8 +208,11 @@ def identify_requester_approver(parsed_emails):
     if not parsed_emails:
         return "", ""
     
+    first_sender = parsed_emails[0]["Sender"]
+    total_emails = len(parsed_emails)
+    
     # Special case: If exactly 2 emails, assign roles based on date order
-    if len(parsed_emails) == 2:
+    if total_emails == 2:
         try:
             date1 = datetime.strptime(parsed_emails[0]["date"], "%Y-%m-%d").date()
             date2 = datetime.strptime(parsed_emails[1]["date"], "%Y-%m-%d").date()
@@ -215,20 +222,38 @@ def identify_requester_approver(parsed_emails):
         if date1 and date2 and date1 < date2:
             requester = parsed_emails[0]["Sender"]
             approver = parsed_emails[1]["Sender"]
+            # Ensure first sender is never approver
+            if approver == first_sender:
+                # Swap if first sender is approver - assign next best approver later
+                approver = ""
             return requester, approver
     
     scores = calculate_role_scores(parsed_emails)
     
-    approver = max(scores.items(), key=lambda x: x[1]["approver"])[0]
-    requester = max(scores.items(), key=lambda x: x[1]["requester"])[0]
+    # Sort approvers by score descending
+    sorted_approvers = sorted(scores.items(), key=lambda x: x[1]["approver"], reverse=True)
+    # Sort requesters by score descending
+    sorted_requesters = sorted(scores.items(), key=lambda x: x[1]["requester"], reverse=True)
     
-    # Avoid same person as both roles, if so pick second highest requester
-    if approver == requester:
-        sorted_requesters = sorted(scores.items(), key=lambda x: x[1]["requester"], reverse=True)
-        for r in sorted_requesters:
-            if r[0] != approver:
-                requester = r[0]
-                break
+    # Pick top approver who is NOT the first sender
+    approver = None
+    for candidate, role_scores in sorted_approvers:
+        if candidate != first_sender:
+            approver = candidate
+            break
+    # If all candidates are first sender (rare), fallback to top approver anyway
+    if approver is None:
+        approver = sorted_approvers[0][0]
+    
+    # Pick top requester who is not approver
+    requester = None
+    for candidate, role_scores in sorted_requesters:
+        if candidate != approver:
+            requester = candidate
+            break
+    # If no different requester found, fallback to top requester anyway
+    if requester is None:
+        requester = sorted_requesters[0][0]
     
     return requester, approver
 
