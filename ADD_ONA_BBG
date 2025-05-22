@@ -1,92 +1,161 @@
-import nltk
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize, sent_tokenize
-import os
 import re
+import spacy
+from collections import defaultdict
 
-# Optional: Set custom nltk data path if needed
-# nltk.data.path.append("C:/Users/2011747/nltk_data")  # Adjust path if offline
+# Load spaCy model
+nlp = spacy.load("en_core_web_sm")
 
-# Ensure required NLTK data is available
-def ensure_nltk_resources():
-    try:
-        nltk.data.find("tokenizers/punkt")
-    except LookupError:
-        nltk.download("punkt")
-    try:
-        nltk.data.find("corpora/stopwords")
-    except LookupError:
-        nltk.download("stopwords")
+# Keywords for intent classification
+REQUEST_KEYWORDS = {
+    "please approve", "need your approval", "request approval",
+    "can you approve", "approval required", "kindly approve", "awaiting your approval"
+}
+APPROVE_KEYWORDS = {
+    "i approve", "approved", "approval granted",
+    "happy to approve", "i accept", "accepted", "approved by me", "approval received"
+}
 
-ensure_nltk_resources()
+def classify_intent(text):
+    text_lower = text.lower()
+    for phrase in REQUEST_KEYWORDS:
+        if phrase in text_lower:
+            return "request"
+    for phrase in APPROVE_KEYWORDS:
+        if phrase in text_lower:
+            return "approve"
+    return "neutral"
 
-# Load stopwords
-stop_words = set(stopwords.words("english"))
+def extract_names(text):
+    doc = nlp(text)
+    return [ent.text for ent in doc.ents if ent.label_ == "PERSON"]
 
-# Role detection using sentence-level intent matching
-def detect_role(email_text):
-    requester_phrases = [
-        "please approve", "kindly approve", "need your approval", "can you approve",
-        "requesting your approval", "once you approve", "seeking your approval",
-        "awaiting your approval", "please provide approval", "your approval is required"
-    ]
+def parse_emails_from_text(email_text):
+    """
+    Parses emails from a raw email chain text based on "From:" delimiter.
+    Returns a list of dicts: [{sender, timestamp, body}, ...]
+    """
+    emails_raw = re.split(r'\nFrom:\s', email_text)
+    emails = []
 
-    approver_phrases = [
-        "i approve", "approved", "i'm happy to approve", "i have approved",
-        "go ahead", "you may proceed", "you are good to go", "looks good", "approval granted"
-    ]
+    for email_raw in emails_raw:
+        if not email_raw.strip():
+            continue
 
-    requester_score = 0
-    approver_score = 0
+        # Try to extract sender and date from the first lines
+        lines = email_raw.strip().split('\n')
+        
+        sender = "Unknown Sender"
+        timestamp = None
+        body_lines = []
 
-    sentences = sent_tokenize(email_text.lower())
+        # Heuristic: first line likely has sender email/name
+        # Format example: "alice@example.com Wed, 20 May 2025 10:00:00 +0000"
+        sender_line = lines[0].strip()
+        sender_match = re.match(r'([\w\.\-\+]+@[\w\.\-]+)', sender_line)
+        if sender_match:
+            sender = sender_match.group(1)
+            # Remaining lines might have date or body
+            body_lines = lines[1:]
+        else:
+            # If no email found, treat first line as sender name or fallback
+            sender = sender_line
+            body_lines = lines[1:]
 
-    for sent in sentences:
-        if any(phrase in sent for phrase in requester_phrases):
-            requester_score += 1
-        if any(phrase in sent for phrase in approver_phrases):
-            approver_score += 1
+        # Look for date in the next line (optional)
+        if body_lines:
+            date_line = body_lines[0].strip()
+            # crude check for date presence (year)
+            if re.search(r'\d{4}', date_line):
+                timestamp = date_line
+                body_lines = body_lines[1:]
 
-    if requester_score > 0 and approver_score == 0:
-        return "Requester"
-    elif approver_score > 0 and requester_score == 0:
-        return "Approver"
-    elif requester_score > 0 and approver_score > 0:
-        return "Mixed (both requester and approver phrases found)"
+        # Remaining lines form body
+        body = "\n".join(body_lines).strip()
+
+        emails.append({
+            "sender": sender,
+            "timestamp": timestamp,
+            "body": body
+        })
+
+    return emails
+
+def identify_roles(email_thread):
+    """
+    Identify requester and approver roles in email_thread (list of emails).
+    """
+    # Step 1: Default requester - first email sender
+    requester_candidate = email_thread[0]["sender"] if email_thread else None
+
+    # Track intent counts by sender
+    approver_candidates = defaultdict(int)
+    request_candidates = defaultdict(int)
+
+    # Collect all senders to help resolve unknown cases
+    all_senders = set()
+
+    for email in email_thread:
+        sender = email["sender"]
+        all_senders.add(sender)
+        body = email["body"]
+
+        intent = classify_intent(body)
+
+        if intent == "approve":
+            approver_candidates[sender] += 1
+        elif intent == "request":
+            request_candidates[sender] += 1
+
+    # Decide requester
+    if request_candidates:
+        requester = max(request_candidates, key=request_candidates.get)
     else:
-        return "Role unclear"
+        requester = requester_candidate
 
-# Preprocess and extract main content
-def extract_keywords(text):
-    text = re.sub(r'\s+', ' ', text)
-    words = word_tokenize(text.lower())
-    keywords = [w for w in words if w.isalnum() and w not in stop_words]
-    return keywords
+    # Decide approver
+    possible_approvers = {k: v for k, v in approver_candidates.items() if k != requester}
+    if possible_approvers:
+        approver = max(possible_approvers, key=possible_approvers.get)
+    else:
+        # fallback: any sender other than requester
+        approver = None
+        for sender in all_senders:
+            if sender != requester:
+                approver = sender
+                break
 
-# Read and parse email
-def parse_email(file_path):
-    with open(file_path, "r", encoding="utf-8") as f:
-        email_text = f.read()
+    explanation = (
+        f"Requester identified as '{requester}' because they sent the majority of request emails.\n"
+        f"Approver identified as '{approver}' because they sent the majority of approval emails.\n"
+        f"Request counts by sender: {dict(request_candidates)}\n"
+        f"Approval counts by sender: {dict(approver_candidates)}"
+    )
 
-    print("\n=== Email Content ===\n")
-    print(email_text)
+    return {
+        "requester": requester,
+        "approver": approver,
+        "explanation": explanation
+    }
 
-    print("\n=== Keywords Extracted ===")
-    keywords = extract_keywords(email_text)
-    print(keywords)
 
-    print("\n=== Detected Role ===")
-    role = detect_role(email_text)
-    print(role)
-
-# Run parser on provided file
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) != 2:
-        print("Usage: python email_parser.py <email_file.txt>")
-    else:
-        email_file = sys.argv[1]
-        if os.path.exists(email_file):
-            parse_email(email_file)
-        else:
-            print(f"File not found: {email_file}")
+
+    if len(sys.argv) < 2:
+        print("Usage: python email_role_identifier.py <email_chain.txt>")
+        sys.exit(1)
+
+    filename = sys.argv[1]
+
+    with open(filename, "r", encoding="utf-8") as f:
+        email_chain_text = f.read()
+
+    emails = parse_emails_from_text(email_chain_text)
+
+    print(f"Parsed {len(emails)} emails from chain.\n")
+
+    roles = identify_roles(emails)
+
+    print("Requester:", roles["requester"])
+    print("Approver:", roles["approver"])
+    print("\nExplanation:\n", roles["explanation"])
