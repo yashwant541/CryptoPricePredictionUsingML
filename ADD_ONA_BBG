@@ -1,28 +1,69 @@
 (base) C:\Users\2011747\Desktop\TEST>python email_parser.py email2.txt
+[nltk_data] Error loading stopwords: <urlopen error [Errno 11001]
+[nltk_data]     getaddrinfo failed>
+[nltk_data] Error loading punkt: <urlopen error [Errno 11001]
+[nltk_data]     getaddrinfo failed>
 Traceback (most recent call last):
-  File "email_parser.py", line 6, in <module>
-    from nltk.corpus import stopwords
-  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\__init__.py", line 142, in <module>
-    from nltk.chunk import *
-  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\chunk\__init__.py", line 157, in <module>
-    from nltk.chunk.api import ChunkParserI
-  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\chunk\api.py", line 13, in <module>
-    from nltk.parse import ParserI
-  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\parse\__init__.py", line 100, in <module>
-    from nltk.parse.transitionparser import TransitionParser
-  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\parse\transitionparser.py", line 19, in <module>
-    from sklearn.datasets import load_svmlight_file
-  File "C:\ProgramData\Anaconda3\lib\site-packages\sklearn\datasets\__init__.py", line 22, in <module>
-    from ._twenty_newsgroups import fetch_20newsgroups
-  File "C:\ProgramData\Anaconda3\lib\site-packages\sklearn\datasets\_twenty_newsgroups.py", line 45, in <module>
-    from ..feature_extraction.text import CountVectorizer
-  File "C:\ProgramData\Anaconda3\lib\site-packages\sklearn\feature_extraction\__init__.py", line 9, in <module>
-    from .image import img_to_graph, grid_to_graph
-  File "C:\ProgramData\Anaconda3\lib\site-packages\sklearn\feature_extraction\image.py", line 172, in <module>
-    dtype=np.int):
-  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\numpy\__init__.py", line 305, in __getattr__
-    raise AttributeError(__former_attrs__[attr])
-AttributeError: module 'numpy' has no attribute 'int'.
-`np.int` was a deprecated alias for the builtin `int`. To avoid this error in existing code, use `int` by itself. Doing this will not modify any behavior and is safe. When replacing `np.int`, you may wish to use e.g. `np.int64` or `np.int32` to specify the precision. If you wish to review your current use, check the release note link for additional information.
-The aliases was originally deprecated in NumPy 1.20; for more details and guidance see the original release note at:
-    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations
+  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\util.py", line 83, in __load
+    root = nltk.data.find("{}/{}".format(self.subdir, zip_name))
+  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\data.py", line 585, in find
+    raise LookupError(resource_not_found)
+LookupError:
+**********************************************************************
+  Resource ←[93mstopwords←[0m not found.
+  Please use the NLTK Downloader to obtain the resource:
+
+  ←[31m>>> import nltk
+  >>> nltk.download('stopwords')
+  ←[0m
+  For more information see: https://www.nltk.org/data.html
+
+  Attempted to load ←[93mcorpora/stopwords.zip/stopwords/←[0m
+
+  Searched in:
+    - 'C:\\Users\\2011747/nltk_data'
+    - 'C:\\ProgramData\\Anaconda3\\nltk_data'
+    - 'C:\\ProgramData\\Anaconda3\\share\\nltk_data'
+    - 'C:\\ProgramData\\Anaconda3\\lib\\nltk_data'
+    - 'C:\\Users\\2011747\\AppData\\Roaming\\nltk_data'
+    - 'C:\\nltk_data'
+    - 'D:\\nltk_data'
+    - 'E:\\nltk_data'
+**********************************************************************
+
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "email_parser.py", line 21, in <module>
+    stop_words = set(stopwords.words('english'))
+  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\util.py", line 120, in __getattr__
+    self.__load()
+  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\util.py", line 85, in __load
+    raise e
+  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\util.py", line 80, in __load
+    root = nltk.data.find("{}/{}".format(self.subdir, self.__name))
+  File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\data.py", line 585, in find
+    raise LookupError(resource_not_found)
+LookupError:
+**********************************************************************
+  Resource ←[93mstopwords←[0m not found.
+  Please use the NLTK Downloader to obtain the resource:
+
+  ←[31m>>> import nltk
+  >>> nltk.download('stopwords')
+  ←[0m
+  For more information see: https://www.nltk.org/data.html
+
+  Attempted to load ←[93mcorpora/stopwords←[0m
+
+  Searched in:
+    - 'C:\\Users\\2011747/nltk_data'
+    - 'C:\\ProgramData\\Anaconda3\\nltk_data'
+    - 'C:\\ProgramData\\Anaconda3\\share\\nltk_data'
+    - 'C:\\ProgramData\\Anaconda3\\lib\\nltk_data'
+    - 'C:\\Users\\2011747\\AppData\\Roaming\\nltk_data'
+    - 'C:\\nltk_data'
+    - 'D:\\nltk_data'
+    - 'E:\\nltk_data'
+**********************************************************************
