@@ -1,66 +1,44 @@
-import numpy as np
-np.int = int
-np.float = float
-
-import nltk
 import re
 import csv
 import sys
 import os
 from datetime import datetime
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-import string
-from dateutil.parser import parse as parse_date
-
-# Setup NLTK path (optional: update as needed)
-nltk.data.path.append(r'C:\Users\2011747\nltk_library')
-
-# Ensure stopwords are available
-try:
-    stop_words = set(stopwords.words('english'))
-except LookupError:
-    nltk.download('stopwords')
-    nltk.download('punkt')
-    stop_words = set(stopwords.words('english'))
 
 def split_emails(raw_text):
+    # Pattern to split emails - starts with "From: " and is followed by headers
     parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
+    
+    # Handle the first chunk if it doesn't begin with "From:"
     if not parts[0].strip().lower().startswith("from:"):
+        # Treat first chunk as latest email
         first = parts.pop(0)
         parts = [first] + parts
     return parts
 
 def extract_field(email, field):
-    # Handles multiline fields until next known header or end
-    pattern = rf"{field}:(.*?)(?=\n\S+:|\Z)"
-    match = re.search(pattern, email, re.IGNORECASE | re.DOTALL)
-    return match.group(1).strip().replace('\n', ' ') if match else ""
+    pattern = rf"{field}:(.*)"
+    match = re.search(pattern, email, re.IGNORECASE)
+    return match.group(1).strip() if match else ""
 
 def parse_date_time(date_str):
     if not date_str:
         return "", ""
     try:
-        dt = parse_date(date_str.strip(), fuzzy=True)
+        dt = datetime.strptime(date_str.strip(), "%A, %B %d, %Y %I:%M %p")
         return dt.date().isoformat(), dt.time().isoformat()
     except:
         return date_str.strip(), ""
 
 def extract_body(email):
+    # Attempt to extract everything after the headers
     split_point = re.search(r"\n\s*\n", email)
     if split_point:
         return email[split_point.end():].strip()
-    return email.strip()
-
-def tokenize_body(text):
-    text = text.lower()
-    text = text.translate(str.maketrans('', '', string.punctuation))
-    words = word_tokenize(text)
-    cleaned = [w for w in words if w not in stop_words and w.isalpha()]
-    return cleaned
+    return ""
 
 def parse_email_chain(text):
     email_chunks = split_emails(text)
+
     parsed = []
     for i, email in enumerate(email_chunks):
         sender = extract_field(email, "From")
@@ -72,7 +50,6 @@ def parse_email_chain(text):
 
         date, time = parse_date_time(date_raw)
         body = extract_body(email)
-        tokens = tokenize_body(body)
 
         parsed.append({
             "Email Sequence": i + 1,
@@ -82,16 +59,17 @@ def parse_email_chain(text):
             "bcc": bcc,
             "subject": subject,
             "email body": body,
-            "tokens": ", ".join(tokens),
             "date": date,
             "time": time
         })
+
     return parsed
 
 def save_to_csv(parsed_emails, output_file="parsed_emails.csv"):
     if not parsed_emails:
         print("❌ No emails found.")
         return
+
     fieldnames = parsed_emails[0].keys()
     with open(output_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -111,39 +89,28 @@ def save_summary(parsed_emails, summary_file="summary_output.txt"):
             f.write(f"Date: {email['date']} {email['time']}\n")
             f.write("Body:\n")
             f.write(email["email body"] + "\n")
-            f.write("Tokens:\n")
-            f.write(email["tokens"] + "\n")
     print(f"✅ Summary saved: {summary_file}")
 
-approval_keywords = [
-    "approved", "accepted", "authorized", "endorsed", "sanctioned", "confirmed",
-    "looks good", "go ahead", "proceed", "continue", "carry on", "move forward",
-    "approve", "please proceed", "okay with me", "works for me", "noted", "acknowledged",
-    "approved by me", "authorized by me"
-]
-
-request_keywords = [
-    "please approve", "can you approve", "requesting approval", "need your approval",
-    "seeking approval", "approval needed", "kindly approve", "requesting your review",
-    "for your review", "approval request"
-]
-
 def identify_requester_approver(parsed_emails):
+    approval_keywords = [
+        "approved", "looks good", "go ahead", "i'm fine", "agree", "sounds good",
+        "please proceed", "okay", "ok", "fine with me", "noted", "approved by me"
+    ]
+
     approver = ""
     requester = ""
 
+    # Look for approver from latest to oldest
     for email in parsed_emails:
-        token_text = email["tokens"].lower()
-        if any(k in token_text for k in approval_keywords):
+        if any(k in email["email body"].lower() for k in approval_keywords):
             approver = email["Sender"]
-        if any(k in token_text for k in request_keywords):
-            requester = email["Sender"]
+            break
 
-    if not requester:
-        for email in reversed(parsed_emails):
-            if email["Sender"] != approver:
-                requester = email["Sender"]
-                break
+    # Requester is the first person who is not the approver
+    for email in reversed(parsed_emails):
+        if email["Sender"] != approver:
+            requester = email["Sender"]
+            break
 
     return requester, approver
 
@@ -167,8 +134,6 @@ def main():
         text = f.read()
 
     parsed_emails = parse_email_chain(text)
-    print(f"📩 Parsed {len(parsed_emails)} emails in the chain.")
-    print("🧠 Analyzing tokens and detecting roles...")
 
     requester, approver = identify_requester_approver(parsed_emails)
 
