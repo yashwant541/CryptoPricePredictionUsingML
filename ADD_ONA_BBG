@@ -1,3 +1,29 @@
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize, sent_tokenize
+import os
+import re
+
+# Optional: Set custom nltk data path if needed
+# nltk.data.path.append("C:/Users/2011747/nltk_data")  # Adjust path if offline
+
+# Ensure required NLTK data is available
+def ensure_nltk_resources():
+    try:
+        nltk.data.find("tokenizers/punkt")
+    except LookupError:
+        nltk.download("punkt")
+    try:
+        nltk.data.find("corpora/stopwords")
+    except LookupError:
+        nltk.download("stopwords")
+
+ensure_nltk_resources()
+
+# Load stopwords
+stop_words = set(stopwords.words("english"))
+
+# Role detection using sentence-level intent matching
 def detect_role(email_text):
     requester_phrases = [
         "please approve", "kindly approve", "need your approval", "can you approve",
@@ -7,7 +33,7 @@ def detect_role(email_text):
 
     approver_phrases = [
         "i approve", "approved", "i'm happy to approve", "i have approved",
-        "go ahead", "you may proceed", "you are good to go", "looks good"
+        "go ahead", "you may proceed", "you are good to go", "looks good", "approval granted"
     ]
 
     requester_score = 0
@@ -29,3 +55,38 @@ def detect_role(email_text):
         return "Mixed (both requester and approver phrases found)"
     else:
         return "Role unclear"
+
+# Preprocess and extract main content
+def extract_keywords(text):
+    text = re.sub(r'\s+', ' ', text)
+    words = word_tokenize(text.lower())
+    keywords = [w for w in words if w.isalnum() and w not in stop_words]
+    return keywords
+
+# Read and parse email
+def parse_email(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        email_text = f.read()
+
+    print("\n=== Email Content ===\n")
+    print(email_text)
+
+    print("\n=== Keywords Extracted ===")
+    keywords = extract_keywords(email_text)
+    print(keywords)
+
+    print("\n=== Detected Role ===")
+    role = detect_role(email_text)
+    print(role)
+
+# Run parser on provided file
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 2:
+        print("Usage: python email_parser.py <email_file.txt>")
+    else:
+        email_file = sys.argv[1]
+        if os.path.exists(email_file):
+            parse_email(email_file)
+        else:
+            print(f"File not found: {email_file}")
