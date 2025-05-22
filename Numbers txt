@@ -1,12 +1,89 @@
-000039423
-000434343
-000042525
-000028529
-000283952
-000024242
-000023245
-003435324
-000024242
-000023232
-002526262
-062627274
+Overview
+This script processes email chains to identify key participants (requesters and approvers) based on linguistic patterns and contextual analysis. It's particularly focused on approval workflows in email communications.
+
+Key Components
+1. Dependencies
+Uses regex (re), CSV handling, system operations
+
+Leverages NLP tools (NLTK for tokenization/POS tagging)
+
+Uses fuzzy string matching (fuzzywuzzy) for approximate keyword matching
+
+Handles datetime parsing
+
+2. Core Functionality
+Email Parsing:
+Splits email chains into individual messages using split_emails()
+
+Extracts headers (From, To, Subject, etc.) with extract_field()
+
+Parses dates into structured format with parse_date_time()
+
+Separates email bodies from headers with extract_body()
+
+Role Identification:
+Uses weighted keyword lists (APPROVER_KEYWORDS, REQUESTER_KEYWORDS)
+
+Implements pronoun pattern matching (PRONOUN_PATTERNS)
+
+Scores participants based on multiple factors:
+
+Keyword presence (50%)
+
+Temporal position in thread (20%)
+
+Explicit approval statements
+
+Special rules (first sender can't be approver)
+
+Analysis Features:
+Identifies the most likely requester and approver
+
+Provides detailed scoring breakdowns
+
+Handles fuzzy matching for partial keyword matches
+
+Cleans participant names by removing email addresses
+
+3. Output Generation
+Saves parsed emails to CSV (parsed_emails.csv)
+
+Generates detailed summary text file (summary_output.txt)
+
+Creates user role mapping CSV (Email_Users.csv)
+
+4. Special Rules
+First email sender is automatically disqualified from being approver
+
+Gives bonus points for first explicit approval in thread
+
+Uses fallback logic if no clear approver is found
+
+Adjusts weights based on email position in thread
+
+Usage
+Run the script with an input text file containing email chain:
+python email_parse.py input_email.txt
+
+Strengths
+Comprehensive keyword matching (exact + fuzzy)
+
+Multi-factor scoring system
+
+Detailed output for analysis
+
+Handles messy email formatting
+
+Clear rules for edge cases
+
+Potential Improvements
+Could add more sophisticated NLP analysis
+
+Might benefit from machine learning approach
+
+Could handle more email formats
+
+Might add threading analysis
+
+This script provides a robust framework for analyzing approval workflows in email communications, with particular attention to identifying the key decision-makers in the process.
+
