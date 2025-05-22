@@ -198,17 +198,91 @@ def identify_requester_approver(parsed_emails):
     if not parsed_emails:
         return "", ""
     
+    # Handle 2-email case directly
+    if len(parsed_emails) == 2:
+        try:
+            date1 = datetime.strptime(parsed_emails[0]["date"], "%Y-%m-%d").date()
+            date2 = datetime.strptime(parsed_emails[1]["date"], "%Y-%m-%d").date()
+            
+            if date1 < date2:
+                return parsed_emails[0]["Sender"], parsed_emails[1]["Sender"]
+            else:
+                return parsed_emails[1]["Sender"], parsed_emails[0]["Sender"]
+        except:
+            # If date parsing fails, fall through to regular processing
+            pass
+    
+    # For chains with more than 2 emails
+    sender_timelines = {}
+    for email in parsed_emails:
+        sender = email["Sender"]
+        try:
+            email_date = datetime.strptime(email["date"], "%Y-%m-%d").date()
+        except:
+            continue
+            
+        if sender not in sender_timelines:
+            sender_timelines[sender] = {
+                "min_date": email_date,
+                "max_date": email_date,
+                "email_count": 1
+            }
+        else:
+            if email_date < sender_timelines[sender]["min_date"]:
+                sender_timelines[sender]["min_date"] = email_date
+            if email_date > sender_timelines[sender]["max_date"]:
+                sender_timelines[sender]["max_date"] = email_date
+            sender_timelines[sender]["email_count"] += 1
+    
     role_scores = calculate_role_scores(parsed_emails)
     
-    # Get top approver
-    approver = max(role_scores.items(), key=lambda x: x[1]["approver"])[0]
+    if not role_scores:
+        return "", ""
     
-    # Get top requester (excluding the approver)
-    requester_candidates = {k:v for k,v in role_scores.items() if k != approver}
-    if requester_candidates:
-        requester = max(requester_candidates.items(), key=lambda x: x[1]["requester"])[0]
+    # Get all possible approvers (those with emails before at least one other sender)
+    possible_approvers = []
+    for sender in role_scores.keys():
+        if sender in sender_timelines:
+            for other_sender, other_timeline in sender_timelines.items():
+                if sender != other_sender and sender_timelines[sender]["max_date"] < other_timeline["min_date"]:
+                    possible_approvers.append(sender)
+                    break
+    
+    # Get all possible requesters (those with emails after at least one other sender)
+    possible_requesters = []
+    for sender in role_scores.keys():
+        if sender in sender_timelines:
+            for other_sender, other_timeline in sender_timelines.items():
+                if sender != other_sender and sender_timelines[sender]["min_date"] > other_timeline["max_date"]:
+                    possible_requesters.append(sender)
+                    break
+    
+    # Select approver
+    if possible_approvers:
+        approver_candidates = {k:v for k,v in role_scores.items() if k in possible_approvers}
+        approver = max(approver_candidates.items(), key=lambda x: x[1]["approver"])[0] if approver_candidates else ""
     else:
-        requester = ""
+        approver = max(role_scores.items(), key=lambda x: x[1]["approver"])[0] if role_scores else ""
+    
+    # Select requester (excluding approver)
+    requester_candidates = {k:v for k,v in role_scores.items() if k != approver}
+    if possible_requesters:
+        requester_candidates = {k:v for k,v in requester_candidates.items() if k in possible_requesters}
+    
+    requester = max(requester_candidates.items(), key=lambda x: x[1]["requester"])[0] if requester_candidates else ""
+    
+    # Final validation - requester's last email must be before approver's first email
+    if requester and approver and requester in sender_timelines and approver in sender_timelines:
+        if sender_timelines[requester]["max_date"] >= sender_timelines[approver]["min_date"]:
+            # Find alternative requester that satisfies temporal constraint
+            valid_requesters = {k:v for k,v in role_scores.items() 
+                              if k != approver and 
+                              k in sender_timelines and 
+                              sender_timelines[k]["max_date"] < sender_timelines[approver]["min_date"]}
+            if valid_requesters:
+                requester = max(valid_requesters.items(), key=lambda x: x[1]["requester"])[0]
+            else:
+                requester = ""
     
     return requester, approver
 
