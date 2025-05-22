@@ -1,4 +1,4 @@
-(base) C:\Users\2011747\Desktop\TEST>python email_parser.py email2.txt
+C:\Users\2011747\Desktop\TEST>python email_parser.py email.txt
 [nltk_data] Error loading stopwords: <urlopen error [Errno 11001]
 [nltk_data]     getaddrinfo failed>
 [nltk_data] Error loading punkt: <urlopen error [Errno 11001]
@@ -29,13 +29,14 @@ LookupError:
     - 'C:\\nltk_data'
     - 'D:\\nltk_data'
     - 'E:\\nltk_data'
+    - 'C:\\Users\\2011747\\nltk_library'
 **********************************************************************
 
 
 During handling of the above exception, another exception occurred:
 
 Traceback (most recent call last):
-  File "email_parser.py", line 21, in <module>
+  File "email_parser.py", line 25, in <module>
     stop_words = set(stopwords.words('english'))
   File "C:\ProgramData\Anaconda3\lib\site-packages\nltk\corpus\util.py", line 120, in __getattr__
     self.__load()
@@ -66,4 +67,5 @@ LookupError:
     - 'C:\\nltk_data'
     - 'D:\\nltk_data'
     - 'E:\\nltk_data'
+    - 'C:\\Users\\2011747\\nltk_library'
 **********************************************************************
