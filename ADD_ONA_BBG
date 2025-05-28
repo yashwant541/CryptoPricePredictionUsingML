@@ -1,1 +1,49 @@
-pip install PyPDF2 python-docx pandas
+(base) C:\Users\2011747>pip install PyPDF2 python-docx pandas
+WARNING: Ignoring invalid distribution - (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -atchdog (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -egex (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -ltk (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -mportlib-metadata (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -oblib (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -olorama (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -sspec (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -ywin32-ctypes (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -win32-ctypes (c:\programdata\anaconda3\lib\site-packages)
+Looking in indexes: https://artifactory.global.standardchartered.com/artifactory/api/pypi/pypi/simple
+Requirement already satisfied: PyPDF2 in c:\programdata\anaconda3\lib\site-packages (3.0.1)
+Requirement already satisfied: python-docx in c:\users\2011747\appdata\roaming\python\python38\site-packages (1.1.2)
+Requirement already satisfied: pandas in c:\programdata\anaconda3\lib\site-packages (1.1.3)
+Requirement already satisfied: typing_extensions>=3.10.0.0 in c:\users\2011747\appdata\roaming\python\python38\site-packages (from PyPDF2) (4.12.2)
+Requirement already satisfied: lxml>=3.1.0 in c:\programdata\anaconda3\lib\site-packages (from python-docx) (4.6.1)
+Requirement already satisfied: python-dateutil>=2.7.3 in c:\programdata\anaconda3\lib\site-packages (from pandas) (2.8.1)
+Requirement already satisfied: pytz>=2017.2 in c:\programdata\anaconda3\lib\site-packages (from pandas) (2020.1)
+Requirement already satisfied: numpy>=1.15.4 in c:\users\2011747\appdata\roaming\python\python38\site-packages (from pandas) (1.24.4)
+Requirement already satisfied: six>=1.5 in c:\programdata\anaconda3\lib\site-packages (from python-dateutil>=2.7.3->pandas) (1.15.0)
+WARNING: Error parsing dependencies of pyodbc: Invalid version: '4.0.0-unsupported'
+WARNING: Ignoring invalid distribution - (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -atchdog (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -egex (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -ltk (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -mportlib-metadata (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -oblib (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -olorama (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -sspec (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -ywin32-ctypes (c:\programdata\anaconda3\lib\site-packages)
+WARNING: Ignoring invalid distribution -win32-ctypes (c:\programdata\anaconda3\lib\site-packages)
+ERROR: Exception:
+Traceback (most recent call last):
+  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_internal\cli\base_command.py", line 106, in _run_wrapper
+    status = _inner_run()
+  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_internal\cli\base_command.py", line 97, in _inner_run
+    return self.run(options, args)
+  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_internal\cli\req_command.py", line 67, in wrapper
+    return func(self, options, args)
+  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_internal\commands\install.py", line 484, in run
+    installed_versions[distribution.canonical_name] = distribution.version
+  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_internal\metadata\pkg_resources.py", line 192, in version
+    return parse_version(self._dist.version)
+  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_vendor\packaging\version.py", line 56, in parse
+    return Version(version)
+  File "C:\Users\2011747\AppData\Roaming\Python\Python38\site-packages\pip\_vendor\packaging\version.py", line 202, in __init__
+    raise InvalidVersion(f"Invalid version: {version!r}")
+pip._vendor.packaging.version.InvalidVersion: Invalid version: '4.0.0-unsupported'
