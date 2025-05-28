@@ -45,15 +45,20 @@ def get_file_path(prompt):
 
 def is_not_present(status):
     """Check if status indicates not present"""
-    status = str(status).strip().lower()
-    not_present_indicators = ['×', 'x', 'no', 'absent', '0', 'false', '✗']
-    return status in not_present_indicators
+    if isinstance(status, str):
+        status = status.strip()
+        # Check for multiplication sign (×) and similar characters
+        not_present_chars = ['×', '✗', 'x', 'X']
+        return any(char in status for char in not_present_chars)
+    return False
 
 def is_present(status):
     """Check if status indicates present"""
-    status = str(status).strip().lower()
-    present_indicators = ['✓', 'v', 'yes', 'present', '1', 'true', '✔']
-    return status in present_indicators
+    if isinstance(status, str):
+        status = status.strip()
+        present_chars = ['✓', '✔', 'v', 'V']
+        return any(char in status for char in present_chars)
+    return False
 
 def process_attendance():
     print("\n=== Advanced Attendance Processor ===")
@@ -78,8 +83,8 @@ def process_attendance():
     # Get output file names
     not_present_file = input("\nEnter filename for NOT present users (default: Not_Present.csv): ").strip() or "Not_Present.csv"
     present_file = input("Enter filename for present users (default: Present.csv): ").strip() or "Present.csv"
-    missing_in_user_file = input("Enter filename for users in attendance but not in user list (default: Extra_In_Attendance.csv): ").strip() or "Extra_In_Attendance.csv"
-    missing_in_attendance_file = input("Enter filename for users in user list but not in attendance (default: Missing_In_Attendance.csv): ").strip() or "Missing_In_Attendance.csv"
+    extra_in_attendance_file = input("Enter filename for extra users in attendance (default: Extra_In_Attendance.csv): ").strip() or "Extra_In_Attendance.csv"
+    missing_in_attendance_file = input("Enter filename for missing users in attendance (default: Missing_In_Attendance.csv): ").strip() or "Missing_In_Attendance.csv"
     warning_file = input("Enter filename for warning messages (default: Warnings.txt): ").strip() or "Warnings.txt"
 
     # Initialize data structures
@@ -87,7 +92,7 @@ def process_attendance():
     user_list_names = set()
     warnings = []
     
-    # Process attendance file
+    # Process attendance file with explicit encoding
     try:
         with open(attendance_file, mode='r', encoding='utf-8-sig') as csvfile:
             reader = csv.reader(csvfile)
@@ -95,8 +100,8 @@ def process_attendance():
             for row in reader:
                 if len(row) > max(name_col_att, present_col):
                     name = row[name_col_att].strip()
-                    status = row[present_col].strip()
-                    attendance_data[name] = (status, row)  # Store both status and full row
+                    status = row[present_col]
+                    attendance_data[name] = (status, row)
     except Exception as e:
         print(f"Error reading attendance file: {e}")
         return
@@ -120,7 +125,6 @@ def process_attendance():
                         status, _ = attendance_data[name]
                         if is_not_present(status):
                             not_present_users.append(row)
-                            warnings.append(f"Not Present: {name} (marked with '{status}')")
                         elif is_present(status):
                             present_users.append(row)
                         else:
@@ -139,19 +143,34 @@ def process_attendance():
 
     # Save all output files
     try:
-        # Save present/not present files
-        for data, filename, headers in [
-            (not_present_users, not_present_file, user_headers),
-            (present_users, present_file, user_headers),
-            (missing_in_attendance, missing_in_attendance_file, user_headers),
-            (extra_in_attendance, missing_in_user_file, att_headers)
-        ]:
-            if data:
-                with open(filename, mode='w', encoding='utf-8', newline='') as csvfile:
-                    writer = csv.writer(csvfile)
-                    writer.writerow(headers)
-                    writer.writerows(data)
-
+        # Save not present users
+        if not_present_users:
+            with open(not_present_file, mode='w', encoding='utf-8', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(user_headers)
+                writer.writerows(not_present_users)
+        
+        # Save present users
+        if present_users:
+            with open(present_file, mode='w', encoding='utf-8', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(user_headers)
+                writer.writerows(present_users)
+        
+        # Save missing in attendance
+        if missing_in_attendance:
+            with open(missing_in_attendance_file, mode='w', encoding='utf-8', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(user_headers)
+                writer.writerows(missing_in_attendance)
+        
+        # Save extra in attendance
+        if extra_in_attendance:
+            with open(extra_in_attendance_file, mode='w', encoding='utf-8', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(att_headers)
+                writer.writerows(extra_in_attendance)
+        
         # Save warnings
         if warnings:
             with open(warning_file, mode='w', encoding='utf-8') as f:
@@ -161,7 +180,7 @@ def process_attendance():
         print("\nProcessing complete! Created these files:")
         print(f"- Not present users: {len(not_present_users)} → {not_present_file}")
         print(f"- Present users: {len(present_users)} → {present_file}")
-        print(f"- Extra users in attendance: {len(extra_in_attendance)} → {missing_in_user_file}")
+        print(f"- Extra users in attendance: {len(extra_in_attendance)} → {extra_in_attendance_file}")
         print(f"- Missing users in attendance: {len(missing_in_attendance)} → {missing_in_attendance_file}")
         if warnings:
             print(f"- Warnings: {len(warnings)} → {warning_file}")
