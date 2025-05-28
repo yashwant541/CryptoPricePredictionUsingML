@@ -1,1 +1,166 @@
-×
+import csv
+import os
+
+def display_columns_and_select(file_path, file_type):
+    """Display columns and let user select columns"""
+    try:
+        with open(file_path, mode='r', encoding='utf-8-sig') as csvfile:
+            reader = csv.reader(csvfile)
+            headers = next(reader)
+            
+            print(f"\n{file_type} file columns:")
+            for i, header in enumerate(headers, 1):
+                print(f"{i}. {header}")
+            
+            name_col = get_column_selection("Enter the NUMBER for the Name/User column: ", len(headers))
+            
+            present_col = None
+            if "attendance" in file_type.lower():
+                present_col = get_column_selection("Enter the NUMBER for the Present/Attendance column: ", len(headers))
+            
+            return headers, name_col-1, present_col-1 if present_col else None
+    
+    except Exception as e:
+        print(f"Error reading {file_type} file: {e}")
+        return None, None, None
+
+def get_column_selection(prompt, max_columns):
+    """Get valid column number from user"""
+    while True:
+        try:
+            selection = int(input(prompt).strip())
+            if 1 <= selection <= max_columns:
+                return selection
+            print(f"Please enter a number between 1 and {max_columns}")
+        except ValueError:
+            print("Please enter a valid number")
+
+def get_file_path(prompt):
+    """Get valid file path from user"""
+    while True:
+        file_path = input(prompt).strip()
+        if os.path.isfile(file_path):
+            return file_path
+        print(f"Error: File '{file_path}' not found. Please try again.")
+
+def process_attendance():
+    print("\n=== Advanced Attendance Processor ===")
+    print("This tool will:\n"
+          "- Separate present/not present users (× marks as not present)\n"
+          "- Identify users missing from either list\n"
+          "- Create warning files for data issues\n")
+    
+    # Get file paths
+    user_list_file = get_file_path("Enter path to user list CSV file: ")
+    attendance_file = get_file_path("Enter path to attendance CSV file: ")
+    
+    # Get column selections
+    user_headers, name_col_user, _ = display_columns_and_select(user_list_file, "User list")
+    if name_col_user is None:
+        return
+    
+    att_headers, name_col_att, present_col = display_columns_and_select(attendance_file, "Attendance")
+    if name_col_att is None or present_col is None:
+        return
+    
+    # Get output file names
+    not_present_file = input("\nEnter filename for NOT present users (default: Not_Present.csv): ").strip() or "Not_Present.csv"
+    present_file = input("Enter filename for present users (default: Present.csv): ").strip() or "Present.csv"
+    missing_in_user_file = input("Enter filename for users in attendance but not in user list (default: Missing_In_User_List.csv): ").strip() or "Missing_In_User_List.csv"
+    missing_in_attendance_file = input("Enter filename for users in user list but not in attendance (default: Missing_In_Attendance.csv): ").strip() or "Missing_In_Attendance.csv"
+    warning_file = input("Enter filename for warning messages (default: Warnings.txt): ").strip() or "Warnings.txt"
+
+    # Initialize data structures
+    attendance_data = {}
+    user_list_names = set()
+    warnings = []
+    
+    # Process attendance file
+    try:
+        with open(attendance_file, mode='r', encoding='utf-8-sig') as csvfile:
+            reader = csv.reader(csvfile)
+            next(reader)  # Skip header
+            for row in reader:
+                if len(row) > max(name_col_att, present_col):
+                    name = row[name_col_att].strip()
+                    status = row[present_col].strip()
+                    attendance_data[name] = (status, row)  # Store both status and full row
+    except Exception as e:
+        print(f"Error reading attendance file: {e}")
+        return
+
+    # Process user list and categorize
+    not_present_users = []
+    present_users = []
+    missing_in_attendance = []
+    
+    try:
+        with open(user_list_file, mode='r', encoding='utf-8-sig') as csvfile:
+            reader = csv.reader(csvfile)
+            user_headers = next(reader)
+            
+            for row in reader:
+                if len(row) > name_col_user:
+                    name = row[name_col_user].strip()
+                    user_list_names.add(name)
+                    
+                    if name in attendance_data:
+                        status, _ = attendance_data[name]
+                        if status == '×':  # × character means not present
+                            not_present_users.append(row)
+                            warnings.append(f"Warning: User '{name}' marked as not present (×)")
+                        else:
+                            present_users.append(row)
+                    else:
+                        missing_in_attendance.append(row)
+    except Exception as e:
+        print(f"Error reading user list file: {e}")
+        return
+
+    # Find users in attendance but not in user list
+    missing_in_user_list = []
+    for name, (status, row) in attendance_data.items():
+        if name not in user_list_names:
+            missing_in_user_list.append(row)
+
+    # Save all output files
+    try:
+        # Save present/not present files
+        for data, filename, headers in [
+            (not_present_users, not_present_file, user_headers),
+            (present_users, present_file, user_headers),
+            (missing_in_attendance, missing_in_attendance_file, user_headers)
+        ]:
+            if data:
+                with open(filename, mode='w', encoding='utf-8', newline='') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(headers)
+                    writer.writerows(data)
+
+        # Save missing in user list file (uses attendance file headers)
+        if missing_in_user_list:
+            with open(missing_in_user_file, mode='w', encoding='utf-8', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(att_headers)
+                writer.writerows(missing_in_user_list)
+
+        # Save warnings
+        if warnings:
+            with open(warning_file, mode='w', encoding='utf-8') as f:
+                f.write("\n".join(warnings))
+
+        # Print summary
+        print("\nProcessing complete! Created these files:")
+        print(f"- Not present users: {len(not_present_users)} → {not_present_file}")
+        print(f"- Present users: {len(present_users)} → {present_file}")
+        print(f"- Users missing in user list: {len(missing_in_user_list)} → {missing_in_user_file}")
+        print(f"- Users missing in attendance: {len(missing_in_attendance)} → {missing_in_attendance_file}")
+        if warnings:
+            print(f"- Warnings: {len(warnings)} → {warning_file}")
+
+    except Exception as e:
+        print(f"\nError saving output files: {e}")
+
+if __name__ == "__main__":
+    process_attendance()
+    input("\nPress Enter to exit...")
