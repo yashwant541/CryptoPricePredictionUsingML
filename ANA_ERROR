@@ -14,7 +14,6 @@ def extract_tables_from_pdf(pdf_path):
             text = page.extract_text()
             
             # Simple table detection - looks for text with consistent spacing
-            # This is a basic approach - for more robust extraction consider camelot or pdfplumber
             lines = text.split('\n')
             
             # Check if we have at least 2 lines with similar spacing (potential table)
@@ -48,25 +47,35 @@ def extract_tables_from_docx(docx_path):
         return ["No tables found in Word document"]
     return tables
 
+def get_file_type(prompt):
+    """Helper function to get file type with validation"""
+    while True:
+        file_type = input(prompt).lower().strip()
+        if file_type in ['docx', 'pdf']:
+            return file_type
+        print("Invalid input. Please enter 'docx' or 'pdf'.")
+
 def main():
     print("Table Extraction Tool")
     print("---------------------\n")
     
-    # Ask for file type
-    file_type = input("Are your files Word documents (.docx) or PDFs (.pdf)? Enter 'docx' or 'pdf': ").lower().strip()
-    while file_type not in ['docx', 'pdf']:
-        print("Invalid input. Please enter 'docx' or 'pdf'.")
-        file_type = input("Are your files Word documents (.docx) or PDFs (.pdf)? ").lower().strip()
+    # Get file paths and types
+    file1_path = input("Enter path to first file: ").strip()
+    file1_type = get_file_type(f"What type is {file1_path}? Enter 'docx' or 'pdf': ")
     
-    # Get file paths
-    file1 = input("Enter path to first file: ").strip()
-    file2 = input("Enter path to second file: ").strip()
+    file2_path = input("Enter path to second file: ").strip()
+    file2_type = get_file_type(f"What type is {file2_path}? Enter 'docx' or 'pdf': ")
     
     # Process files
     print("\nProcessing files...\n")
     
-    for i, file_path in enumerate([file1, file2], 1):
-        print(f"=== Results for File {i}: {file_path} ===")
+    files = [
+        (file1_path, file1_type),
+        (file2_path, file2_type)
+    ]
+    
+    for i, (file_path, file_type) in enumerate(files, 1):
+        print(f"=== Results for File {i}: {file_path} ({file_type.upper()}) ===")
         
         try:
             if file_type == 'docx':
@@ -78,6 +87,8 @@ def main():
                 print(table)
                 print("-" * 50)
                 
+        except FileNotFoundError:
+            print(f"Error: File not found at {file_path}")
         except Exception as e:
             print(f"Error processing {file_path}: {str(e)}")
         
