@@ -1,138 +1,87 @@
-import os
-import csv
-import nltk
+import PyPDF2
 from docx import Document
-from PyPDF2 import PdfReader
-from tkinter import Tk, filedialog
-from typing import List
+import pandas as pd
+import sys
 
-# Download required NLTK data
-nltk.download('punkt')
-nltk.download('averaged_perceptron_tagger')
-nltk.download('maxent_ne_chunker')
-nltk.download('words')
-
-def select_file() -> str:
-    """Open a file dialog to select a document"""
-    root = Tk()
-    root.withdraw()  # Hide the main window
-    file_path = filedialog.askopenfilename(
-        title="Select a document",
-        filetypes=[("PDF Files", "*.pdf"), ("Word Documents", "*.docx"), ("All Files", "*.*")]
-    )
-    root.destroy()
-    return file_path
-
-def extract_text_from_pdf(file_path: str) -> str:
-    """Extract text from a PDF file"""
-    text = ""
-    with open(file_path, 'rb') as file:
-        reader = PdfReader(file)
-        for page in reader.pages:
-            text += page.extract_text() + "\n"
-    return text
-
-def extract_text_from_word(file_path: str) -> str:
-    """Extract text from a Word document"""
-    doc = Document(file_path)
-    return "\n".join([para.text for para in doc.paragraphs])
-
-def extract_names(text: str) -> List[str]:
-    """Use NLTK to extract person names from text"""
-    sentences = nltk.sent_tokenize(text)
-    names = []
-    
-    for sentence in sentences:
-        words = nltk.word_tokenize(sentence)
-        tagged = nltk.pos_tag(words)
-        entities = nltk.ne_chunk(tagged)
+def extract_tables_from_pdf(pdf_path):
+    """Extract tables from a PDF file"""
+    tables = []
+    with open(pdf_path, 'rb') as file:
+        reader = PyPDF2.PdfReader(file)
         
-        for entity in entities:
-            if isinstance(entity, nltk.tree.Tree):
-                if entity.label() == 'PERSON':
-                    name = ' '.join([word for word, tag in entity.leaves()])
-                    # Filter for names with at least two parts
-                    if len(name.split()) >= 2:
-                        names.append(name)
+        for page_num in range(len(reader.pages)):
+            page = reader.pages[page_num]
+            text = page.extract_text()
+            
+            # Simple table detection - looks for text with consistent spacing
+            # This is a basic approach - for more robust extraction consider camelot or pdfplumber
+            lines = text.split('\n')
+            
+            # Check if we have at least 2 lines with similar spacing (potential table)
+            if len(lines) >= 2:
+                # Simple heuristic: if multiple lines have the same number of 'spaces' in similar positions
+                tables.append(f"Table found on page {page_num + 1}:\n" + "\n".join(lines[:10]) + "\n...")
     
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_names = [name for name in names if not (name in seen or seen.add(name))]
-    
-    return unique_names
+    if not tables:
+        return ["No tables detected in PDF (note: simple text extraction may miss complex tables)"]
+    return tables
 
-def verify_names(names: List[str]) -> List[str]:
-    """Prompt user to verify each name"""
-    verified_names = []
+def extract_tables_from_docx(docx_path):
+    """Extract tables from a Word document"""
+    doc = Document(docx_path)
+    tables = []
     
-    print("\nName Verification Process:")
-    print("--------------------------")
-    for i, name in enumerate(names, 1):
-        while True:
-            response = input(f"Is '{name}' a correct name to include? (y/n): ").strip().lower()
-            if response in ['y', 'yes']:
-                verified_names.append(name)
-                break
-            elif response in ['n', 'no']:
-                break
-            else:
-                print("Please enter 'y' or 'n'.")
+    for i, table in enumerate(doc.tables):
+        table_data = []
+        
+        for row in table.rows:
+            row_data = []
+            for cell in row.cells:
+                row_data.append(cell.text.strip())
+            table_data.append(row_data)
+        
+        # Convert to pandas DataFrame for better display
+        df = pd.DataFrame(table_data)
+        tables.append(f"Table {i + 1}:\n{df.to_string(index=False, header=False)}\n")
     
-    return verified_names
-
-def save_to_csv(names: List[str], output_path: str):
-    """Save the names to a CSV file"""
-    with open(output_path, 'w', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        writer.writerow(["Name"])
-        for name in names:
-            writer.writerow([name])
-    print(f"\nSuccessfully saved {len(names)} names to {output_path}")
+    if not tables:
+        return ["No tables found in Word document"]
+    return tables
 
 def main():
-    print("Document Name Extractor (NLTK Version)")
-    print("--------------------------------------")
+    print("Table Extraction Tool")
+    print("---------------------\n")
     
-    # Select file
-    file_path = select_file()
-    if not file_path:
-        print("No file selected. Exiting.")
-        return
+    # Ask for file type
+    file_type = input("Are your files Word documents (.docx) or PDFs (.pdf)? Enter 'docx' or 'pdf': ").lower().strip()
+    while file_type not in ['docx', 'pdf']:
+        print("Invalid input. Please enter 'docx' or 'pdf'.")
+        file_type = input("Are your files Word documents (.docx) or PDFs (.pdf)? ").lower().strip()
     
-    # Determine file type
-    file_ext = os.path.splitext(file_path)[1].lower()
+    # Get file paths
+    file1 = input("Enter path to first file: ").strip()
+    file2 = input("Enter path to second file: ").strip()
     
-    # Extract text based on file type
-    try:
-        if file_ext == '.pdf':
-            text = extract_text_from_pdf(file_path)
-        elif file_ext == '.docx':
-            text = extract_text_from_word(file_path)
-        else:
-            print("Unsupported file format. Please use PDF or Word document.")
-            return
-    except Exception as e:
-        print(f"Error reading file: {e}")
-        return
+    # Process files
+    print("\nProcessing files...\n")
     
-    # Extract names
-    names = extract_names(text)
-    if not names:
-        print("No names found in the document.")
-        return
-    
-    print(f"\nFound {len(names)} potential names in the document.")
-    
-    # Verify names
-    verified_names = verify_names(names)
-    
-    if not verified_names:
-        print("No names were verified. Exiting without creating CSV.")
-        return
-    
-    # Save to CSV
-    output_path = os.path.join(os.path.dirname(file_path), "extracted_names.csv")
-    save_to_csv(verified_names, output_path)
+    for i, file_path in enumerate([file1, file2], 1):
+        print(f"=== Results for File {i}: {file_path} ===")
+        
+        try:
+            if file_type == 'docx':
+                tables = extract_tables_from_docx(file_path)
+            else:
+                tables = extract_tables_from_pdf(file_path)
+            
+            for table in tables:
+                print(table)
+                print("-" * 50)
+                
+        except Exception as e:
+            print(f"Error processing {file_path}: {str(e)}")
+        
+        print("\n")
 
 if __name__ == "__main__":
     main()
