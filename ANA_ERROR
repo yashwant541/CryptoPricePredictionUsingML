@@ -1,29 +1,10 @@
-import PyPDF2
+import os
+import tempfile
 from docx import Document
 import pandas as pd
-import sys
-
-def extract_tables_from_pdf(pdf_path):
-    """Extract tables from a PDF file"""
-    tables = []
-    with open(pdf_path, 'rb') as file:
-        reader = PyPDF2.PdfReader(file)
-        
-        for page_num in range(len(reader.pages)):
-            page = reader.pages[page_num]
-            text = page.extract_text()
-            
-            # Simple table detection - looks for text with consistent spacing
-            lines = text.split('\n')
-            
-            # Check if we have at least 2 lines with similar spacing (potential table)
-            if len(lines) >= 2:
-                # Simple heuristic: if multiple lines have the same number of 'spaces' in similar positions
-                tables.append(f"Table found on page {page_num + 1}:\n" + "\n".join(lines[:10]) + "\n...")
-    
-    if not tables:
-        return ["No tables detected in PDF (note: simple text extraction may miss complex tables)"]
-    return tables
+import pdf2docx
+from pdf2docx import Converter
+import comtypes.client
 
 def extract_tables_from_docx(docx_path):
     """Extract tables from a Word document"""
@@ -44,8 +25,38 @@ def extract_tables_from_docx(docx_path):
         tables.append(f"Table {i + 1}:\n{df.to_string(index=False, header=False)}\n")
     
     if not tables:
-        return ["No tables found in Word document"]
+        return ["No tables found in document"]
     return tables
+
+def convert_pdf_to_docx(pdf_path):
+    """Convert PDF to DOCX using pdf2docx"""
+    with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as temp_file:
+        temp_docx_path = temp_file.name
+    
+    cv = Converter(pdf_path)
+    cv.convert(temp_docx_path, start=0, end=None)
+    cv.close()
+    
+    return temp_docx_path
+
+def extract_tables_from_pdf(pdf_path):
+    """Extract tables from PDF by first converting to DOCX"""
+    try:
+        # Convert PDF to temporary DOCX
+        temp_docx_path = convert_pdf_to_docx(pdf_path)
+        
+        # Extract tables from the temporary DOCX
+        tables = extract_tables_from_docx(temp_docx_path)
+        
+        # Clean up temporary file
+        os.unlink(temp_docx_path)
+        
+        if tables == ["No tables found in document"]:
+            return ["No tables detected in PDF (conversion didn't reveal tables)"]
+        return tables
+        
+    except Exception as e:
+        return [f"Error processing PDF: {str(e)}"]
 
 def get_file_type(prompt):
     """Helper function to get file type with validation"""
@@ -56,15 +67,16 @@ def get_file_type(prompt):
         print("Invalid input. Please enter 'docx' or 'pdf'.")
 
 def main():
-    print("Table Extraction Tool")
-    print("---------------------\n")
+    print("Advanced Table Extraction Tool")
+    print("------------------------------\n")
+    print("Note: PDF files will be converted to DOCX for better table extraction\n")
     
     # Get file paths and types
     file1_path = input("Enter path to first file: ").strip()
-    file1_type = get_file_type(f"What type is {file1_path}? Enter 'docx' or 'pdf': ")
+    file1_type = get_file_type(f"What type is '{file1_path}'? Enter 'docx' or 'pdf': ")
     
     file2_path = input("Enter path to second file: ").strip()
-    file2_type = get_file_type(f"What type is {file2_path}? Enter 'docx' or 'pdf': ")
+    file2_type = get_file_type(f"What type is '{file2_path}'? Enter 'docx' or 'pdf': ")
     
     # Process files
     print("\nProcessing files...\n")
@@ -83,9 +95,12 @@ def main():
             else:
                 tables = extract_tables_from_pdf(file_path)
             
-            for table in tables:
-                print(table)
-                print("-" * 50)
+            if not tables:
+                print("No tables found in document")
+            else:
+                for table in tables:
+                    print(table)
+                    print("-" * 50)
                 
         except FileNotFoundError:
             print(f"Error: File not found at {file_path}")
@@ -95,4 +110,13 @@ def main():
         print("\n")
 
 if __name__ == "__main__":
+    # Check if required packages are installed
+    try:
+        import pdf2docx
+        import comtypes
+    except ImportError:
+        print("\nERROR: Required packages not installed. Please run:")
+        print("pip install pdf2docx comtypes python-docx pandas")
+        sys.exit(1)
+        
     main()
