@@ -8,27 +8,25 @@ import sys
 from pathlib import Path
 
 def extract_tables_from_docx(docx_path):
-    """Extract tables from a Word document"""
+    """Extract tables from a Word document with special character preservation"""
     doc = Document(docx_path)
     tables = []
     
-    for i, table in enumerate(doc.tables):
+    for table in doc.tables:
         table_data = []
-        
         for row in table.rows:
             row_data = []
             for cell in row.cells:
-                row_data.append(cell.text.strip())
+                # Preserve special characters by using proper text extraction
+                cell_text = cell.text.replace('\n', ' ').strip()
+                row_data.append(cell_text)
             table_data.append(row_data)
-        
-        # Convert to pandas DataFrame
-        df = pd.DataFrame(table_data)
-        tables.append(df)
+        tables.append(pd.DataFrame(table_data))
     
     return tables
 
 def convert_pdf_to_docx(pdf_path):
-    """Convert PDF to DOCX using pdf2docx"""
+    """Convert PDF to DOCX using pdf2docx with special character support"""
     with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as temp_file:
         temp_docx_path = temp_file.name
     
@@ -39,33 +37,18 @@ def convert_pdf_to_docx(pdf_path):
     return temp_docx_path
 
 def extract_tables_from_pdf(pdf_path):
-    """Extract tables from PDF by first converting to DOCX"""
+    """Extract tables from PDF with special character preservation"""
     try:
-        # Convert PDF to temporary DOCX
         temp_docx_path = convert_pdf_to_docx(pdf_path)
-        
-        # Extract tables from the temporary DOCX
         tables = extract_tables_from_docx(temp_docx_path)
-        
-        # Clean up temporary file
         os.unlink(temp_docx_path)
-        
         return tables
-        
     except Exception as e:
         print(f"Error processing PDF: {str(e)}", file=sys.stderr)
         return []
 
-def get_file_type(prompt):
-    """Helper function to get file type with validation"""
-    while True:
-        file_type = input(prompt).lower().strip()
-        if file_type in ['docx', 'pdf']:
-            return file_type
-        print("Invalid input. Please enter 'docx' or 'pdf'.")
-
 def save_tables_to_csv(tables, output_folder, base_name):
-    """Save all tables to CSV files in the output folder"""
+    """Save tables to CSV with UTF-8 encoding for special characters"""
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
     
@@ -73,77 +56,60 @@ def save_tables_to_csv(tables, output_folder, base_name):
     for i, table in enumerate(tables, 1):
         csv_path = os.path.join(output_folder, f"{base_name}_table_{i}.csv")
         try:
-            table.to_csv(csv_path, index=False, header=False)
+            # Save with UTF-8 encoding and proper escaping
+            table.to_csv(csv_path, index=False, header=False, 
+                         encoding='utf-8-sig', escapechar='\\')
             saved_files.append(csv_path)
         except Exception as e:
             print(f"Error saving table {i}: {str(e)}", file=sys.stderr)
     
     return saved_files
 
-def process_file(file_path, file_type, output_base_dir="extracted_tables"):
-    """Process a single file and save its tables"""
-    file_name = Path(file_path).stem
-    output_folder = os.path.join(output_base_dir, file_name)
-    
-    print(f"\nProcessing {file_type.upper()} file: {file_path}")
-    
-    try:
-        if file_type == 'docx':
-            tables = extract_tables_from_docx(file_path)
-        else:
-            tables = extract_tables_from_pdf(file_path)
-        
-        if not tables:
-            print(f"No tables found in {file_path}")
-            return []
-        
-        saved_files = save_tables_to_csv(tables, output_folder, file_name)
-        print(f"Saved {len(saved_files)} tables to {output_folder}")
-        return saved_files
-        
-    except Exception as e:
-        print(f"Error processing {file_path}: {str(e)}", file=sys.stderr)
-        return []
-
 def main():
-    print("Advanced Table Extraction with CSV Export")
-    print("-----------------------------------------\n")
-    print("Note: PDF files will be converted to DOCX for better table extraction")
-    print("      All tables will be saved as CSV files in 'extracted_tables' folder\n")
+    print("Table Extraction with Special Character Support")
+    print("✓ Checks and ✕ crosses will be preserved in output")
+    print("-----------------------------------------------\n")
     
     # Get file paths and types
     file1_path = input("Enter path to first file: ").strip()
-    file1_type = get_file_type(f"What type is '{file1_path}'? Enter 'docx' or 'pdf': ")
+    file1_type = input(f"What type is '{file1_path}'? (docx/pdf): ").lower().strip()
+    while file1_type not in ['docx', 'pdf']:
+        print("Please enter 'docx' or 'pdf'")
+        file1_type = input(f"What type is '{file1_path}'? ").lower().strip()
     
     file2_path = input("Enter path to second file: ").strip()
-    file2_type = get_file_type(f"What type is '{file2_path}'? Enter 'docx' or 'pdf': ")
+    file2_type = input(f"What type is '{file2_path}'? (docx/pdf): ").lower().strip()
+    while file2_type not in ['docx', 'pdf']:
+        print("Please enter 'docx' or 'pdf'")
+        file2_type = input(f"What type is '{file2_path}'? ").lower().strip()
     
     # Process files
-    print("\nStarting extraction...")
+    output_dir = "extracted_tables"
+    print(f"\nProcessing files... Output will be in '{output_dir}' folder\n")
     
-    files = [
-        (file1_path, file1_type),
-        (file2_path, file2_type)
-    ]
-    
-    all_saved_files = []
-    for file_path, file_type in files:
-        saved_files = process_file(file_path, file_type)
-        all_saved_files.extend(saved_files)
-    
-    print("\nExtraction complete!")
-    print(f"\nSummary of extracted tables:")
-    for file in all_saved_files:
-        print(f"- {file}")
+    for file_path, file_type in [(file1_path, file1_type), (file2_path, file2_type)]:
+        try:
+            file_name = Path(file_path).stem
+            output_folder = os.path.join(output_dir, file_name)
+            
+            tables = extract_tables_from_pdf(file_path) if file_type == 'pdf' else extract_tables_from_docx(file_path)
+            
+            if not tables:
+                print(f"⚠ No tables found in {file_path}")
+                continue
+                
+            saved_files = save_tables_to_csv(tables, output_folder, file_name)
+            print(f"✓ Saved {len(tables)} tables from {file_name} ({file_type})")
+            print(f"   Location: {output_folder}\n")
+            
+        except Exception as e:
+            print(f"✕ Error processing {file_path}: {str(e)}\n", file=sys.stderr)
 
 if __name__ == "__main__":
-    # Check if required packages are installed
     try:
         import pdf2docx
-        import pandas
+        main()
     except ImportError:
         print("\nERROR: Required packages not installed. Please run:")
         print("pip install pdf2docx python-docx pandas")
         sys.exit(1)
-        
-    main()
