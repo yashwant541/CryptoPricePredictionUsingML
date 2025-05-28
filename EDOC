@@ -1,281 +1,126 @@
-import re
 import csv
-import sys
 import os
-from datetime import datetime
-from fuzzywuzzy import fuzz
-import nltk
-from nltk import word_tokenize, pos_tag
 
-# Download required NLTK data once (comment out after first run)
-nltk.download('punkt')
-nltk.download('averaged_perceptron_tagger')
-
-def split_emails(raw_text):
-    parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
-    # Sometimes the first chunk may not start with From:
-    if parts and not parts[0].strip().lower().startswith("from:"):
-        first = parts.pop(0)
-        parts = [first] + parts
-    return parts
-
-def extract_field(email, field):
-    pattern = rf"{field}:(.*)"
-    match = re.search(pattern, email, re.IGNORECASE)
-    return match.group(1).strip() if match else ""
-
-def parse_date_time(date_str):
-    if not date_str:
-        return "", ""
+def display_columns_and_select(file_path, file_type):
+    """Display columns and let user select Name and Present columns"""
     try:
-        dt = datetime.strptime(date_str.strip(), "%A, %B %d, %Y %I:%M %p")
-        return dt.date().isoformat(), dt.time().isoformat()
-    except Exception:
-        return date_str.strip(), ""
-
-def extract_body(email):
-    # Assume body starts after first empty line following headers
-    split_point = re.search(r"\n\s*\n", email)
-    if split_point:
-        return email[split_point.end():].strip()
-    return ""
-
-def find_matching_statement(email_body, keywords, threshold=80):
-    sentences = re.split(r'(?<=[.!?])\s+', email_body.strip())
-    exact_matches = []
-    fuzzy_matches = []
-
-    for sentence in sentences:
-        clean_sentence = sentence.lower()
-        for kw in keywords:
-            if kw in clean_sentence:
-                exact_matches.append(sentence.strip())
-            else:
-                ratio = fuzz.partial_ratio(kw, clean_sentence)
-                if ratio >= threshold:
-                    fuzzy_matches.append((sentence.strip(), kw, ratio))
-
-    if exact_matches:
-        return "; ".join(exact_matches), "exact"
-    elif fuzzy_matches:
-        best_match = max(fuzzy_matches, key=lambda x: x[2])
-        return best_match[0], "fuzzy"
-    else:
-        return "", ""
-
-# Keywords for approval and request detection
-# Put "approved" and similar more specific words before ambiguous "approval"
-APPROVER_KEYWORDS = [
-    "approved", "approve", "grant", "granted", "authorize", 
-    "authorized", "confirm", "confirmed", "accept", "accepted", "endorse", 
-    "endorsed", "agree", "agreed", "looks good", "go ahead", "i'm fine", 
-    "sounds good", "please proceed", "okay", "ok", "fine with me", "noted",
-    "approval"  # added last because it's ambiguous
-]
-
-REQUESTER_KEYWORDS = [
-    "request", "requested", "seek", "seeking", "require", "required", 
-    "ask", "asked", "submit", "submitted", "apply", "applied", "petition",
-    "please review", "can you approve", "need your approval", "could you review",
-    "seeking approval", "for your review", "your input"
-]
-
-PRONOUN_PATTERNS = [
-    (r"\byou\b.*\bapprove\b", "approver"),
-    (r"\byour\b.*\bapproval\b", "approver"),
-    (r"\bplease\b.*\bapprove\b", "approver"),
-    (r"\bi\b.*\brequest\b", "requester"),
-    (r"\bwe\b.*\brequest\b", "requester"),
-    (r"\bplease\b.*\breview\b", "approver")
-]
-
-def parse_email_chain(text):
-    email_chunks = split_emails(text)
+        with open(file_path, mode='r', encoding='utf-8-sig') as csvfile:
+            reader = csv.reader(csvfile)
+            headers = next(reader)  # Get header row
+            
+            print(f"\n{file_type} file columns:")
+            for i, header in enumerate(headers, 1):
+                print(f"{i}. {header}")
+            
+            # Select Name column
+            name_col = get_column_selection("Enter the NUMBER for the Name/User column: ", len(headers))
+            
+            # Select Present column (only for attendance file)
+            present_col = None
+            if "attendance" in file_type.lower():
+                present_col = get_column_selection("Enter the NUMBER for the Present/Attendance column: ", len(headers))
+            
+            return headers, name_col-1, present_col-1 if present_col else None  # Convert to 0-based index
     
-    parsed = []
-    for i, email in enumerate(email_chunks):
-        sender = extract_field(email, "From")
-        receiver = extract_field(email, "To")
-        cc = extract_field(email, "Cc")
-        bcc = extract_field(email, "Bcc")
-        subject = extract_field(email, "Subject")
-        date_raw = extract_field(email, "Sent")
+    except Exception as e:
+        print(f"Error reading {file_type} file: {e}")
+        return None, None, None
 
-        date, time = parse_date_time(date_raw)
-        body = extract_body(email)
-
-        approval_statement, approval_type = find_matching_statement(body, APPROVER_KEYWORDS)
-        request_statement, request_type = find_matching_statement(body, REQUESTER_KEYWORDS)
-
-        parsed.append({
-            "Email Sequence": i + 1,
-            "Sender": sender,
-            "Receiver": receiver,
-            "cc": cc,
-            "bcc": bcc,
-            "subject": subject,
-            "email body": body,
-            "approval statement": approval_statement,
-            "approval match type": approval_type,
-            "request statement": request_statement,
-            "request match type": request_type,
-            "date": date,
-            "time": time
-        })
-
-    return parsed
-
-def save_to_csv(parsed_emails, output_file="parsed_emails.csv"):
-    if not parsed_emails:
-        print("❌ No emails found.")
-        return
-
-    fieldnames = parsed_emails[0].keys()
-    with open(output_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in parsed_emails:
-            writer.writerow(row)
-    print(f"✅ CSV saved: {output_file}")
-
-def save_summary(parsed_emails, summary_file="summary_output.txt"):
-    with open(summary_file, "w", encoding="utf-8") as f:
-        for email in parsed_emails:
-            f.write(f"\n--- Email #{email['Email Sequence']} ---\n")
-            f.write(f"From: {email['Sender']}\n")
-            f.write(f"To: {email['Receiver']}\n")
-            f.write(f"CC: {email['cc']}\n")
-            f.write(f"Subject: {email['subject']}\n")
-            f.write(f"Date: {email['date']} {email['time']}\n")
-            f.write("Body:\n")
-            f.write(email["email body"] + "\n")
-    print(f"✅ Summary saved: {summary_file}")
-
-def calculate_role_scores(parsed_emails):
-    role_scores = {}
-    total_emails = len(parsed_emails)
-    
-    for i, email in enumerate(parsed_emails):
-        sender = email["Sender"]
-        body = email["email body"].lower()
-        subject = email["subject"].lower()
-        
-        if sender not in role_scores:
-            role_scores[sender] = {"approver": 0, "requester": 0}
-        
-        # Temporal scoring (30% total) - older emails more likely requester, newer more likely approver
-        position_score = (total_emails - i) / total_emails  # 1 for first email, down to ~0 for last
-        role_scores[sender]["approver"] += 30 * (1 - position_score)
-        role_scores[sender]["requester"] += 30 * position_score
-        
-        # Keyword matching (40% total) - priority to exact matches with higher scores
-        def keyword_score(text, keywords):
-            score = 0
-            for kw in keywords:
-                # Boost "approved" keywords higher than ambiguous "approval"
-                boost = 5 if kw in ["approved", "approve", "granted", "grant", "authorized", "authorize"] else 4
-                if kw in text:
-                    score += boost
-                else:
-                    ratio = fuzz.partial_ratio(kw, text)
-                    if ratio >= 90:
-                        score += boost - 1
-                    elif ratio >= 80:
-                        score += 1
-            return score
-        
-        role_scores[sender]["approver"] += keyword_score(body, APPROVER_KEYWORDS)
-        role_scores[sender]["requester"] += keyword_score(body, REQUESTER_KEYWORDS)
-        
-        # Pronoun analysis (20%)
-        for pattern, role in PRONOUN_PATTERNS:
-            if re.search(pattern, body, re.IGNORECASE):
-                role_scores[sender][role] += 6
-        
-        # Structural analysis (15%)
-        if any(title in body for title in ["manager", "director", "vp", "head of"]):
-            role_scores[sender]["approver"] += 7
-        
-        # Attachment/subject analysis (10%)
-        if "request" in subject or "request" in body:
-            role_scores[sender]["requester"] += 7
-        if "approval" in subject or "approval" in body:
-            role_scores[sender]["approver"] += 7
-    
-    return role_scores
-
-def identify_requester_approver(parsed_emails):
-    if not parsed_emails:
-        return "", ""
-    
-    first_sender = parsed_emails[0]["Sender"]
-    total_emails = len(parsed_emails)
-    
-    # Special case: If exactly 2 emails, assign roles based on date order
-    if total_emails == 2:
+def get_column_selection(prompt, max_columns):
+    """Get valid column number from user"""
+    while True:
         try:
-            date1 = datetime.strptime(parsed_emails[0]["date"], "%Y-%m-%d").date()
-            date2 = datetime.strptime(parsed_emails[1]["date"], "%Y-%m-%d").date()
-        except Exception:
-            date1 = date2 = None
-        
-        if date1 and date2 and date1 < date2:
-            requester = parsed_emails[0]["Sender"]
-            approver = parsed_emails[1]["Sender"]
-            # Ensure first sender is never approver
-            if approver == first_sender:
-                # Swap if first sender is approver - assign next best approver later
-                approver = ""
-            return requester, approver
-    
-    scores = calculate_role_scores(parsed_emails)
-    
-    # Sort approvers by score descending
-    sorted_approvers = sorted(scores.items(), key=lambda x: x[1]["approver"], reverse=True)
-    # Sort requesters by score descending
-    sorted_requesters = sorted(scores.items(), key=lambda x: x[1]["requester"], reverse=True)
-    
-    # Pick top approver who is NOT the first sender
-    approver = None
-    for candidate, role_scores in sorted_approvers:
-        if candidate != first_sender:
-            approver = candidate
-            break
-    # If all candidates are first sender (rare), fallback to top approver anyway
-    if approver is None:
-        approver = sorted_approvers[0][0]
-    
-    # Pick top requester who is not approver
-    requester = None
-    for candidate, role_scores in sorted_requesters:
-        if candidate != approver:
-            requester = candidate
-            break
-    # If no different requester found, fallback to top requester anyway
-    if requester is None:
-        requester = sorted_requesters[0][0]
-    
-    return requester, approver
+            selection = int(input(prompt).strip())
+            if 1 <= selection <= max_columns:
+                return selection
+            print(f"Please enter a number between 1 and {max_columns}")
+        except ValueError:
+            print("Please enter a valid number")
 
-def main(input_file):
-    if not os.path.exists(input_file):
-        print(f"❌ File not found: {input_file}")
+def process_attendance():
+    print("\n=== CSV Attendance Processor ===")
+    print("This tool will separate users based on attendance marks\n")
+    
+    # Get user list file
+    user_list_file = get_file_path("Enter path to user list CSV file: ")
+    user_headers, name_col_user, _ = display_columns_and_select(user_list_file, "User list")
+    if name_col_user is None:
         return
     
-    with open(input_file, "r", encoding="utf-8") as f:
-        email_text = f.read()
+    # Get attendance file
+    attendance_file = get_file_path("Enter path to attendance CSV file: ")
+    att_headers, name_col_att, present_col = display_columns_and_select(attendance_file, "Attendance")
+    if name_col_att is None or present_col is None:
+        return
     
-    parsed_emails = parse_email_chain(email_text)
-    save_to_csv(parsed_emails)
-    save_summary(parsed_emails)
+    # Get output file names
+    not_present_file = input("\nEnter output filename for NOT present users (default: Not_Present.csv): ").strip() or "Not_Present.csv"
+    present_file = input("Enter output filename for present users (default: Present.csv): ").strip() or "Present.csv"
+
+    # Process files
+    try:
+        # Read attendance data
+        attendance_data = {}
+        with open(attendance_file, mode='r', encoding='utf-8-sig') as csvfile:
+            reader = csv.reader(csvfile)
+            next(reader)  # Skip header
+            for row in reader:
+                if len(row) > max(name_col_att, present_col):
+                    name = row[name_col_att].strip()
+                    status = row[present_col].strip().lower()
+                    attendance_data[name] = status
+        
+        # Process user list
+        not_present_users = []
+        present_users = []
+        missing_in_attendance = []
+        
+        with open(user_list_file, mode='r', encoding='utf-8-sig') as csvfile:
+            reader = csv.reader(csvfile)
+            headers = next(reader)
+            
+            for row in reader:
+                if len(row) > name_col_user:
+                    name = row[name_col_user].strip()
+                    if name in attendance_data:
+                        status = attendance_data[name]
+                        if status in ['✗', 'x', 'no', 'absent', '0']:
+                            not_present_users.append(row)
+                        elif status in ['✓', 'v', 'yes', 'present', '1']:
+                            present_users.append(row)
+                        else:
+                            print(f"Warning: Unknown status '{status}' for {name}")
+                    else:
+                        missing_in_attendance.append(name)
+        
+        # Save results
+        for data, filename in [(not_present_users, not_present_file), 
+                             (present_users, present_file)]:
+            if data:
+                with open(filename, mode='w', encoding='utf-8', newline='') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(headers)
+                    writer.writerows(data)
+        
+        # Print summary
+        print("\nProcessing complete!")
+        print(f"- Not present users: {len(not_present_users)} saved to {not_present_file}")
+        print(f"- Present users: {len(present_users)} saved to {present_file}")
+        if missing_in_attendance:
+            print(f"\nWarning: {len(missing_in_attendance)} users not found in attendance file")
+            print("First 5 missing users:", ", ".join(missing_in_attendance[:5]))
     
-    requester, approver = identify_requester_approver(parsed_emails)
-    print("\n🔍 Identified Roles:")
-    print(f"Requester: {requester}")
-    print(f"Approver: {approver}")
+    except Exception as e:
+        print(f"\nError during processing: {e}")
+
+def get_file_path(prompt):
+    """Get valid file path from user"""
+    while True:
+        file_path = input(prompt).strip()
+        if os.path.isfile(file_path):
+            return file_path
+        print(f"Error: File '{file_path}' not found. Please try again.")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python email_parse.py <input_email_text_file>")
-    else:
-        main(sys.argv[1])
+    process_attendance()
+    input("\nPress Enter to exit...")
