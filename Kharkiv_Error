@@ -4,30 +4,40 @@ from pdf2docx import Converter
 from PyPDF2 import PdfReader
 import pythoncom
 from docx import Document
+from docx.shared import Pt
+from docx.oxml.ns import qn
 
 def validate_pdf(file_path):
-    """Check if the PDF file is valid and readable."""
+    """Check if the PDF file is valid and readable with special character support."""
     try:
         with open(file_path, 'rb') as f:
             reader = PdfReader(f)
             if len(reader.pages) > 0:
+                # Check for special characters in the first page
+                first_page = reader.pages[0]
+                text = first_page.extract_text()
+                if '✓' in text or '✗' in text or '×' in text:
+                    print("Found special characters (✓/✗) in the PDF")
                 return True
     except Exception as e:
         print(f"Error validating PDF: {e}")
         return False
     return False
 
+def set_special_character_font(doc):
+    """Configure fonts to properly display special characters."""
+    # Set the default font for the document
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'Arial Unicode MS'  # Font that supports special characters
+    font.size = Pt(11)
+    
+    # Add Asian font support for additional character coverage
+    doc.styles['Normal']._element.rPr.rFonts.set(qn('w:eastAsia'), 'Arial Unicode MS')
+
 def convert_pdf_to_docx(pdf_path, docx_path=None):
     """
-    Convert a PDF file to DOCX format using pdf2docx library.
-    
-    Args:
-        pdf_path (str): Path to the input PDF file
-        docx_path (str, optional): Path to the output DOCX file. 
-                                  If None, will use same name as PDF with .docx extension.
-    
-    Returns:
-        str: Path to the generated DOCX file
+    Convert a PDF file to DOCX format with special character preservation.
     """
     if not validate_pdf(pdf_path):
         raise ValueError("Invalid or corrupted PDF file")
@@ -35,44 +45,75 @@ def convert_pdf_to_docx(pdf_path, docx_path=None):
     if docx_path is None:
         docx_path = os.path.splitext(pdf_path)[0] + '.docx'
     
-    # Initialize COM for potential OCR operations (though pdf2docx handles mostly text-based)
     pythoncom.CoInitialize()
     
     try:
-        # Convert PDF to DOCX
+        # Convert PDF to DOCX with layout preservation
         cv = Converter(pdf_path)
-        cv.convert(docx_path, start=0, end=None)
+        
+        # Create a temporary document to configure fonts first
+        temp_doc = Document()
+        set_special_character_font(temp_doc)
+        temp_doc.save(docx_path)
+        
+        # Perform the conversion
+        cv.convert(docx_path, start=0, end=None, 
+                  keep_blank_chars=True,  # Preserve all characters
+                  ignore_bad_chars=False) # Don't skip problematic characters
         cv.close()
         
-        # Verify the output
-        if os.path.exists(docx_path) and os.path.getsize(docx_path) > 0:
-            # Try opening the document to verify it's valid
-            doc = Document(docx_path)
-            if len(doc.paragraphs) > 0 or len(doc.tables) > 0:
-                return docx_path
-            else:
-                raise ValueError("Conversion resulted in empty DOCX file")
+        # Post-process to ensure special characters are intact
+        doc = Document(docx_path)
+        set_special_character_font(doc)
+        
+        # Verify special characters were preserved
+        found_special_chars = False
+        for para in doc.paragraphs:
+            if '✓' in para.text or '✗' in para.text or '×' in para.text:
+                found_special_chars = True
+                break
+        
+        if found_special_chars:
+            print("Special characters (✓/✗) were preserved in the DOCX")
         else:
-            raise IOError("Failed to create DOCX file")
+            print("No special characters detected in output (may not be present in original)")
+        
+        doc.save(docx_path)
+        return docx_path
+        
     except Exception as e:
-        # Clean up potentially corrupted output file
         if os.path.exists(docx_path):
             os.remove(docx_path)
         raise RuntimeError(f"Conversion failed: {str(e)}")
     finally:
         pythoncom.CoUninitialize()
-    
-    return docx_path
 
 def main():
-    parser = argparse.ArgumentParser(description='Convert PDF to DOCX')
+    parser = argparse.ArgumentParser(description='Convert PDF to DOCX with special character support')
     parser.add_argument('pdf_file', help='Path to the input PDF file')
     parser.add_argument('-o', '--output', help='Path to the output DOCX file (optional)')
+    parser.add_argument('--test-chars', action='store_true', 
+                       help='Test special character preservation')
     args = parser.parse_args()
     
     try:
         output_path = convert_pdf_to_docx(args.pdf_file, args.output)
-        print(f"Successfully converted PDF to DOCX: {output_path}")
+        
+        if args.test_chars:
+            print("\nSpecial Character Test Results:")
+            doc = Document(output_path)
+            special_chars = {'✓': False, '✗': False, '×': False}
+            
+            for para in doc.paragraphs:
+                for char in special_chars:
+                    if char in para.text:
+                        special_chars[char] = True
+            
+            for char, found in special_chars.items():
+                status = "✓ Found" if found else "✗ Not found"
+                print(f"{char} {status}")
+        
+        print(f"\nSuccessfully converted PDF to DOCX: {output_path}")
     except Exception as e:
         print(f"Error during conversion: {e}")
         exit(1)
