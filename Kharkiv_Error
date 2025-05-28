@@ -1,111 +1,81 @@
-import re
-import csv
-import sys
 import os
-from datetime import datetime
-from fuzzywuzzy import fuzz
-import nltk
-from nltk import word_tokenize, pos_tag
+import argparse
+from pdf2docx import Converter
+from PyPDF2 import PdfReader
+import pythoncom
+from docx import Document
 
-# Download required NLTK data once
-nltk.download('punkt')
-nltk.download('averaged_perceptron_tagger')
+def validate_pdf(file_path):
+    """Check if the PDF file is valid and readable."""
+    try:
+        with open(file_path, 'rb') as f:
+            reader = PdfReader(f)
+            if len(reader.pages) > 0:
+                return True
+    except Exception as e:
+        print(f"Error validating PDF: {e}")
+        return False
+    return False
 
-# [Previous constant definitions remain the same...]
-
-def clean_email_address(raw_address):
-    """Extract clean email addresses from potentially messy strings"""
-    if not raw_address:
-        return []
+def convert_pdf_to_docx(pdf_path, docx_path=None):
+    """
+    Convert a PDF file to DOCX format using pdf2docx library.
     
-    # Remove any angle brackets and their contents
-    cleaned = re.sub(r'<[^>]+>', '', raw_address)
-    # Remove any remaining special characters except comma (for separating addresses)
-    cleaned = re.sub(r'[;"\']', '', cleaned)
-    # Split by commas and remove whitespace
-    addresses = [addr.strip() for addr in cleaned.split(',') if addr.strip()]
-    return addresses
-
-def extract_all_participants(parsed_emails):
-    """Compile a list of all unique participants in the email chain"""
-    participants = set()
+    Args:
+        pdf_path (str): Path to the input PDF file
+        docx_path (str, optional): Path to the output DOCX file. 
+                                  If None, will use same name as PDF with .docx extension.
     
-    for email in parsed_emails:
-        # Clean and add sender
-        sender = clean_email_address(email["Sender"])
-        if sender:
-            participants.update(sender)
+    Returns:
+        str: Path to the generated DOCX file
+    """
+    if not validate_pdf(pdf_path):
+        raise ValueError("Invalid or corrupted PDF file")
+    
+    if docx_path is None:
+        docx_path = os.path.splitext(pdf_path)[0] + '.docx'
+    
+    # Initialize COM for potential OCR operations (though pdf2docx handles mostly text-based)
+    pythoncom.CoInitialize()
+    
+    try:
+        # Convert PDF to DOCX
+        cv = Converter(pdf_path)
+        cv.convert(docx_path, start=0, end=None)
+        cv.close()
         
-        # Clean and add receivers
-        receivers = clean_email_address(email["Receiver"])
-        if receivers:
-            participants.update(receivers)
-        
-        # Clean and add CC
-        cc = clean_email_address(email["cc"])
-        if cc:
-            participants.update(cc)
-        
-        # Clean and add BCC
-        bcc = clean_email_address(email["bcc"])
-        if bcc:
-            participants.update(bcc)
-    
-    return sorted(participants)
-
-def create_user_role_mapping(parsed_emails, requester, approver):
-    """Create a mapping of all participants to their roles"""
-    participants = extract_all_participants(parsed_emails)
-    role_mapping = []
-    
-    for participant in participants:
-        if participant == requester:
-            role = "Requester"
-        elif participant == approver:
-            role = "Approver"
+        # Verify the output
+        if os.path.exists(docx_path) and os.path.getsize(docx_path) > 0:
+            # Try opening the document to verify it's valid
+            doc = Document(docx_path)
+            if len(doc.paragraphs) > 0 or len(doc.tables) > 0:
+                return docx_path
+            else:
+                raise ValueError("Conversion resulted in empty DOCX file")
         else:
-            role = "Participant"
-        role_mapping.append({"Email": participant, "Role": role})
+            raise IOError("Failed to create DOCX file")
+    except Exception as e:
+        # Clean up potentially corrupted output file
+        if os.path.exists(docx_path):
+            os.remove(docx_path)
+        raise RuntimeError(f"Conversion failed: {str(e)}")
+    finally:
+        pythoncom.CoUninitialize()
     
-    return role_mapping
+    return docx_path
 
-def save_user_roles_to_csv(role_mapping, filename="Email_Users.csv"):
-    """Save the user role mapping to a CSV file"""
-    with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["Email", "Role"])
-        writer.writeheader()
-        writer.writerows(role_mapping)
-    print(f"✅ User roles saved: {filename}")
-
-def main(input_file):
-    if not os.path.exists(input_file):
-        print(f"❌ File not found: {input_file}")
-        return
+def main():
+    parser = argparse.ArgumentParser(description='Convert PDF to DOCX')
+    parser.add_argument('pdf_file', help='Path to the input PDF file')
+    parser.add_argument('-o', '--output', help='Path to the output DOCX file (optional)')
+    args = parser.parse_args()
     
-    with open(input_file, "r", encoding="utf-8") as f:
-        email_text = f.read()
-    
-    parsed_emails = parse_email_chain(email_text)
-    if not parsed_emails:
-        print("❌ No emails could be parsed from the input file.")
-        return
-    
-    save_to_csv(parsed_emails)
-    
-    requester, approver, scores = identify_requester_approver(parsed_emails)
-    save_summary(parsed_emails, scores)
-    
-    # New functionality: Create and save user roles
-    role_mapping = create_user_role_mapping(parsed_emails, requester, approver)
-    save_user_roles_to_csv(role_mapping)
-    
-    print("\n🔍 Identified Roles:")
-    print(f"Requester: {requester}")
-    print(f"Approver: {approver}")
-    print(f"\nUser roles saved to Email_Users.csv")
+    try:
+        output_path = convert_pdf_to_docx(args.pdf_file, args.output)
+        print(f"Successfully converted PDF to DOCX: {output_path}")
+    except Exception as e:
+        print(f"Error during conversion: {e}")
+        exit(1)
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python email_parse.py <input_email_text_file>")
-    else:
-        main(sys.argv[1])
+    main()
