@@ -70,12 +70,12 @@ def explode_column_append_results(file_path, column_name, output_file, include_s
             
             if include_stopwords or not is_stopword:
                 row_words.append(word)
-                row_flags.append(is_stopword)
-                row_positions.append(pos + 1)  # 1-based position
+                row_flags.append(str(is_stopword))
+                row_positions.append(str(pos + 1))  # 1-based position
         
         exploded_words.append(", ".join(row_words) if row_words else "")
-        is_stopword_flags.append(", ".join(map(str, row_flags)) if row_flags else ""
-        word_positions.append(", ".join(map(str, row_positions)) if row_positions else ""
+        is_stopword_flags.append(", ".join(row_flags) if row_flags else "")
+        word_positions.append(", ".join(row_positions) if row_positions else "")
     
     # Add new columns to original DataFrame
     df[f"{column_name}_exploded_words"] = exploded_words
@@ -84,8 +84,7 @@ def explode_column_append_results(file_path, column_name, output_file, include_s
     
     # Calculate statistics
     total_words = sum(len(words.split(", ")) for words in exploded_words if words)
-    total_stopwords = sum(len([f for f in flags.split(", ") if f == 'True']) 
-                         for flags in is_stopword_flags if flags)
+    total_stopwords = sum(flags.split(", ").count('True') for flags in is_stopword_flags if flags)
     
     # Save to output file
     try:
