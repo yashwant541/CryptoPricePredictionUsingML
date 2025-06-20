@@ -37,7 +37,8 @@ def tokenize(text):
 def analyze_text(text, keyword_map):
     """Analyze text with keyword mapping"""
     words = tokenize(text)
-    matches = []
+    keyword_matches = set()
+    mapped_values = set()
     found_stopwords = set()
     clean_words = []
     
@@ -48,17 +49,19 @@ def analyze_text(text, keyword_map):
         
         clean_words.append(word)
         if word in keyword_map:
-            matches.extend(keyword_map[word])
+            keyword_matches.add(word)
+            mapped_values.update(keyword_map[word])
     
-    # Check for partial matches
+    # Check for partial matches in cleaned text
     clean_text = ' '.join(clean_words)
-    for keyword, mapped_values in keyword_map.items():
-        if len(keyword) > 2 and keyword in clean_text:
-            if not any(kw == keyword for kw, _ in matches):
-                matches.extend((f"{keyword}*", mv) for mv in mapped_values)
+    for keyword in keyword_map:
+        if len(keyword) > 2 and keyword in clean_text and keyword not in keyword_matches:
+            keyword_matches.add(f"{keyword}*")  # Mark partial matches
+            mapped_values.update(keyword_map[keyword])
     
     return {
-        'matches': matches,
+        'keyword_matches': sorted(keyword_matches),
+        'mapped_values': sorted(mapped_values),
         'stopwords': sorted(found_stopwords),
         'word_count': len(words),
         'clean_word_count': len(clean_words)
@@ -85,12 +88,13 @@ def main():
         keyword_col = select_column(df_keywords, "keywords")
         mapped_col = select_column(df_keywords, "mapped values")
         
-        # Create keyword mapping (keyword -> list of mapped values)
-        keyword_map = defaultdict(list)
+        # Create keyword mapping (keyword -> set of mapped values)
+        keyword_map = defaultdict(set)
         for _, row in df_keywords.dropna(subset=[keyword_col]).iterrows():
             keyword = str(row[keyword_col]).lower().strip()
+            mapped_value = row[mapped_col]
             if keyword and keyword not in STOPWORDS:
-                keyword_map[keyword].append(row[mapped_col])
+                keyword_map[keyword].add(mapped_value)
         
         # Process data
         results = []
@@ -104,16 +108,13 @@ def main():
             for sw in analysis['stopwords']:
                 stopword_stats[sw] += 1
             
-            # Get unique mapped values from matches
-            matched_values = list(set(mv for _, mv in analysis['matches']))
-            
             results.append({
                 'Original_Text': text,
-                'Has_Match': bool(analysis['matches']),
-                'Matched_Keywords': ', '.join(kw for kw, _ in analysis['matches']),
-                'Mapped_Values': ', '.join(str(v) for v in matched_values) if matched_values else None,
-                'Stopwords_Found': ', '.join(analysis['stopwords']) if analysis['stopwords'] else None,
-                'Match_Count': len(analysis['matches']),
+                'Has_Match': bool(analysis['keyword_matches']),
+                'Matched_Keywords': ', '.join(analysis['keyword_matches']),
+                'Mapped_Values': ', '.join(str(v) for v in analysis['mapped_values']),
+                'Stopwords_Found': ', '.join(analysis['stopwords']),
+                'Match_Count': len(analysis['keyword_matches']),
                 'Stopword_Count': len(analysis['stopwords']),
                 'Word_Count': analysis['word_count'],
                 'Clean_Word_Count': analysis['clean_word_count']
