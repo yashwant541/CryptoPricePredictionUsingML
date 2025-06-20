@@ -50,18 +50,18 @@ def analyze_text(text, keyword_map):
         clean_words.append(word)
         if word in keyword_map:
             keyword_matches.add(word)
-            mapped_values.update(keyword_map[word])
+            mapped_values.update(str(v) for v in keyword_map[word])  # Convert all to strings
     
     # Check for partial matches in cleaned text
     clean_text = ' '.join(clean_words)
     for keyword in keyword_map:
         if len(keyword) > 2 and keyword in clean_text and keyword not in keyword_matches:
             keyword_matches.add(f"{keyword}*")  # Mark partial matches
-            mapped_values.update(keyword_map[keyword])
+            mapped_values.update(str(v) for v in keyword_map[keyword])  # Convert all to strings
     
     return {
         'keyword_matches': sorted(keyword_matches),
-        'mapped_values': sorted(mapped_values),
+        'mapped_values': sorted(mapped_values, key=lambda x: str(x)),  # Sort as strings
         'stopwords': sorted(found_stopwords),
         'word_count': len(words),
         'clean_word_count': len(clean_words)
@@ -85,12 +85,12 @@ def main():
         data_col = select_column(df_data, "text data")
         
         print("\nFor KEYWORDS FILE:")
-        keyword_col = select_column(df_keywords, "keywords")
-        mapped_col = select_column(df_keywords, "mapped values")
+        keyword_col = select_column(df_keys, "keywords")
+        mapped_col = select_column(df_keys, "mapped values")
         
         # Create keyword mapping (keyword -> set of mapped values)
         keyword_map = defaultdict(set)
-        for _, row in df_keywords.dropna(subset=[keyword_col]).iterrows():
+        for _, row in df_keys.dropna(subset=[keyword_col]).iterrows():
             keyword = str(row[keyword_col]).lower().strip()
             mapped_value = row[mapped_col]
             if keyword and keyword not in STOPWORDS:
@@ -112,7 +112,7 @@ def main():
                 'Original_Text': text,
                 'Has_Match': bool(analysis['keyword_matches']),
                 'Matched_Keywords': ', '.join(analysis['keyword_matches']),
-                'Mapped_Values': ', '.join(str(v) for v in analysis['mapped_values']),
+                'Mapped_Values': ', '.join(analysis['mapped_values']),
                 'Stopwords_Found': ', '.join(analysis['stopwords']),
                 'Match_Count': len(analysis['keyword_matches']),
                 'Stopword_Count': len(analysis['stopwords']),
@@ -129,7 +129,7 @@ def main():
         ], axis=1)
         
         df_stopwords = pd.DataFrame(
-            sorted(stopword_stats.items(), key=lambda x: (-x[1], x[0])),
+            sorted(stopword_stats.items(), key=lambda x: (-x[1], str(x[0]))),  # Sort as strings
             columns=['Stopword', 'Frequency']
         )
         
