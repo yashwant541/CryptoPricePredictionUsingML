@@ -1,17 +1,17 @@
 import pandas as pd
 from pathlib import Path
+import re
+from collections import defaultdict
 
-# Define stopwords
-STOPWORDS = {'a', 'an', 'the', 'and', 'or', 'but', 'if', 'because', 'as', 'what', 
-             'where', 'from', 'how', 'of', 'for', 'to', 'at', 'in', 'on', 'that', 
-             'this', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 
-             'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should', 'can', 
-             'could', 'may', 'might', 'must', 'shall', 'which', 'who', 'whom', 
-             'whose', 'what', 'which', 'whose', 'whom', 'i', 'you', 'he', 'she', 
-             'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them', 'my', 'your', 
-             'his', 'its', 'our', 'their', 'mine', 'yours', 'hers', 'ours', 
-             'theirs', 'myself', 'yourself', 'himself', 'herself', 'itself', 
-             'ourselves', 'yourselves', 'themselves'}
+def load_stopwords(stopwords_file):
+    """Load stopwords from a file (one word per line)"""
+    try:
+        with open(stopwords_file, 'r') as f:
+            return set(line.strip().lower() for line in f if line.strip())
+    except FileNotFoundError:
+        print(f"Stopwords file '{stopwords_file}' not found. Using default stopwords.")
+        return {'a', 'an', 'the', 'and', 'or', 'but', 'if', 'because', 'as', 'what', 
+                'where', 'from', 'how', 'of', 'for', 'to', 'at', 'in', 'on', 'that'}
 
 def get_file_columns(file_path):
     """Show columns in file and let user select one"""
@@ -33,12 +33,45 @@ def get_file_columns(file_path):
         print(f"Error reading file: {e}")
         return None
 
-def main():
-    print("Keyword Matching Tool")
-    print("--------------------")
+def tokenize_text(text):
+    """Tokenize text into words while preserving original structure"""
+    return re.findall(r"\b[\w'-]+\b", str(text).lower())
+
+def find_matches(text, keywords, stopwords):
+    """Find matches in text using exploded words internally"""
+    words = tokenize_text(text)
+    matches = set()
+    found_stopwords = set()
     
-    # Get first file info
-    file1 = input("Enter path to first Excel file (where we'll search for matches): ")
+    # First pass: exact matches after stopword removal
+    clean_words = []
+    for word in words:
+        if word in stopwords:
+            found_stopwords.add(word)
+            continue
+        clean_words.append(word)
+        if word in keywords:
+            matches.add(word)
+    
+    # Second pass: partial matches in cleaned text
+    clean_text = ' '.join(clean_words)
+    for keyword in keywords:
+        if len(keyword) > 2 and keyword in clean_text:
+            if keyword not in matches:  # Only add if not already an exact match
+                matches.add(f"{keyword} (Partial)")
+    
+    return sorted(matches), sorted(found_stopwords)
+
+def main():
+    print("Sentence-Aware Keyword Matching Tool")
+    print("-----------------------------------")
+    
+    # Get stopwords file
+    stopwords_file = input("Enter path to stopwords file (or press Enter for default): ")
+    stopwords = load_stopwords(stopwords_file) if stopwords_file else load_stopwords('')
+    
+    # Get input files
+    file1 = input("\nEnter path to main data file: ")
     if not Path(file1).exists():
         print("File not found!")
         return
@@ -47,8 +80,7 @@ def main():
     if not col1:
         return
     
-    # Get second file info (keywords)
-    file2 = input("\nEnter path to second Excel file (with keywords to match): ")
+    file2 = input("\nEnter path to keywords file: ")
     if not Path(file2).exists():
         print("File not found!")
         return
@@ -59,71 +91,72 @@ def main():
     
     try:
         # Read files
-        df1 = pd.read_excel(file1)
-        df2 = pd.read_excel(file2)
+        df_main = pd.read_excel(file1)
+        df_keywords = pd.read_excel(file2)
         
-        # Get keywords, remove stopwords and duplicates
-        keywords = set(df2[col2].dropna().astype(str).str.lower().unique())
-        keywords = keywords - STOPWORDS
+        # Prepare keywords (remove stopwords and empty values)
+        keywords = set(str(word).strip().lower() 
+                      for word in df_keywords[col2].dropna().unique() 
+                      if str(word).strip())
+        keywords = keywords - stopwords
         
-        # Prepare results
+        # Process data
         results = []
+        stopwords_report = defaultdict(int)
         
-        # Process each row in first file
-        for idx, row in df1.iterrows():
-            cell_value = str(row[col1]).lower()
-            found_words = []
-            is_stopword = False
+        for idx, row in df_main.iterrows():
+            text = row[col1]
+            matches, found_stopwords = find_matches(text, keywords, stopwords)
             
-            # Check against keywords
-            for word in cell_value.split():
-                if word in STOPWORDS:
-                    if word in keywords:  # If a stopword is in keywords
-                        found_words.append(f"{word} (StopWord Match)")
-                        is_stopword = True
-                    continue
-                
-                if word in keywords:
-                    found_words.append(word)
-            
-            # Determine match status
-            if found_words:
-                if is_stopword:
-                    match_status = "StopWord Match"
-                else:
-                    match_status = "TRUE"
-                matched_words = ", ".join(found_words)
-            else:
-                match_status = "FALSE"
-                matched_words = ""
+            # Update stopwords frequency
+            for sw in found_stopwords:
+                stopwords_report[sw] += 1
             
             results.append({
-                'Original_Text': row[col1],
-                'Match': match_status,
-                'Matched_Word': matched_words
+                'Match': "TRUE" if matches else "FALSE",
+                'Matched_Keywords': ", ".join(matches) if matches else "",
+                'StopWords_Found': ", ".join(found_stopwords) if found_stopwords else "",
+                'Match_Count': len(matches),
+                'StopWord_Count': len(found_stopwords)
             })
         
-        # Create result DataFrame
-        result_df = pd.DataFrame(results)
+        # Create output DataFrame (preserving original structure)
+        output_df = pd.concat([
+            df_main,
+            pd.DataFrame(results)
+        ], axis=1)
         
-        # Merge with original data
-        output_df = pd.concat([df1, result_df[['Match', 'Matched_Word']]], axis=1)
+        # Create stopwords frequency report
+        df_stopwords = pd.DataFrame(
+            sorted(stopwords_report.items(), key=lambda x: x[1], reverse=True),
+            columns=['StopWord', 'Frequency']
+        )
         
-        # Save output
-        output_file = input("\nEnter output file name (e.g., matched_results.xlsx): ")
+        # Save outputs
+        base_name = input("\nEnter base name for output files (e.g., 'results'): ")
+        
+        output_file = f"{base_name}_matched.xlsx"
+        stopwords_file = f"{base_name}_stopwords.xlsx"
+        
         output_df.to_excel(output_file, index=False)
-        print(f"\nResults saved to {output_file}")
+        df_stopwords.to_excel(stopwords_file, index=False)
+        
+        print(f"\nMain results saved to: {output_file}")
+        print(f"Stopwords report saved to: {stopwords_file}")
         
         # Show summary
-        total_matches = len(output_df[output_df['Match'] == 'TRUE'])
-        stopword_matches = len(output_df[output_df['Match'] == 'StopWord Match'])
-        print(f"\nSummary:")
-        print(f"- Total rows processed: {len(output_df)}")
-        print(f"- True matches found: {total_matches}")
-        print(f"- StopWord matches found: {stopword_matches}")
+        total_matches = output_df['Match'].value_counts().get('TRUE', 0)
+        unique_stopwords = len(df_stopwords)
+        avg_matches = output_df['Match_Count'].mean()
+        
+        print("\nSummary Statistics:")
+        print(f"- Total records processed: {len(output_df)}")
+        print(f"- Records with matches: {total_matches}")
+        print(f"- Average matches per record: {avg_matches:.1f}")
+        print(f"- Unique stopwords found: {unique_stopwords}")
         
     except Exception as e:
-        print(f"\nAn error occurred: {e}")
+        print(f"\nError: {e}")
 
 if __name__ == "__main__":
     main()
