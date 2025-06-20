@@ -1,137 +1,157 @@
 import pandas as pd
-import string
+import re
+from collections import defaultdict
 
-# Custom list of stopwords (can be expanded as needed)
-BASIC_STOPWORDS = {
-    'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', 'your', 'yours',
-    'yourself', 'yourselves', 'he', 'him', 'his', 'himself', 'she', 'her', 'hers',
-    'herself', 'it', 'its', 'itself', 'they', 'them', 'their', 'theirs', 'themselves',
-    'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'am', 'is', 'are',
-    'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having', 'do', 'does',
-    'did', 'doing', 'a', 'an', 'the', 'and', 'but', 'if', 'or', 'because', 'as', 'until',
-    'while', 'of', 'at', 'by', 'for', 'with', 'about', 'against', 'between', 'into',
-    'through', 'during', 'before', 'after', 'above', 'below', 'to', 'from', 'up', 'down',
-    'in', 'out', 'on', 'off', 'over', 'under', 'again', 'further', 'then', 'once', 'here',
-    'there', 'when', 'where', 'why', 'how', 'all', 'any', 'both', 'each', 'few', 'more',
-    'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so',
-    'than', 'too', 'very', 's', 't', 'can', 'will', 'just', 'don', 'should', 'now'
+# Built-in stopwords
+STOPWORDS = {
+    'a', 'an', 'the', 'and', 'or', 'but', 'if', 'because', 'as', 'when',
+    'what', 'where', 'from', 'how', 'of', 'for', 'to', 'at', 'in', 'on',
+    'that', 'this', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should',
+    'can', 'could', 'may', 'might', 'must', 'shall', 'which', 'who', 'whom',
+    'whose', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her',
+    'us', 'them', 'my', 'your', 'his', 'its', 'our', 'their', 'mine', 'yours',
+    'hers', 'ours', 'theirs', 'myself', 'yourself', 'himself', 'herself',
+    'itself', 'ourselves', 'yourselves', 'themselves'
 }
 
-def explode_dataframe_by_keywords(file_path, column_name, output_file, include_stopwords=True):
-    """
-    Explode DataFrame rows based on keywords in specified column.
+def select_column(df, file_type):
+    """Let user select a column from dataframe"""
+    print(f"\nColumns in {file_type} file:")
+    for i, col in enumerate(df.columns, 1):
+        print(f"{i}. {col}")
     
-    Args:
-        file_path (str): Path to input file
-        column_name (str): Name of column to explode
-        output_file (str): Path to output file
-        include_stopwords (bool): Whether to include stopwords in output (flagged)
-    """
-    # Read the input file
+    while True:
+        try:
+            col_num = int(input(f"Select {file_type} column number: ")) - 1
+            if 0 <= col_num < len(df.columns):
+                return df.columns[col_num]
+            print("Invalid column number. Try again.")
+        except ValueError:
+            print("Please enter a valid number.")
+
+def tokenize(text):
+    """Advanced tokenizer that handles contractions and hyphenated words"""
+    return re.findall(r"\b[\w'-]+\b", str(text).lower())
+
+def analyze_text(text, keyword_map):
+    """Analyze text with keyword mapping"""
+    words = tokenize(text)
+    matches = []
+    found_stopwords = set()
+    clean_words = []
+    
+    for word in words:
+        if word in STOPWORDS:
+            found_stopwords.add(word)
+            continue
+        
+        clean_words.append(word)
+        if word in keyword_map:
+            matches.extend(keyword_map[word])
+    
+    # Check for partial matches
+    clean_text = ' '.join(clean_words)
+    for keyword, mapped_values in keyword_map.items():
+        if len(keyword) > 2 and keyword in clean_text:
+            if not any(kw == keyword for kw, _ in matches):
+                matches.extend((f"{keyword}*", mv) for mv in mapped_values)
+    
+    return {
+        'matches': matches,
+        'stopwords': sorted(found_stopwords),
+        'word_count': len(words),
+        'clean_word_count': len(clean_words)
+    }
+
+def main():
+    print("🔍 Keyword Mapper Analyzer")
+    print("==========================")
+    
+    # File input
+    data_file = input("Enter main data file path: ")
+    keywords_file = input("Enter keywords file path: ")
+    
     try:
-        if file_path.endswith('.csv'):
-            df = pd.read_csv(file_path)
-        elif file_path.endswith('.xlsx'):
-            df = pd.read_excel(file_path)
-        else:
-            print("Unsupported file format. Please use CSV or Excel files.")
-            return
-    except Exception as e:
-        print(f"Error reading file: {e}")
-        return
-    
-    # Check if column exists
-    if column_name not in df.columns:
-        print(f"Column '{column_name}' not found in the file.")
-        print(f"Available columns: {list(df.columns)}")
-        return
-    
-    # Prepare lists for exploded data
-    exploded_rows = []
-    
-    # Process each row
-    for index, row in df.iterrows():
-        text = str(row[column_name])
+        # Load data
+        df_data = pd.read_excel(data_file)
+        df_keywords = pd.read_excel(keywords_file)
         
-        # Remove punctuation and split into words
-        translator = str.maketrans('', '', string.punctuation)
-        words = text.translate(translator).split()
+        # Column selection
+        print("\nFor MAIN DATA FILE:")
+        data_col = select_column(df_data, "text data")
         
-        # Process each word
-        for word_pos, word in enumerate(words, 1):  # 1-based position
-            word_lower = word.lower()
-            is_stopword = word_lower in BASIC_STOPWORDS
+        print("\nFor KEYWORDS FILE:")
+        keyword_col = select_column(df_keywords, "keywords")
+        mapped_col = select_column(df_keywords, "mapped values")
+        
+        # Create keyword mapping (keyword -> list of mapped values)
+        keyword_map = defaultdict(list)
+        for _, row in df_keywords.dropna(subset=[keyword_col]).iterrows():
+            keyword = str(row[keyword_col]).lower().strip()
+            if keyword and keyword not in STOPWORDS:
+                keyword_map[keyword].append(row[mapped_col])
+        
+        # Process data
+        results = []
+        stopword_stats = defaultdict(int)
+        
+        for _, row in df_data.iterrows():
+            text = row[data_col]
+            analysis = analyze_text(text, keyword_map)
             
-            if include_stopwords or not is_stopword:
-                # Create a new row with all original data plus keyword info
-                new_row = row.to_dict()
-                new_row.update({
-                    'exploded_keyword': word,
-                    'is_stopword': is_stopword,
-                    'keyword_position': word_pos,
-                    'original_text': text
-                })
-                exploded_rows.append(new_row)
-    
-    # Create new DataFrame from exploded rows
-    if not exploded_rows:
-        print("No words found after processing.")
-        return
-    
-    exploded_df = pd.DataFrame(exploded_rows)
-    
-    # Reorder columns to put new columns at the end
-    original_cols = [col for col in df.columns if col != column_name]
-    new_cols = ['exploded_keyword', 'is_stopword', 'keyword_position', 'original_text']
-    column_order = original_cols + new_cols
-    
-    # Add the original column if it wasn't included
-    if column_name not in column_order:
-        column_order.insert(0, column_name)
-    
-    exploded_df = exploded_df[column_order]
-    
-    # Save to output file
-    try:
-        if output_file.endswith('.csv'):
-            exploded_df.to_csv(output_file, index=False)
-        elif output_file.endswith('.xlsx'):
-            exploded_df.to_excel(output_file, index=False)
-        else:
-            print("Output file format not supported. Using CSV.")
-            exploded_df.to_csv(output_file + '.csv', index=False)
+            # Update statistics
+            for sw in analysis['stopwords']:
+                stopword_stats[sw] += 1
+            
+            # Get unique mapped values from matches
+            matched_values = list(set(mv for _, mv in analysis['matches']))
+            
+            results.append({
+                'Original_Text': text,
+                'Has_Match': bool(analysis['matches']),
+                'Matched_Keywords': ', '.join(kw for kw, _ in analysis['matches']),
+                'Mapped_Values': ', '.join(str(v) for v in matched_values) if matched_values else None,
+                'Stopwords_Found': ', '.join(analysis['stopwords']) if analysis['stopwords'] else None,
+                'Match_Count': len(analysis['matches']),
+                'Stopword_Count': len(analysis['stopwords']),
+                'Word_Count': analysis['word_count'],
+                'Clean_Word_Count': analysis['clean_word_count']
+            })
         
-        print(f"\nSuccessfully saved exploded data to {output_file}")
-        print(f"Original rows: {len(df)}")
-        print(f"Exploded rows: {len(exploded_df)}")
-        print(f"Stopwords included: {exploded_df['is_stopword'].sum()}")
-        print("\nNew columns added:")
-        print("- exploded_keyword: The individual keyword")
-        print("- is_stopword: Boolean indicating if keyword is a stopword")
-        print("- keyword_position: Original position in the text (1-based)")
-        print("- original_text: The full original text")
+        # Create output DataFrames
+        df_output = pd.concat([
+            df_data,
+            pd.DataFrame(results)[['Has_Match', 'Matched_Keywords', 'Mapped_Values',
+                                 'Stopwords_Found', 'Match_Count', 'Stopword_Count',
+                                 'Word_Count', 'Clean_Word_Count']]
+        ], axis=1)
+        
+        df_stopwords = pd.DataFrame(
+            sorted(stopword_stats.items(), key=lambda x: (-x[1], x[0])),
+            columns=['Stopword', 'Frequency']
+        )
+        
+        # Save outputs
+        output_name = input("\nEnter output file base name (without extension): ")
+        df_output.to_excel(f"{output_name}_results.xlsx", index=False)
+        df_stopwords.to_excel(f"{output_name}_stopwords.xlsx", index=False)
+        
+        # Summary
+        total_matches = df_output['Has_Match'].sum()
+        unique_mapped = df_output['Mapped_Values'].nunique()
+        
+        print("\n📊 Analysis Complete")
+        print("===================")
+        print(f"Processed {len(df_output)} records")
+        print(f"Matching records: {total_matches} ({total_matches/len(df_output)*100:.1f}%)")
+        print(f"Unique mapped values found: {unique_mapped}")
+        print(f"\nOutput files created:")
+        print(f"- {output_name}_results.xlsx (Main results with mapped values)")
+        print(f"- {output_name}_stopwords.xlsx (Stopword statistics)")
+        
     except Exception as e:
-        print(f"Error saving output file: {e}")
+        print(f"\n❌ Error: {str(e)}")
 
 if __name__ == "__main__":
-    print("DataFrame Exploder Tool")
-    print("----------------------")
-    print("This tool will explode each row into multiple rows based on keywords")
-    print("in the specified column, preserving all original data.\n")
-    
-    # Get user input
-    file_path = input("Enter the path to your input file (CSV or Excel): ").strip()
-    column_name = input("Enter the column name to explode: ").strip()
-    output_file = input("Enter the path for the output file: ").strip()
-    
-    # Ask about stopwords
-    include_stopwords = input("Include stopwords in output? (y/n): ").strip().lower()
-    include_stopwords = include_stopwords == 'y'
-    
-    # Process the file
-    explode_dataframe_by_keywords(
-        file_path=file_path,
-        column_name=column_name,
-        output_file=output_file,
-        include_stopwords=include_stopwords
-    )
+    main()
