@@ -1,44 +1,129 @@
 import pandas as pd
-import re
-import os
+from pathlib import Path
 
-# -------------------------
-# Step 1: Load the Excel file
-# -------------------------
-input_file = "your_file.xlsx"   # Change this to your file name
-sheet_name = None  # Change if your file has multiple sheets
+# Define stopwords
+STOPWORDS = {'a', 'an', 'the', 'and', 'or', 'but', 'if', 'because', 'as', 'what', 
+             'where', 'from', 'how', 'of', 'for', 'to', 'at', 'in', 'on', 'that', 
+             'this', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 
+             'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should', 'can', 
+             'could', 'may', 'might', 'must', 'shall', 'which', 'who', 'whom', 
+             'whose', 'what', 'which', 'whose', 'whom', 'i', 'you', 'he', 'she', 
+             'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them', 'my', 'your', 
+             'his', 'its', 'our', 'their', 'mine', 'yours', 'hers', 'ours', 
+             'theirs', 'myself', 'yourself', 'himself', 'herself', 'itself', 
+             'ourselves', 'yourselves', 'themselves'}
 
-if sheet_name:
-    df = pd.read_excel(input_file, sheet_name=sheet_name)
-else:
-    df = pd.read_excel(input_file)
+def get_file_columns(file_path):
+    """Show columns in file and let user select one"""
+    try:
+        df = pd.read_excel(file_path)
+        print("\nColumns in file:")
+        for i, col in enumerate(df.columns, 1):
+            print(f"{i}. {col}")
+        
+        while True:
+            try:
+                col_num = int(input("Enter column number to use: ")) - 1
+                if 0 <= col_num < len(df.columns):
+                    return df.columns[col_num]
+                print("Invalid column number. Try again.")
+            except ValueError:
+                print("Please enter a valid number.")
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return None
 
-# -------------------------
-# Step 2: Function to split text into parts
-# -------------------------
-def split_guidance(text):
-    if pd.isna(text):
-        return []
-    # Split on common delimiters: comma, semicolon, slash, newline, and period
-    parts = re.split(r'[;,/\\\n\.]', str(text))
-    # Clean whitespace and remove empty entries
-    return [p.strip() for p in parts if p.strip()]
+def main():
+    print("Keyword Matching Tool")
+    print("--------------------")
+    
+    # Get first file info
+    file1 = input("Enter path to first Excel file (where we'll search for matches): ")
+    if not Path(file1).exists():
+        print("File not found!")
+        return
+    
+    col1 = get_file_columns(file1)
+    if not col1:
+        return
+    
+    # Get second file info (keywords)
+    file2 = input("\nEnter path to second Excel file (with keywords to match): ")
+    if not Path(file2).exists():
+        print("File not found!")
+        return
+    
+    col2 = get_file_columns(file2)
+    if not col2:
+        return
+    
+    try:
+        # Read files
+        df1 = pd.read_excel(file1)
+        df2 = pd.read_excel(file2)
+        
+        # Get keywords, remove stopwords and duplicates
+        keywords = set(df2[col2].dropna().astype(str).str.lower().unique())
+        keywords = keywords - STOPWORDS
+        
+        # Prepare results
+        results = []
+        
+        # Process each row in first file
+        for idx, row in df1.iterrows():
+            cell_value = str(row[col1]).lower()
+            found_words = []
+            is_stopword = False
+            
+            # Check against keywords
+            for word in cell_value.split():
+                if word in STOPWORDS:
+                    if word in keywords:  # If a stopword is in keywords
+                        found_words.append(f"{word} (StopWord Match)")
+                        is_stopword = True
+                    continue
+                
+                if word in keywords:
+                    found_words.append(word)
+            
+            # Determine match status
+            if found_words:
+                if is_stopword:
+                    match_status = "StopWord Match"
+                else:
+                    match_status = "TRUE"
+                matched_words = ", ".join(found_words)
+            else:
+                match_status = "FALSE"
+                matched_words = ""
+            
+            results.append({
+                'Original_Text': row[col1],
+                'Match': match_status,
+                'Matched_Word': matched_words
+            })
+        
+        # Create result DataFrame
+        result_df = pd.DataFrame(results)
+        
+        # Merge with original data
+        output_df = pd.concat([df1, result_df[['Match', 'Matched_Word']]], axis=1)
+        
+        # Save output
+        output_file = input("\nEnter output file name (e.g., matched_results.xlsx): ")
+        output_df.to_excel(output_file, index=False)
+        print(f"\nResults saved to {output_file}")
+        
+        # Show summary
+        total_matches = len(output_df[output_df['Match'] == 'TRUE'])
+        stopword_matches = len(output_df[output_df['Match'] == 'StopWord Match'])
+        print(f"\nSummary:")
+        print(f"- Total rows processed: {len(output_df)}")
+        print(f"- True matches found: {total_matches}")
+        print(f"- StopWord matches found: {stopword_matches}")
+        
+    except Exception as e:
+        print(f"\nAn error occurred: {e}")
 
-# -------------------------
-# Step 3: Apply split and explode
-# -------------------------
-df['Guidance_List'] = df['Guidance'].apply(split_guidance)
-df_exploded = df.explode('Guidance_List').reset_index(drop=True)
-
-# -------------------------
-# Step 4: Optional lowercase normalization
-# -------------------------
-df_exploded['Guidance_List'] = df_exploded['Guidance_List'].str.lower()
-
-# -------------------------
-# Step 5: Save to a new Excel file
-# -------------------------
-output_file = "exploded_guidance_output.xlsx"
-df_exploded.to_excel(output_file, index=False)
-
-print(f"Exploded file saved as: {os.path.abspath(output_file)}")
+if __name__ == "__main__":
+    main()
