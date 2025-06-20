@@ -17,9 +17,9 @@ BASIC_STOPWORDS = {
     'than', 'too', 'very', 's', 't', 'can', 'will', 'just', 'don', 'should', 'now'
 }
 
-def explode_column_to_words(file_path, column_name, output_file, include_stopwords=True):
+def explode_column_append_results(file_path, column_name, output_file, include_stopwords=True):
     """
-    Explode a column's values into single words with optional stopword flagging.
+    Explode a column's values into single words and append results to original DataFrame.
     
     Args:
         file_path (str): Path to input file
@@ -46,8 +46,10 @@ def explode_column_to_words(file_path, column_name, output_file, include_stopwor
         print(f"Available columns: {list(df.columns)}")
         return
     
-    # Create a new DataFrame for exploded words
-    exploded_data = []
+    # Create lists to store exploded data
+    exploded_words = []
+    is_stopword_flags = []
+    word_positions = []
     
     # Process each row
     for index, row in df.iterrows():
@@ -57,48 +59,59 @@ def explode_column_to_words(file_path, column_name, output_file, include_stopwor
         translator = str.maketrans('', '', string.punctuation)
         words = text.translate(translator).split()
         
-        # Process each word
-        for word in words:
+        # Store words and their metadata
+        row_words = []
+        row_flags = []
+        row_positions = []
+        
+        for pos, word in enumerate(words):
             word_lower = word.lower()
             is_stopword = word_lower in BASIC_STOPWORDS
             
-            # Only add non-stopwords if include_stopwords is False
             if include_stopwords or not is_stopword:
-                exploded_data.append({
-                    'original_row_index': index,
-                    'original_value': text,
-                    'exploded_word': word,
-                    'is_stopword': is_stopword,
-                    'word_length': len(word)
-                })
+                row_words.append(word)
+                row_flags.append(is_stopword)
+                row_positions.append(pos + 1)  # 1-based position
+        
+        exploded_words.append(", ".join(row_words) if row_words else "")
+        is_stopword_flags.append(", ".join(map(str, row_flags)) if row_flags else ""
+        word_positions.append(", ".join(map(str, row_positions)) if row_positions else ""
     
-    # Create DataFrame from exploded data
-    if not exploded_data:
-        print("No words found after processing.")
-        return
+    # Add new columns to original DataFrame
+    df[f"{column_name}_exploded_words"] = exploded_words
+    df[f"{column_name}_is_stopword"] = is_stopword_flags
+    df[f"{column_name}_word_positions"] = word_positions
     
-    exploded_df = pd.DataFrame(exploded_data)
+    # Calculate statistics
+    total_words = sum(len(words.split(", ")) for words in exploded_words if words)
+    total_stopwords = sum(len([f for f in flags.split(", ") if f == 'True']) 
+                         for flags in is_stopword_flags if flags)
     
     # Save to output file
     try:
         if output_file.endswith('.csv'):
-            exploded_df.to_csv(output_file, index=False)
+            df.to_csv(output_file, index=False)
         elif output_file.endswith('.xlsx'):
-            exploded_df.to_excel(output_file, index=False)
+            df.to_excel(output_file, index=False)
         else:
             print("Output file format not supported. Using CSV.")
-            exploded_df.to_csv(output_file + '.csv', index=False)
+            df.to_csv(output_file + '.csv', index=False)
         
-        print(f"Successfully saved exploded data to {output_file}")
-        print(f"Total words: {len(exploded_df)}")
-        if include_stopwords:
-            print(f"Stopwords found: {exploded_df['is_stopword'].sum()}")
+        print(f"\nSuccessfully saved results to {output_file}")
+        print(f"Total words extracted: {total_words}")
+        print(f"Stopwords identified: {total_stopwords}")
+        print("\nNew columns added to original file:")
+        print(f"- {column_name}_exploded_words: Comma-separated list of words")
+        print(f"- {column_name}_is_stopword: Boolean flags for stopwords")
+        print(f"- {column_name}_word_positions: Original word positions")
     except Exception as e:
         print(f"Error saving output file: {e}")
 
 if __name__ == "__main__":
     print("Column Value Exploder Tool")
     print("-------------------------")
+    print("This tool will explode a column's text into individual words")
+    print("and append the results to the original file as new columns.\n")
     
     # Get user input
     file_path = input("Enter the path to your input file (CSV or Excel): ").strip()
@@ -110,7 +123,7 @@ if __name__ == "__main__":
     include_stopwords = include_stopwords == 'y'
     
     # Process the file
-    explode_column_to_words(
+    explode_column_append_results(
         file_path=file_path,
         column_name=column_name,
         output_file=output_file,
