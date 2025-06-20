@@ -1,115 +1,44 @@
-import os
-import tempfile
-from docx import Document
 import pandas as pd
-import pdf2docx
-from pdf2docx import Converter
-import sys
-from pathlib import Path
+import re
+import os
 
-def extract_tables_from_docx(docx_path):
-    """Extract tables from a Word document with special character preservation"""
-    doc = Document(docx_path)
-    tables = []
-    
-    for table in doc.tables:
-        table_data = []
-        for row in table.rows:
-            row_data = []
-            for cell in row.cells:
-                # Preserve special characters by using proper text extraction
-                cell_text = cell.text.replace('\n', ' ').strip()
-                row_data.append(cell_text)
-            table_data.append(row_data)
-        tables.append(pd.DataFrame(table_data))
-    
-    return tables
+# -------------------------
+# Step 1: Load the Excel file
+# -------------------------
+input_file = "your_file.xlsx"   # Change this to your file name
+sheet_name = None  # Change if your file has multiple sheets
 
-def convert_pdf_to_docx(pdf_path):
-    """Convert PDF to DOCX using pdf2docx with special character support"""
-    with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as temp_file:
-        temp_docx_path = temp_file.name
-    
-    cv = Converter(pdf_path)
-    cv.convert(temp_docx_path, start=0, end=None)
-    cv.close()
-    
-    return temp_docx_path
+if sheet_name:
+    df = pd.read_excel(input_file, sheet_name=sheet_name)
+else:
+    df = pd.read_excel(input_file)
 
-def extract_tables_from_pdf(pdf_path):
-    """Extract tables from PDF with special character preservation"""
-    try:
-        temp_docx_path = convert_pdf_to_docx(pdf_path)
-        tables = extract_tables_from_docx(temp_docx_path)
-        os.unlink(temp_docx_path)
-        return tables
-    except Exception as e:
-        print(f"Error processing PDF: {str(e)}", file=sys.stderr)
+# -------------------------
+# Step 2: Function to split text into parts
+# -------------------------
+def split_guidance(text):
+    if pd.isna(text):
         return []
+    # Split on common delimiters: comma, semicolon, slash, newline, and period
+    parts = re.split(r'[;,/\\\n\.]', str(text))
+    # Clean whitespace and remove empty entries
+    return [p.strip() for p in parts if p.strip()]
 
-def save_tables_to_csv(tables, output_folder, base_name):
-    """Save tables to CSV with UTF-8 encoding for special characters"""
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder)
-    
-    saved_files = []
-    for i, table in enumerate(tables, 1):
-        csv_path = os.path.join(output_folder, f"{base_name}_table_{i}.csv")
-        try:
-            # Save with UTF-8 encoding and proper escaping
-            table.to_csv(csv_path, index=False, header=False, 
-                         encoding='utf-8-sig', escapechar='\\')
-            saved_files.append(csv_path)
-        except Exception as e:
-            print(f"Error saving table {i}: {str(e)}", file=sys.stderr)
-    
-    return saved_files
+# -------------------------
+# Step 3: Apply split and explode
+# -------------------------
+df['Guidance_List'] = df['Guidance'].apply(split_guidance)
+df_exploded = df.explode('Guidance_List').reset_index(drop=True)
 
-def main():
-    print("Table Extraction with Special Character Support")
-    print("✓ Checks and ✕ crosses will be preserved in output")
-    print("-----------------------------------------------\n")
-    
-    # Get file paths and types
-    file1_path = input("Enter path to first file: ").strip()
-    file1_type = input(f"What type is '{file1_path}'? (docx/pdf): ").lower().strip()
-    while file1_type not in ['docx', 'pdf']:
-        print("Please enter 'docx' or 'pdf'")
-        file1_type = input(f"What type is '{file1_path}'? ").lower().strip()
-    
-    file2_path = input("Enter path to second file: ").strip()
-    file2_type = input(f"What type is '{file2_path}'? (docx/pdf): ").lower().strip()
-    while file2_type not in ['docx', 'pdf']:
-        print("Please enter 'docx' or 'pdf'")
-        file2_type = input(f"What type is '{file2_path}'? ").lower().strip()
-    
-    # Process files
-    output_dir = "extracted_tables"
-    print(f"\nProcessing files... Output will be in '{output_dir}' folder\n")
-    
-    for file_path, file_type in [(file1_path, file1_type), (file2_path, file2_type)]:
-        try:
-            file_name = Path(file_path).stem
-            output_folder = os.path.join(output_dir, file_name)
-            
-            tables = extract_tables_from_pdf(file_path) if file_type == 'pdf' else extract_tables_from_docx(file_path)
-            
-            if not tables:
-                print(f"⚠ No tables found in {file_path}")
-                continue
-                
-            saved_files = save_tables_to_csv(tables, output_folder, file_name)
-            print(f"✓ Saved {len(tables)} tables from {file_name} ({file_type})")
-            print(f"   Location: {output_folder}\n")
-            
-        except Exception as e:
-            print(f"✕ Error processing {file_path}: {str(e)}\n", file=sys.stderr)
+# -------------------------
+# Step 4: Optional lowercase normalization
+# -------------------------
+df_exploded['Guidance_List'] = df_exploded['Guidance_List'].str.lower()
 
-if __name__ == "__main__":
-    try:
-        import pdf2docx
-        main()
-    except ImportError:
-        print("\nERROR: Required packages not installed. Please run:")
-        print("pip install pdf2docx python-docx pandas")
-        sys.exit(1)
+# -------------------------
+# Step 5: Save to a new Excel file
+# -------------------------
+output_file = "exploded_guidance_output.xlsx"
+df_exploded.to_excel(output_file, index=False)
+
+print(f"Exploded file saved as: {os.path.abspath(output_file)}")
