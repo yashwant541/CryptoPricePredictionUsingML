@@ -1,48 +1,10 @@
-import os
-import pandas as pd
-from openpyxl.utils import get_column_letter
-from pathlib import Path
-
-def collect_xlsx_files(main_folder):
-    xlsx_files = []
-    for root, dirs, files in os.walk(main_folder):
-        for file in files:
-            if file.endswith('.xlsx'):
-                full_path = os.path.join(root, file)
-                xlsx_files.append(full_path)
-    return xlsx_files
-
-def truncate_sheet_name(name, max_len=31):
-    return name[:max_len]
-
-def consolidate_excel_files(main_folder, output_path):
-    xlsx_files = collect_xlsx_files(main_folder)
-    summary_data = []
-
-    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-        for file_path in xlsx_files:
-            file_name = Path(file_path).stem
-            sheet_name = truncate_sheet_name(file_name)
-            try:
-                df = pd.read_excel(file_path, sheet_name=0)  # Only the first sheet
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-                summary_data.append({
-                    'File Name': file_name,
-                    'Sheet Name': sheet_name,
-                    'Folder Path': os.path.dirname(file_path),
-                    'Full File Path': file_path
-                })
-            except Exception as e:
-                print(f"Error reading {file_path}: {e}")
-
-        # Add Summary Sheet
-        summary_df = pd.DataFrame(summary_data)
-        summary_df.to_excel(writer, sheet_name='Summary', index=False)
-
-    print(f"✅ Consolidation complete! Output saved at: {output_path}")
-
-# ====== Run the Script ======
-main_folder_path = r'C:\path\to\your\main_folder'  # Replace with your folder path
-output_file_path = r'C:\path\to\output\combined_output.xlsx'  # Replace with desired output path
-
-consolidate_excel_files(main_folder_path, output_file_path)
+Actuals_MoM_Change = 
+VAR CurrentMonth = MAX('YourMonthTable'[MonthNum])
+VAR CurrentVal = [TotalActuals]
+VAR PrevVal = 
+    CALCULATE(
+        [TotalActuals],
+        FILTER(ALL('YourMonthTable'), 'YourMonthTable'[MonthNum] = CurrentMonth - 1)
+    )
+RETURN
+    CurrentVal - PrevVal
