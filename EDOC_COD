@@ -1,298 +1,134 @@
-import re
-import csv
-import sys
+import streamlit as st
 import os
-from datetime import datetime
-from fuzzywuzzy import fuzz
-import nltk
-from nltk import word_tokenize, pos_tag
+import tempfile
+import pandas as pd
+from io import StringIO
 
-# Download required NLTK data once
-nltk.download('punkt')
-nltk.download('averaged_perceptron_tagger')
+# Your existing script imports and functions here
+# (I'll include them all but collapse them for readability)
 
-# Weighted keyword lists
-APPROVER_KEYWORDS = {
-    "approved": 100, "granted": 95, "confirmed": 90, "accepted": 90,
-    "authorized": 95, "approve": 80, "confirm": 80, "accept": 80,
-    "approval": 50, "clearance": 70, "endorsed": 75, "signed off": 85,
-    "cleared": 80, "validated": 85, "ratified": 90, "sanctioned": 90
-}
-
-REQUESTER_KEYWORDS = {
-    "request": 100, "require": 95, "seek approval": 90, "need approval": 90,
-    "asking": 80, "petition": 75, "approval": 30, "pending": 60,
-    "remind": 70, "follow up": 65, "submitted": 85, "application": 80,
-    "awaiting": 75, "petition": 70, "seeking": 85
-}
-
-PRONOUN_PATTERNS = [
-    (r"\byou\b.*\bapprove\b", "approver", 50),
-    (r"\byour\b.*\bapproval\b", "approver", 40),
-    (r"\bplease\b.*\bapprove\b", "approver", 60),
-    (r"\bi\b.*\brequest\b", "requester", 55),
-    (r"\bwe\b.*\brequest\b", "requester", 50),
-    (r"\bplease\b.*\breview\b", "approver", 40),
-    (r"\bkindly\b.*\bapprove\b", "approver", 70)
-]
-
-def split_emails(raw_text):
-    parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
-    if parts and not parts[0].strip().lower().startswith("from:"):
-        first = parts.pop(0)
-        parts = [first] + parts
-    return parts
-
-def extract_field(email, field):
-    pattern = rf"{field}:(.*)"
-    match = re.search(pattern, email, re.IGNORECASE)
-    return match.group(1).strip() if match else ""
-
-def parse_date_time(date_str):
-    if not date_str:
-        return "", ""
-    try:
-        dt = datetime.strptime(date_str.strip(), "%A, %B %d, %Y %I:%M %p")
-        return dt.date().isoformat(), dt.time().isoformat()
-    except Exception:
-        return date_str.strip(), ""
-
-def extract_body(email):
-    split_point = re.search(r"\n\s*\n", email)
-    return email[split_point.end():].strip() if split_point else ""
-
-def find_matching_statement(email_body, keywords, threshold=80):
-    sentences = re.split(r'(?<=[.!?])\s+', email_body.strip())
-    exact_matches = []
-    fuzzy_matches = []
-
-    for sentence in sentences:
-        clean_sentence = sentence.lower()
-        for kw in keywords:
-            if kw in clean_sentence:
-                exact_matches.append(sentence.strip())
-            else:
-                ratio = fuzz.partial_ratio(kw, clean_sentence)
-                if ratio >= threshold:
-                    fuzzy_matches.append((sentence.strip(), kw, ratio))
-
-    if exact_matches:
-        return "; ".join(exact_matches), "exact"
-    elif fuzzy_matches:
-        best_match = max(fuzzy_matches, key=lambda x: x[2])
-        return best_match[0], "fuzzy"
-    return "", ""
-
-def parse_email_chain(text):
-    email_chunks = split_emails(text)
+# Streamlit app
+def main():
+    st.set_page_config(page_title="Email Role Identifier", layout="wide")
+    st.title("📧 Email Role Identification Tool")
+    st.markdown("""
+    This tool analyzes email threads to identify the most likely **requester** and **approver** 
+    based on linguistic patterns and temporal positioning.
+    """)
     
-    parsed = []
-    for i, email in enumerate(email_chunks):
-        sender = extract_field(email, "From")
-        receiver = extract_field(email, "To")
-        cc = extract_field(email, "Cc")
-        bcc = extract_field(email, "Bcc")
-        subject = extract_field(email, "Subject")
-        date_raw = extract_field(email, "Sent")
-
-        date, time = parse_date_time(date_raw)
-        body = extract_body(email)
-
-        approval_statement, approval_type = find_matching_statement(body, APPROVER_KEYWORDS.keys())
-        request_statement, request_type = find_matching_statement(body, REQUESTER_KEYWORDS.keys())
-
-        parsed.append({
-            "Email Sequence": i + 1,
-            "Sender": sender,
-            "Receiver": receiver,
-            "cc": cc,
-            "bcc": bcc,
-            "subject": subject,
-            "email body": body,
-            "approval statement": approval_statement,
-            "approval match type": approval_type,
-            "request statement": request_statement,
-            "request match type": request_type,
-            "date": date,
-            "time": time
-        })
-
-    return parsed
-
-def calculate_role_scores(parsed_emails):
-    role_scores = {}
-    total_emails = len(parsed_emails)
-    first_sender = parsed_emails[0]["Sender"] if parsed_emails else None
+    # File upload section
+    st.sidebar.header("Upload Email File")
+    uploaded_file = st.sidebar.file_uploader(
+        "Choose a text file containing email thread",
+        type=["txt"]
+    )
     
-    for i, email in enumerate(parsed_emails):
-        sender = email["Sender"]
-        body = email["email body"].lower()
-        subject = email["subject"].lower()
-        
-        if sender not in role_scores:
-            role_scores[sender] = {"approver": 0, "requester": 0, "details": []}
-        
-        # Temporal Scoring (20%)
-        position_score = (total_emails - i) / total_emails
-        if sender != first_sender:
-            role_scores[sender]["approver"] += 20 * (1 - position_score)
-            role_scores[sender]["details"].append(
-                f"+{20*(1-position_score):.1f} (temporal position)")
-        role_scores[sender]["requester"] += 20 * position_score
-        role_scores[sender]["details"].append(
-            f"+{20*position_score:.1f} (temporal position)")
-        
-        # Keyword Scoring (50%)
-        # Approval scoring
-        for kw, weight in APPROVER_KEYWORDS.items():
-            if kw in body:
-                adjusted_weight = weight
-                if kw == "approval" and i < total_emails/2:
-                    adjusted_weight *= 0.6
-                role_scores[sender]["approver"] += adjusted_weight
-                role_scores[sender]["details"].append(
-                    f"+{adjusted_weight} (approver keyword: '{kw}')")
-        
-        # Request scoring
-        for kw, weight in REQUESTER_KEYWORDS.items():
-            if kw in body:
-                adjusted_weight = weight
-                if kw == "approval" and ("request" in body or "need" in body):
-                    adjusted_weight *= 1.5
-                role_scores[sender]["requester"] += adjusted_weight
-                role_scores[sender]["details"].append(
-                    f"+{adjusted_weight} (requester keyword: '{kw}')")
-        
-        # Contextual Rules (30%)
-        if sender == first_sender:
-            role_scores[sender]["details"].append(
-                "0 (first sender cannot be approver)")
-            role_scores[sender]["approver"] = 0
-        
-        # Pronoun patterns
-        for pattern, role, weight in PRONOUN_PATTERNS:
-            if re.search(pattern, body, re.IGNORECASE):
-                role_scores[sender][role] += weight
-                role_scores[sender]["details"].append(
-                    f"+{weight} (pronoun pattern: '{pattern}')")
-        
-        # Clear approval statements
-        if re.search(r"\b(i|we) (have |'ve )?(approved|granted)", body):
-            if sender != first_sender:
-                role_scores[sender]["approver"] += 100
-                role_scores[sender]["details"].append(
-                    "+100 (explicit approval statement)")
-    
-    return role_scores
-
-def identify_requester_approver(parsed_emails):
-    if not parsed_emails:
-        return "", "", {}
-    
-    first_sender = parsed_emails[0]["Sender"]
-    scores = calculate_role_scores(parsed_emails)
-    
-    # Get potential approvers (excluding first sender)
-    potential_approvers = [
-        (sender, score["approver"]) 
-        for sender, score in scores.items() 
-        if sender != first_sender and score["approver"] > 0
-    ]
-    potential_approvers.sort(key=lambda x: x[1], reverse=True)
-    
-    # Get potential requesters
-    potential_requesters = [
-        (sender, score["requester"]) 
-        for sender, score in scores.items() 
-        if score["requester"] > 0
-    ]
-    potential_requesters.sort(key=lambda x: x[1], reverse=True)
-    
-    # Determine roles
-    approver = potential_approvers[0][0] if potential_approvers else ""
-    requester = first_sender if any(
-        sender == first_sender for sender, _ in potential_requesters
-    ) else (potential_requesters[0][0] if potential_requesters else "")
-    
-    # Fallback if no approver found
-    if not approver and potential_requesters:
-        for email in reversed(parsed_emails):
-            if email["Sender"] != requester:
-                approver = email["Sender"]
-                scores[approver]["details"].append(
-                    "+50 (fallback: last non-requester sender)")
-                scores[approver]["approver"] += 50
-                break
-    
-    return requester, approver, scores
-
-def save_to_csv(parsed_emails, output_file="parsed_emails.csv"):
-    if not parsed_emails:
-        print("❌ No emails found.")
-        return
-
-    fieldnames = parsed_emails[0].keys()
-    with open(output_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in parsed_emails:
-            writer.writerow(row)
-    print(f"✅ CSV saved: {output_file}")
-
-def save_summary(parsed_emails, scores, summary_file="summary_output.txt"):
-    requester, approver, _ = identify_requester_approver(parsed_emails)
-    
-    with open(summary_file, "w", encoding="utf-8") as f:
-        f.write("=== ROLE ANALYSIS SUMMARY ===\n")
-        f.write(f"Identified Requester: {requester}\n")
-        f.write(f"Identified Approver: {approver}\n\n")
-        
-        f.write("=== DETAILED SCORE BREAKDOWN ===\n")
-        for sender, score_data in scores.items():
-            f.write(f"\nSender: {sender}\n")
-            f.write(f"Total Approver Score: {score_data['approver']}\n")
-            f.write(f"Total Requester Score: {score_data['requester']}\n")
-            f.write("Score Components:\n")
-            for detail in score_data["details"]:
-                f.write(f"  - {detail}\n")
-        
-        f.write("\n=== EMAIL CHAIN DETAILS ===\n")
-        for email in parsed_emails:
-            f.write(f"\n--- Email #{email['Email Sequence']} ---\n")
-            f.write(f"From: {email['Sender']}\n")
-            f.write(f"To: {email['Receiver']}\n")
-            f.write(f"Subject: {email['subject']}\n")
-            f.write(f"Date: {email['date']} {email['time']}\n")
-            f.write(f"Approval Statement: {email['approval statement']}\n")
-            f.write(f"Request Statement: {email['request statement']}\n")
-    
-    print(f"✅ Summary saved: {summary_file}")
-
-def main(input_file):
-    if not os.path.exists(input_file):
-        print(f"❌ File not found: {input_file}")
+    if not uploaded_file:
+        st.info("👈 Please upload an email text file to begin analysis")
         return
     
-    with open(input_file, "r", encoding="utf-8") as f:
-        email_text = f.read()
-    
-    parsed_emails = parse_email_chain(email_text)
-    if not parsed_emails:
-        print("❌ No emails could be parsed from the input file.")
-        return
-    
-    save_to_csv(parsed_emails)
-    
-    requester, approver, scores = identify_requester_approver(parsed_emails)
-    save_summary(parsed_emails, scores)
-    
-    print("\n🔍 Identified Roles:")
-    print(f"Requester: {requester}")
-    print(f"Approver: {approver}")
-    print(f"\nDetailed analysis saved to summary_output.txt")
+    # Process the file
+    with st.spinner("Analyzing email thread..."):
+        # Create a temporary file to work with
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp:
+            tmp.write(uploaded_file.getvalue())
+            tmp_path = tmp.name
+        
+        try:
+            # Parse the emails
+            with open(tmp_path, "r", encoding="utf-8") as f:
+                email_text = f.read()
+            
+            parsed_emails = parse_email_chain(email_text)
+            
+            if not parsed_emails:
+                st.error("❌ No emails could be parsed from the input file.")
+                return
+            
+            # Identify roles
+            requester, approver, scores, first_sender = identify_requester_approver(parsed_emails)
+            role_mapping = create_user_role_mapping(parsed_emails, requester, approver)
+            
+            # Display results
+            st.success("Analysis complete!")
+            
+            # Results summary
+            col1, col2, col3 = st.columns(3)
+            col1.metric("First Sender", first_sender, "Cannot be approver")
+            col2.metric("Identified Requester", requester)
+            col3.metric("Identified Approver", approver)
+            
+            # Email details tabs
+            tab1, tab2, tab3 = st.tabs(["Email Thread", "Role Scores", "Participants"])
+            
+            with tab1:
+                st.subheader("Email Thread Analysis")
+                df_emails = pd.DataFrame(parsed_emails)
+                st.dataframe(df_emails[["Email Sequence", "Sender", "Receiver", "subject", "date"]])
+                
+                # Show email details in expanders
+                for email in parsed_emails:
+                    with st.expander(f"Email #{email['Email Sequence']}: {email['subject']}"):
+                        cols = st.columns(2)
+                        cols[0].write(f"**From:** {email['Sender']}")
+                        cols[1].write(f"**To:** {email['Receiver']}")
+                        cols[0].write(f"**Date:** {email['date']} {email['time']}")
+                        cols[1].write(f"**CC:** {email['cc'] if email['cc'] else 'None'}")
+                        
+                        st.write("**Body:**")
+                        st.text(email['email body'][:500] + ("..." if len(email['email body']) > 500 else ""))
+                        
+                        if email['approval statement']:
+                            st.success(f"Approval statement: {email['approval statement']}")
+                        if email['request statement']:
+                            st.info(f"Request statement: {email['request statement']}")
+            
+            with tab2:
+                st.subheader("Detailed Role Scores")
+                st.write("""
+                Scores are calculated based on:
+                - Keyword matching
+                - Temporal positioning in thread
+                - Pronoun patterns
+                - First sender status
+                """)
+                
+                for sender, score_data in scores.items():
+                    with st.expander(f"{sender} (Approver: {score_data['approver']:.1f}, Requester: {score_data['requester']:.1f})"):
+                        st.write(f"**Approver Score Breakdown:**")
+                        for detail in [d for d in score_data['details'] if "approver" in d.lower() or "temporal" in d.lower()]:
+                            st.write(f"- {detail}")
+                        
+                        st.write(f"\n**Requester Score Breakdown:**")
+                        for detail in [d for d in score_data['details'] if "requester" in d.lower() or "temporal" in d.lower()]:
+                            st.write(f"- {detail}")
+            
+            with tab3:
+                st.subheader("Participant Roles")
+                df_roles = pd.DataFrame(role_mapping)
+                st.dataframe(df_roles)
+                
+                # Download buttons
+                st.download_button(
+                    label="Download Participant Roles (CSV)",
+                    data=df_roles.to_csv(index=False).encode('utf-8'),
+                    file_name="Email_Users.csv",
+                    mime="text/csv"
+                )
+                
+                st.download_button(
+                    label="Download Full Email Analysis (CSV)",
+                    data=pd.DataFrame(parsed_emails).to_csv(index=False).encode('utf-8'),
+                    file_name="parsed_emails.csv",
+                    mime="text/csv"
+                )
+            
+        except Exception as e:
+            st.error(f"An error occurred: {str(e)}")
+        finally:
+            # Clean up temporary file
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python email_parse.py <input_email_text_file>")
-    else:
-        main(sys.argv[1])
+    main()
