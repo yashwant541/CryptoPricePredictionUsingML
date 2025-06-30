@@ -1,22 +1,5 @@
-import os
-import webbrowser
-import threading
-import time
-import subprocess
-from streamlit.web.cli import main as st_main
-
-def open_browser():
-    time.sleep(3)
-    webbrowser.open_new("http://localhost:8501")
-
-if __name__ == "__main__":
-    # Download NLTK data if missing
-    nltk_deps = ['punkt', 'stopwords', 'averaged_perceptron_tagger']
-    for dep in nltk_deps:
-        try:
-            nltk.data.find(f'tokenizers/{dep}')
-        except:
-            nltk.download(dep)
-    
-    threading.Thread(target=open_browser).start()
-    st_main()
+@echo off
+title Email Role Classifier
+start "" "http://localhost:8501"
+python -m streamlit run app/email_role_classifier.py --server.port=8501
+pause
