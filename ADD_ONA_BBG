@@ -1,5 +1,1 @@
-@echo off
-title Email Role Classifier
-start "" "http://localhost:8501"
-python -m streamlit run app/email_role_classifier.py --server.port=8501
-pause
+RF ID	RF Name	Program ID	Program Name	Initiative ID	Initiative Name	Cost Type	Biz/Tech	Funding Status	Year Month	Type	Value	Month	Calendar Month	Incurred MT	Year
