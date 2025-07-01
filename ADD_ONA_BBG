@@ -1,1 +1,42 @@
-RF ID	RF Name	Program ID	Program Name	Initiative ID	Initiative Name	Cost Type	Biz/Tech	Funding Status	Year Month	Type	Value	Month	Calendar Month	Incurred MT	Year
+import pandas as pd
+
+# === STEP 1: Load input CSV ===
+input_file = "input_actuals_budget.csv"   # <-- change this to your file path
+df = pd.read_csv(input_file)
+
+# === STEP 2: Pivot Actuals and Budget side-by-side ===
+pivot_df = df.pivot_table(
+    index=["RF ID", "Program ID", "Initiative ID", "Month", "Year Month"],  # you can add more grouping if needed
+    columns="Type",
+    values="Value",
+    aggfunc="sum"
+).reset_index()
+
+# === STEP 3: Rename and clean columns ===
+pivot_df.columns.name = None  # remove the pivoted level name
+pivot_df = pivot_df.rename(columns={"Actuals": "Actuals", "Budget": "Budget"})
+
+# === STEP 4: Calculate Utilization % and Deviation ===
+pivot_df["Utilization_%"] = (pivot_df["Actuals"] / pivot_df["Budget"]) * 100
+pivot_df["Deviation_from_100_%"] = pivot_df["Utilization_%"] - 100
+
+# === STEP 5: Flag rows based on deviation ===
+def flag_deviation(dev):
+    if dev < -10:
+        return "Under by >10%"
+    elif dev > 10:
+        return "Over by >10%"
+    else:
+        return "Within 10%"
+
+pivot_df["Deviation_Flag"] = pivot_df["Deviation_from_100_%"].apply(flag_deviation)
+
+# === STEP 6: Round columns (optional) ===
+pivot_df["Utilization_%"] = pivot_df["Utilization_%"].round(1)
+pivot_df["Deviation_from_100_%"] = pivot_df["Deviation_from_100_%"].round(1)
+
+# === STEP 7: Save output to CSV ===
+output_file = "output_actuals_budget_analysis.csv"
+pivot_df.to_csv(output_file, index=False)
+
+print(f"✅ Analysis complete. Output saved to: {output_file}")
