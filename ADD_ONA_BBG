@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
 import dataiku
+import pandas as pd, numpy as np
+from dataiku import pandasutils as pdu
 import pdfplumber
-import pandas as pd
 import re
 import os
 from datetime import datetime
@@ -8,15 +10,16 @@ from datetime import datetime
 # ---- CONFIG ----
 FOLDER_NAME = "bank_pdf_folder"  # Your Dataiku managed folder name
 TARGET_KEYWORDS = [
-    "Net Interest Income",
-    "Operating Profit",
-    "Total Assets"
+    "Common Equity Tier 1 ratio",
+    "Total capital ratio",
+    "Leverage ratio",
+    "Liquidity coverage ratio"
 ]
 
 DATE_PATTERN = re.compile(r"\b\d{2}[\./-]\d{2}[\./-]\d{4}\b")
 
 # ---- ACCESS PDF IN MANAGED FOLDER ----
-folder = dataiku.Folder(FOLDER_NAME)
+folder = dataiku.Folder("MPJ3zAOO")
 folder_path = folder.get_path()
 
 pdf_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".pdf")]
@@ -83,9 +86,8 @@ with pdfplumber.open(pdf_path) as pdf:
                 continue
 
 # ---- FINAL OUTPUT ----
-df_results = pd.DataFrame(results)
-print(df_results)
+SCB_PDF_Pillar3_df = pd.DataFrame(results)
 
-# Optional: Save to Dataiku dataset
-# output_dataset = dataiku.Dataset("quarterly_extracted_values")
-# output_dataset.write_with_schema(df_results)
+# Write recipe outputs
+SCB_PDF_Pillar3 = dataiku.Dataset("SCB_PDF_Pillar3")
+SCB_PDF_Pillar3.write_with_schema(SCB_PDF_Pillar3_df)
