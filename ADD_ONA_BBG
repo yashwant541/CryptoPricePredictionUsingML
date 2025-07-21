@@ -19,7 +19,7 @@ DATE_PATTERN = re.compile(r"\b\d{2}[\./-]\d{2}[\./-]\d{4}\b")
 
 # ---- ACCESS PDF IN MANAGED FOLDER ----
 folder = dataiku.Folder("MPJ3zAOO")
-folder_path = folder.get_path()
+folder_path = folder.get_info()
 
 pdf_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".pdf")]
 if not pdf_files:
