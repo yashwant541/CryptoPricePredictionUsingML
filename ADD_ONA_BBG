@@ -8,7 +8,6 @@ import os
 from datetime import datetime
 
 # ---- CONFIG ----
-FOLDER_NAME = "bank_pdf_folder"  # Your Dataiku managed folder name
 TARGET_KEYWORDS = [
     "Common Equity Tier 1 ratio",
     "Total capital ratio",
