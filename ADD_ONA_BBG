@@ -5,18 +5,17 @@ import re
 import os
 from datetime import datetime
 
-# ---- CONFIGURATION ----
-FOLDER_NAME = "bank_pdf_folder"  # your managed folder name
+# ---- CONFIG ----
+FOLDER_NAME = "bank_pdf_folder"  # Your Dataiku managed folder name
 TARGET_KEYWORDS = [
-    "Net Interest Income", 
-    "Operating Profit", 
+    "Net Interest Income",
+    "Operating Profit",
     "Total Assets"
 ]
 
-# Match format like 31.03.2025 or 30-06-2024
 DATE_PATTERN = re.compile(r"\b\d{2}[\./-]\d{2}[\./-]\d{4}\b")
 
-# ---- ACCESS MANAGED FOLDER ----
+# ---- ACCESS PDF IN MANAGED FOLDER ----
 folder = dataiku.Folder(FOLDER_NAME)
 folder_path = folder.get_path()
 
@@ -24,16 +23,16 @@ pdf_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".pdf")]
 if not pdf_files:
     raise FileNotFoundError("No PDF files found in the folder.")
 
-pdf_path = os.path.join(folder_path, pdf_files[0])  # use first PDF
+pdf_path = os.path.join(folder_path, pdf_files[0])
 
-# ---- HELPER: Parse Date from Header ----
+# ---- DATE PARSER ----
 def try_parse_date(text):
     try:
         return datetime.strptime(text.replace("-", ".").replace("/", "."), "%d.%m.%Y")
     except:
         return None
 
-# ---- MAIN PROCESSING ----
+# ---- MAIN PROCESS ----
 results = []
 
 with pdfplumber.open(pdf_path) as pdf:
@@ -44,43 +43,41 @@ with pdfplumber.open(pdf_path) as pdf:
                 df = pd.DataFrame(table)
                 df.dropna(how="all", inplace=True)
 
-                # Skip small or non-table content
                 if df.shape[1] < 2:
                     continue
 
-                # Detect header and set as columns
                 header_row = df.iloc[0].fillna("")
                 df.columns = header_row
                 df = df[1:]
 
-                # Detect date columns
+                # Identify date columns
                 date_cols = []
                 for col in df.columns:
-                    match = DATE_PATTERN.match(col)
-                    if match:
-                        parsed_date = try_parse_date(col)
-                        if parsed_date:
-                            date_cols.append((col, parsed_date))
+                    if DATE_PATTERN.match(str(col)):
+                        parsed = try_parse_date(col)
+                        if parsed:
+                            date_cols.append((col, parsed))
 
                 if not date_cols:
-                    continue  # skip if no date columns
+                    continue
 
-                # Sort by parsed date and pick latest
                 date_cols.sort(key=lambda x: x[1], reverse=True)
                 latest_col = date_cols[0][0]
 
-                # Search for each keyword
+                # For each keyword, find first non-empty value
                 for keyword in TARGET_KEYWORDS:
                     matched_rows = df[df.iloc[:, 0].str.contains(keyword, case=False, na=False)]
-                    if not matched_rows.empty:
-                        row = matched_rows.iloc[0]
-                        results.append({
-                            "Page": page_num + 1,
-                            "Table": table_idx + 1,
-                            "Keyword": keyword,
-                            "Latest_Date": latest_col,
-                            "Value": row.get(latest_col, "")
-                        })
+                    for _, row in matched_rows.iterrows():
+                        value = row.get(latest_col, "").strip()
+                        if value:
+                            results.append({
+                                "Page": page_num + 1,
+                                "Table": table_idx + 1,
+                                "Keyword": keyword,
+                                "Latest_Date": latest_col,
+                                "Value": value
+                            })
+                            break  # only first non-empty match
             except Exception as e:
                 print(f"Error on page {page_num+1}, table {table_idx+1}: {e}")
                 continue
@@ -89,6 +86,6 @@ with pdfplumber.open(pdf_path) as pdf:
 df_results = pd.DataFrame(results)
 print(df_results)
 
-# Optional: Write to a Dataiku output dataset
-# output_dataset = dataiku.Dataset("output_quarter_values")
+# Optional: Save to Dataiku dataset
+# output_dataset = dataiku.Dataset("quarterly_extracted_values")
 # output_dataset.write_with_schema(df_results)
