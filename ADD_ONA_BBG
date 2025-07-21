@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import dataiku
-import pandas as pd, numpy as np
+import pandas as pd
+import numpy as np
 from dataiku import pandasutils as pdu
 import pdfplumber
 import re
@@ -15,24 +16,30 @@ TARGET_KEYWORDS = [
     "Liquidity coverage ratio"
 ]
 
-DATE_PATTERN = re.compile(r"\b\d{2}[\./-]\d{2}[\./-]\d{4}\b")
+# Match dates like 31.03.25 or 31.03.2025
+DATE_PATTERN = re.compile(r"\b\d{2}[\./-]\d{2}[\./-]\d{2,4}\b")
 
 # ---- ACCESS PDF IN MANAGED FOLDER ----
-folder = dataiku.Folder("MPJ3zAOO")
-folder_path = folder.get_info()
+folder = dataiku.Folder("MPJ3zAOO")  # Replace with your folder ID if different
+folder_path = folder.get_path()
 
+# Automatically detect the only PDF in the folder
 pdf_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".pdf")]
-if not pdf_files:
-    raise FileNotFoundError("No PDF files found in the folder.")
+if len(pdf_files) != 1:
+    raise Exception(f"Expected exactly one PDF in the folder, found {len(pdf_files)}.")
 
 pdf_path = os.path.join(folder_path, pdf_files[0])
 
 # ---- DATE PARSER ----
 def try_parse_date(text):
     try:
-        return datetime.strptime(text.replace("-", ".").replace("/", "."), "%d.%m.%Y")
+        text = text.replace("-", ".").replace("/", ".").strip()
+        return datetime.strptime(text, "%d.%m.%Y")
     except:
-        return None
+        try:
+            return datetime.strptime(text, "%d.%m.%y")
+        except:
+            return None
 
 # ---- MAIN PROCESS ----
 results = []
@@ -55,8 +62,9 @@ with pdfplumber.open(pdf_path) as pdf:
                 # Identify date columns
                 date_cols = []
                 for col in df.columns:
-                    if DATE_PATTERN.match(str(col)):
-                        parsed = try_parse_date(col)
+                    col_clean = str(col).strip()
+                    if DATE_PATTERN.match(col_clean):
+                        parsed = try_parse_date(col_clean)
                         if parsed:
                             date_cols.append((col, parsed))
 
