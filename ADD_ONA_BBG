@@ -1,42 +1,94 @@
+import dataiku
+import pdfplumber
 import pandas as pd
+import re
+import os
+from datetime import datetime
 
-# === STEP 1: Load input CSV ===
-input_file = "input_actuals_budget.csv"   # <-- change this to your file path
-df = pd.read_csv(input_file)
+# ---- CONFIGURATION ----
+FOLDER_NAME = "bank_pdf_folder"  # your managed folder name
+TARGET_KEYWORDS = [
+    "Net Interest Income", 
+    "Operating Profit", 
+    "Total Assets"
+]
 
-# === STEP 2: Pivot Actuals and Budget side-by-side ===
-pivot_df = df.pivot_table(
-    index=["RF ID", "Program ID", "Initiative ID", "Month", "Year Month"],  # you can add more grouping if needed
-    columns="Type",
-    values="Value",
-    aggfunc="sum"
-).reset_index()
+# Match format like 31.03.2025 or 30-06-2024
+DATE_PATTERN = re.compile(r"\b\d{2}[\./-]\d{2}[\./-]\d{4}\b")
 
-# === STEP 3: Rename and clean columns ===
-pivot_df.columns.name = None  # remove the pivoted level name
-pivot_df = pivot_df.rename(columns={"Actuals": "Actuals", "Budget": "Budget"})
+# ---- ACCESS MANAGED FOLDER ----
+folder = dataiku.Folder(FOLDER_NAME)
+folder_path = folder.get_path()
 
-# === STEP 4: Calculate Utilization % and Deviation ===
-pivot_df["Utilization_%"] = (pivot_df["Actuals"] / pivot_df["Budget"]) * 100
-pivot_df["Deviation_from_100_%"] = pivot_df["Utilization_%"] - 100
+pdf_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".pdf")]
+if not pdf_files:
+    raise FileNotFoundError("No PDF files found in the folder.")
 
-# === STEP 5: Flag rows based on deviation ===
-def flag_deviation(dev):
-    if dev < -10:
-        return "Under by >10%"
-    elif dev > 10:
-        return "Over by >10%"
-    else:
-        return "Within 10%"
+pdf_path = os.path.join(folder_path, pdf_files[0])  # use first PDF
 
-pivot_df["Deviation_Flag"] = pivot_df["Deviation_from_100_%"].apply(flag_deviation)
+# ---- HELPER: Parse Date from Header ----
+def try_parse_date(text):
+    try:
+        return datetime.strptime(text.replace("-", ".").replace("/", "."), "%d.%m.%Y")
+    except:
+        return None
 
-# === STEP 6: Round columns (optional) ===
-pivot_df["Utilization_%"] = pivot_df["Utilization_%"].round(1)
-pivot_df["Deviation_from_100_%"] = pivot_df["Deviation_from_100_%"].round(1)
+# ---- MAIN PROCESSING ----
+results = []
 
-# === STEP 7: Save output to CSV ===
-output_file = "output_actuals_budget_analysis.csv"
-pivot_df.to_csv(output_file, index=False)
+with pdfplumber.open(pdf_path) as pdf:
+    for page_num, page in enumerate(pdf.pages):
+        tables = page.extract_tables()
+        for table_idx, table in enumerate(tables):
+            try:
+                df = pd.DataFrame(table)
+                df.dropna(how="all", inplace=True)
 
-print(f"✅ Analysis complete. Output saved to: {output_file}")
+                # Skip small or non-table content
+                if df.shape[1] < 2:
+                    continue
+
+                # Detect header and set as columns
+                header_row = df.iloc[0].fillna("")
+                df.columns = header_row
+                df = df[1:]
+
+                # Detect date columns
+                date_cols = []
+                for col in df.columns:
+                    match = DATE_PATTERN.match(col)
+                    if match:
+                        parsed_date = try_parse_date(col)
+                        if parsed_date:
+                            date_cols.append((col, parsed_date))
+
+                if not date_cols:
+                    continue  # skip if no date columns
+
+                # Sort by parsed date and pick latest
+                date_cols.sort(key=lambda x: x[1], reverse=True)
+                latest_col = date_cols[0][0]
+
+                # Search for each keyword
+                for keyword in TARGET_KEYWORDS:
+                    matched_rows = df[df.iloc[:, 0].str.contains(keyword, case=False, na=False)]
+                    if not matched_rows.empty:
+                        row = matched_rows.iloc[0]
+                        results.append({
+                            "Page": page_num + 1,
+                            "Table": table_idx + 1,
+                            "Keyword": keyword,
+                            "Latest_Date": latest_col,
+                            "Value": row.get(latest_col, "")
+                        })
+            except Exception as e:
+                print(f"Error on page {page_num+1}, table {table_idx+1}: {e}")
+                continue
+
+# ---- FINAL OUTPUT ----
+df_results = pd.DataFrame(results)
+print(df_results)
+
+# Optional: Write to a Dataiku output dataset
+# output_dataset = dataiku.Dataset("output_quarter_values")
+# output_dataset.write_with_schema(df_results)
