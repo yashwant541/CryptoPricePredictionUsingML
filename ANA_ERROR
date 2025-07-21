@@ -1,58 +1,60 @@
+import dataiku
 import pdfplumber
 import pandas as pd
 import re
+import os
 
 # ---- CONFIGURATION ----
-PDF_PATH = "path/to/your/document.pdf"  # Replace with Dataiku folder path if needed
+FOLDER_NAME = "bank_pdf_folder"  # Name of your managed folder in Dataiku
 TARGET_KEYWORDS = [
     "Net Interest Income", 
     "Operating Profit", 
     "Total Assets"
 ]
 
-# Regex pattern to detect quarter headers like 'Q1 FY25' or 'Jun 2025'
 QUARTER_PATTERN = re.compile(r"(Q[1-4]\s?FY\d{2})|([A-Za-z]{3,9}\s20\d{2})", re.IGNORECASE)
 
-# ---- RESULTS STORAGE ----
+# ---- ACCESS THE MANAGED FOLDER ----
+folder = dataiku.Folder(FOLDER_NAME)
+folder_path = folder.get_path()
+
+# ---- GET PDF FILE PATH FROM FOLDER ----
+pdf_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".pdf")]
+
+if not pdf_files:
+    raise FileNotFoundError("No PDF file found in the managed folder.")
+
+pdf_path = os.path.join(folder_path, pdf_files[0])  # pick the first PDF file
+
+# ---- EXTRACT TABLE VALUES ----
 results = []
 
-# ---- PROCESSING ----
-with pdfplumber.open(PDF_PATH) as pdf:
+with pdfplumber.open(pdf_path) as pdf:
     for page_num, page in enumerate(pdf.pages):
         tables = page.extract_tables()
         for table_idx, table in enumerate(tables):
             try:
                 df = pd.DataFrame(table)
-                df.dropna(how="all", inplace=True)  # remove empty rows
+                df.dropna(how="all", inplace=True)
 
-                # Check for presence of quarter headers in columns
+                # Check quarter headers
                 header_row = df.iloc[0].fillna("")
                 quarter_cols = [i for i, col in enumerate(header_row) if QUARTER_PATTERN.match(col)]
 
                 if not quarter_cols or df.shape[1] < 2:
-                    continue  # Not a relevant table
+                    continue
 
-                # Build new df with header
                 df.columns = header_row
                 df = df[1:]
 
-                # Search for each keyword
                 for keyword in TARGET_KEYWORDS:
                     matched_rows = df[df.iloc[:, 0].str.contains(keyword, case=False, na=False)]
-
                     if not matched_rows.empty:
-                        # Assume first match is most relevant
                         row = matched_rows.iloc[0]
-
-                        # Extract quarter values
                         available_quarters = [col for col in df.columns if QUARTER_PATTERN.match(col)]
                         if not available_quarters:
                             continue
-                        
-                        # Sort quarters chronologically (simplified - assumes order left to right = newest to oldest)
                         latest_quarter = available_quarters[0]
-
-                        # Store result
                         results.append({
                             "Page": page_num + 1,
                             "Table": table_idx + 1,
@@ -61,14 +63,13 @@ with pdfplumber.open(PDF_PATH) as pdf:
                             "Value": row[latest_quarter]
                         })
             except Exception as e:
-                print(f"Error on page {page_num+1} table {table_idx+1}: {e}")
+                print(f"Error processing table {table_idx+1} on page {page_num+1}: {e}")
                 continue
 
-# ---- FINAL OUTPUT ----
+# ---- OUTPUT RESULTS ----
 df_results = pd.DataFrame(results)
 print(df_results)
 
-# Optional: Save results to a Dataiku dataset
-# import dataiku
-# output_dataset = dataiku.Dataset("extracted_quarterly_values")
+# Optional: Write to dataset
+# output_dataset = dataiku.Dataset("output_quarter_values")
 # output_dataset.write_with_schema(df_results)
