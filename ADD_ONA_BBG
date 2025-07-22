@@ -16,22 +16,15 @@ TARGET_KEYWORDS = [
     "Liquidity coverage ratio"
 ]
 
-# Match dates like 31.03.25 or 31.03.2025
 DATE_PATTERN = re.compile(r"\b\d{2}[\./-]\d{2}[\./-]\d{2,4}\b")
 
-# ---- ACCESS PDF FROM MANAGED FOLDER (e.g., HDFS/S3) ----
-folder = dataiku.Folder("MPJ3zAOO")  # Replace with your actual folder ID
-folder_info = folder.get_info()
+# ---- ACCESS PDF FROM MANAGED FOLDER (HDFS/S3-compatible) ----
+folder = dataiku.Folder("MPJ3zAOO")
 file_list = folder.list_paths_in_partition()
-
-# Filter for PDF files
 pdf_files = [f for f in file_list if f.lower().endswith(".pdf")]
 if len(pdf_files) != 1:
-    raise Exception(f"Expected exactly one PDF file in the folder, found {len(pdf_files)}.")
-
-pdf_filename = pdf_files[0]  # e.g., '/scb.pdf'
-
-# Download the PDF file as a byte stream
+    raise Exception(f"Expected exactly one PDF file in folder, found {len(pdf_files)}.")
+pdf_filename = pdf_files[0]
 pdf_stream = folder.get_download_stream(pdf_filename)
 pdf_bytes = io.BytesIO(pdf_stream.read())
 
@@ -47,8 +40,7 @@ def try_parse_date(text):
             return None
 
 # ---- MAIN PROCESS ----
-results = []
-
+results = {}
 with pdfplumber.open(pdf_bytes) as pdf:
     for page_num, page in enumerate(pdf.pages):
         tables = page.extract_tables()
@@ -56,7 +48,6 @@ with pdfplumber.open(pdf_bytes) as pdf:
             try:
                 df = pd.DataFrame(table)
                 df.dropna(how="all", inplace=True)
-
                 if df.shape[1] < 2:
                     continue
 
@@ -64,7 +55,7 @@ with pdfplumber.open(pdf_bytes) as pdf:
                 df.columns = header_row
                 df = df[1:]
 
-                # Identify date columns
+                # Detect date columns
                 date_cols = []
                 for col in df.columns:
                     col_clean = str(col).strip()
@@ -72,34 +63,38 @@ with pdfplumber.open(pdf_bytes) as pdf:
                         parsed = try_parse_date(col_clean)
                         if parsed:
                             date_cols.append((col_clean, parsed))
-
                 if not date_cols:
                     continue
 
                 date_cols.sort(key=lambda x: x[1], reverse=True)
                 latest_col = date_cols[0][0]
 
-                # For each keyword, find first non-empty value
+                # Search for each keyword not yet found
                 for keyword in TARGET_KEYWORDS:
+                    if keyword in results:
+                        continue  # already found
+
                     matched_rows = df[df.iloc[:, 0].str.contains(keyword, case=False, na=False)]
                     for _, row in matched_rows.iterrows():
-                        value = row.get(latest_col, "").strip()
+                        value = row.get(latest_col, "")
+                        if isinstance(value, str):
+                            value = value.strip()
                         if value:
-                            results.append({
+                            results[keyword] = {
                                 "Page": page_num + 1,
                                 "Table": table_idx + 1,
                                 "Keyword": keyword,
                                 "Latest_Date": latest_col,
                                 "Value": value
-                            })
-                            break  # only first non-empty match
+                            }
+                            break
             except Exception as e:
                 print(f"Error on page {page_num+1}, table {table_idx+1}: {e}")
                 continue
 
 # ---- FINAL OUTPUT ----
-SCB_PDF_Pillar3_df = pd.DataFrame(results)
+SCB_PDF_Pillar3_df = pd.DataFrame(list(results.values()))
 
 # Write to Dataiku output dataset
-SCB_PDF_Pillar3 = dataiku.Dataset("SCB_PDF_Pillar3")
-SCB_PDF_Pillar3.write_with_schema(SCB_PDF_Pillar3_df)
+output_dataset = dataiku.Dataset("SCB_PDF_Pillar3")
+output_dataset.write_with_schema(SCB_PDF_Pillar3_df)
