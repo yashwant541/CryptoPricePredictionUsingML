@@ -14,7 +14,7 @@ def extract_tables_from_pdf(pdf_path):
             try:
                 page_tables = page.extract_tables()
                 for table_num, table in enumerate(page_tables):
-                    if table:  # Only process non-empty tables
+                    if table and any(any(cell for cell in row if cell) for row in table):
                         tables.append({
                             "page": page_num + 1,
                             "table_num": table_num + 1,
@@ -25,32 +25,6 @@ def extract_tables_from_pdf(pdf_path):
                 continue
     return tables
 
-def find_date_columns(table_data):
-    """Identify columns that contain dates in common formats"""
-    date_columns = []
-    date_patterns = [
-        r'\d{2}/\d{2}/\d{4}',  # dd/mm/yyyy
-        r'\d{2}-\d{2}-\d{4}',  # dd-mm-yyyy
-        r'\d{2}\.\d{2}\.\d{4}',  # dd.mm.yyyy
-        r'\d{2}/\d{2}/\d{2}',  # dd/mm/yy
-        r'\d{2}-\d{2}-\d{2}',  # dd-mm-yy
-        r'\d{2}\.\d{2}\.\d{2}',  # dd.mm.yy
-    ]
-    
-    # Check first few rows for date patterns
-    for col_idx in range(len(table_data[0])):
-        for row_idx, row in enumerate(table_data):
-            if row_idx > 5:  # Only check first 5 rows to save time
-                break
-            if col_idx < len(row) and row[col_idx]:
-                cell_content = str(row[col_idx])
-                for pattern in date_patterns:
-                    if re.search(pattern, cell_content):
-                        date_columns.append(col_idx)
-                        break  # Found date in this column, move to next column
-    
-    return list(set(date_columns))  # Remove duplicates
-
 def parse_date(date_str):
     """Parse date string in various formats to datetime object"""
     if not date_str:
@@ -59,7 +33,8 @@ def parse_date(date_str):
     date_str = str(date_str).strip()
     date_formats = [
         '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y',
-        '%d/%m/%y', '%d-%m-%y', '%d.%m.%y'
+        '%d/%m/%y', '%d-%m-%y', '%d.%m.%y',
+        '%d.%m.%Y', '%d.%m.%y'  # Added formats seen in the PDF
     ]
     
     for fmt in date_formats:
@@ -69,16 +44,36 @@ def parse_date(date_str):
             continue
     return None
 
-def find_latest_date_column(table_data, date_columns):
-    """Identify which date column has the most recent date"""
-    if not date_columns:
-        return None
+def find_latest_date_value(table_data, keywords):
+    """Find the latest date and corresponding values for given keywords"""
+    results = []
     
+    # First find all date columns
+    date_columns = []
+    date_patterns = [
+        r'\d{2}/\d{2}/\d{4}', r'\d{2}-\d{2}-\d{4}', r'\d{2}\.\d{2}\.\d{4}',
+        r'\d{2}/\d{2}/\d{2}', r'\d{2}-\d{2}-\d{2}', r'\d{2}\.\d{2}\.\d{2}'
+    ]
+    
+    # Check header row for dates
+    if table_data and len(table_data) > 0:
+        header_row = table_data[0]
+        for col_idx, header in enumerate(header_row):
+            if header:
+                for pattern in date_patterns:
+                    if re.search(pattern, str(header)):
+                        date_columns.append(col_idx)
+                        break
+    
+    if not date_columns:
+        return results
+    
+    # Find the latest date column
     latest_date = None
     latest_col = None
     
     for col in date_columns:
-        for row in table_data:
+        for row in table_data[1:]:  # Skip header
             if col < len(row) and row[col]:
                 date_obj = parse_date(row[col])
                 if date_obj:
@@ -86,42 +81,26 @@ def find_latest_date_column(table_data, date_columns):
                         latest_date = date_obj
                         latest_col = col
     
-    return latest_col
-
-def search_keywords_in_tables(tables, keywords):
-    """Search for keywords in tables and extract relevant data"""
-    results = []
+    if latest_col is None:
+        return results
     
-    for table_info in tables:
-        table_data = table_info['data']
-        date_columns = find_date_columns(table_data)
-        latest_date_col = find_latest_date_column(table_data, date_columns)
-        
-        if latest_date_col is None:
-            continue  # Skip tables without dates
-            
-        for row_idx, row in enumerate(table_data):
-            if not row:  # Skip empty rows
-                continue
-                
-            row_text = ' '.join([str(cell) for cell in row if cell])
-            for keyword in keywords:
-                if keyword.lower() in row_text.lower():
-                    # Find the value in the latest date column
-                    if latest_date_col < len(row):
-                        date_str = row[latest_date_col] if latest_date_col < len(row) else None
-                        value = row[latest_date_col + 1] if latest_date_col + 1 < len(row) else None
-                        
-                        if value and date_str:
-                            results.append({
-                                "page": table_info['page'],
-                                "table": table_info['table_num'],
-                                "keyword": keyword,
-                                "date": date_str,
-                                "value": value,
-                                "date_col": latest_date_col,
-                                "row": row_idx + 1
-                            })
+    # Search for keywords in the table
+    for row in table_data:
+        row_text = ' '.join([str(cell) for cell in row if cell])
+        for keyword in keywords:
+            if keyword.lower() in row_text.lower():
+                # Find the value in the latest date column
+                if latest_col < len(row):
+                    value = row[latest_col]
+                    if value:
+                        results.append({
+                            "keyword": keyword,
+                            "date": latest_date.strftime('%d/%m/%Y') if latest_date else None,
+                            "value": value,
+                            "page": table_info['page'],
+                            "table": table_info['table_num'],
+                            "row": table_data.index(row) + 1
+                        })
     
     return results
 
@@ -138,9 +117,8 @@ def main():
     folder_name = "YOUR_FOLDER_NAME"  # Replace with your folder name
     folder = dataiku.Folder(folder_name)
     
-    # Get the list of files in the folder - CORRECTED APPROACH
-    folder_contents = folder.list_contents()
-    pdf_files = [f for f in folder_contents if f.lower().endswith('.pdf')]
+    # Find PDF file in the folder
+    pdf_files = [f for f in folder.list_paths() if f.lower().endswith('.pdf')]
     
     if not pdf_files:
         raise ValueError(f"No PDF file found in the managed folder '{folder_name}'")
@@ -163,27 +141,45 @@ def main():
         print(f"Found {len(tables)} tables in the PDF")
         
         print("Searching for financial keywords...")
-        results = search_keywords_in_tables(tables, financial_keywords)
+        results = []
+        
+        for table_info in tables:
+            table_results = find_latest_date_value(table_info['data'], financial_keywords)
+            results.extend(table_results)
+        
         print(f"Found {len(results)} matches")
         
         # Create DataFrame
         df = pd.DataFrame(results)
         
         if not df.empty:
-            # Clean up the value column - remove percentage signs and convert to float
-            df['value'] = df['value'].str.replace('%', '').str.replace(',', '').astype(float)
+            # Clean up the value column - remove percentage signs and convert to numeric
+            df['clean_value'] = df['value'].str.replace('%', '').str.replace(',', '')
+            df['clean_value'] = pd.to_numeric(df['clean_value'], errors='coerce')
             
-            # Parse dates properly
-            df['parsed_date'] = df['date'].apply(parse_date)
-            df = df.sort_values('parsed_date', ascending=False)
+            # For ratio values, divide by 100 if they're likely percentages (values between 0-100)
+            df.loc[df['clean_value'].between(0, 100), 'clean_value'] = df['clean_value'] / 100
             
-            # Keep only the latest record for each keyword (in case of duplicates)
+            # Keep only one record per keyword (the first occurrence)
             df = df.drop_duplicates('keyword', keep='first')
+            
+            # Sort by keyword for consistent output
+            df = df.sort_values('keyword')
+        
+        # Add metadata
+        df['source_file'] = pdf_files[0]
+        df['extraction_date'] = datetime.now().strftime('%Y-%m-%d')
+        
+        # Select final columns
+        final_columns = ['keyword', 'value', 'clean_value', 'date', 'page', 'table', 'row', 
+                        'source_file', 'extraction_date']
+        df = df[[col for col in final_columns if col in df.columns]]
         
         # Write to Dataiku dataset
         output_dataset = dataiku.Dataset("SCB_PDF_Pillar3")
         output_dataset.write_with_schema(df)
         print("Results written to SCB_PDF_Pillar3 dataset")
+        print(df)
     
     finally:
         # Clean up the temporary file
