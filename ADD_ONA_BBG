@@ -3,6 +3,8 @@ import pandas as pd
 import re
 from datetime import datetime
 import dataiku
+import tempfile
+import os
 
 def extract_tables_from_pdf(pdf_path):
     """Extract all tables from PDF using pdfplumber"""
@@ -135,45 +137,59 @@ def main():
     # Get input PDF from Dataiku managed folder
     client = dataiku.api_client()
     project = client.get_project(dataiku.default_project_key())
-    managed_folder = project.get_managed_folder("FOLDER_ID")  # Replace with your folder ID
+    
+    # Get the managed folder handle
+    folder_name = "YOUR_FOLDER_NAME"  # Replace with your folder name
+    folder = dataiku.Folder(folder_name)
     
     # Find PDF file in the folder (assuming only one PDF)
-    pdf_files = [f for f in managed_folder.list_paths_in_partition() if f.lower().endswith('.pdf')]
+    pdf_files = [f for f in folder.list_paths() if f.lower().endswith('.pdf')]
     
     if not pdf_files:
-        raise ValueError("No PDF file found in the managed folder")
+        raise ValueError(f"No PDF file found in the managed folder '{folder_name}'")
     if len(pdf_files) > 1:
         print(f"Warning: Multiple PDFs found. Using the first one: {pdf_files[0]}")
     
-    pdf_path = managed_folder.get_download_stream(pdf_files[0]).get_contents_to_file()
+    # Create a temporary file to store the PDF
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_file:
+        pdf_path = tmp_file.name
     
-    # Process PDF
-    print("Extracting tables from PDF...")
-    tables = extract_tables_from_pdf(pdf_path)
-    print(f"Found {len(tables)} tables in the PDF")
+    # Download the PDF to the temporary file
+    folder.download(pdf_files[0], pdf_path)
     
-    print("Searching for financial keywords...")
-    results = search_keywords_in_tables(tables, financial_keywords)
-    print(f"Found {len(results)} matches")
-    
-    # Create DataFrame
-    df = pd.DataFrame(results)
-    
-    if not df.empty:
-        # Clean up the value column - remove percentage signs and convert to float
-        df['value'] = df['value'].str.replace('%', '').str.replace(',', '').astype(float)
+    try:
+        # Process PDF
+        print("Extracting tables from PDF...")
+        tables = extract_tables_from_pdf(pdf_path)
+        print(f"Found {len(tables)} tables in the PDF")
         
-        # Parse dates properly
-        df['parsed_date'] = df['date'].apply(parse_date)
-        df = df.sort_values('parsed_date', ascending=False)
+        print("Searching for financial keywords...")
+        results = search_keywords_in_tables(tables, financial_keywords)
+        print(f"Found {len(results)} matches")
         
-        # Keep only the latest record for each keyword (in case of duplicates)
-        df = df.drop_duplicates('keyword', keep='first')
+        # Create DataFrame
+        df = pd.DataFrame(results)
+        
+        if not df.empty:
+            # Clean up the value column - remove percentage signs and convert to float
+            df['value'] = df['value'].str.replace('%', '').str.replace(',', '').astype(float)
+            
+            # Parse dates properly
+            df['parsed_date'] = df['date'].apply(parse_date)
+            df = df.sort_values('parsed_date', ascending=False)
+            
+            # Keep only the latest record for each keyword (in case of duplicates)
+            df = df.drop_duplicates('keyword', keep='first')
+        
+        # Write to Dataiku dataset
+        output_dataset = dataiku.Dataset("SCB_PDF_Pillar3")
+        output_dataset.write_with_schema(df)
+        print("Results written to SCB_PDF_Pillar3 dataset")
     
-    # Write to Dataiku dataset
-    output_dataset = dataiku.Dataset("SCB_PDF_Pillar3")
-    output_dataset.write_with_schema(df)
-    print("Results written to SCB_PDF_Pillar3 dataset")
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
 
 if __name__ == "__main__":
     try:
