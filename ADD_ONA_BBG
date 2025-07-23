@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import pdfplumber
 import pandas as pd
 import re
@@ -33,8 +34,7 @@ def parse_date(date_str):
     date_str = str(date_str).strip()
     date_formats = [
         '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y',
-        '%d/%m/%y', '%d-%m-%y', '%d.%m.%y',
-        '%d.%m.%Y', '%d.%m.%y'  # Added formats seen in the PDF
+        '%d/%m/%y', '%d-%m-%y', '%d.%m.%y'
     ]
     
     for fmt in date_formats:
@@ -44,8 +44,9 @@ def parse_date(date_str):
             continue
     return None
 
-def find_latest_date_value(table_data, keywords):
+def find_latest_date_value(table_info, keywords):
     """Find the latest date and corresponding values for given keywords"""
+    table_data = table_info["data"]
     results = []
     
     # First find all date columns
@@ -55,7 +56,6 @@ def find_latest_date_value(table_data, keywords):
         r'\d{2}/\d{2}/\d{2}', r'\d{2}-\d{2}-\d{2}', r'\d{2}\.\d{2}\.\d{2}'
     ]
     
-    # Check header row for dates
     if table_data and len(table_data) > 0:
         header_row = table_data[0]
         for col_idx, header in enumerate(header_row):
@@ -73,7 +73,7 @@ def find_latest_date_value(table_data, keywords):
     latest_col = None
     
     for col in date_columns:
-        for row in table_data[1:]:  # Skip header
+        for row in table_data[1:]:
             if col < len(row) and row[col]:
                 date_obj = parse_date(row[col])
                 if date_obj:
@@ -84,12 +84,11 @@ def find_latest_date_value(table_data, keywords):
     if latest_col is None:
         return results
     
-    # Search for keywords in the table
-    for row in table_data:
+    # Search for keywords
+    for row_idx, row in enumerate(table_data):
         row_text = ' '.join([str(cell) for cell in row if cell])
         for keyword in keywords:
             if keyword.lower() in row_text.lower():
-                # Find the value in the latest date column
                 if latest_col < len(row):
                     value = row[latest_col]
                     if value:
@@ -99,9 +98,8 @@ def find_latest_date_value(table_data, keywords):
                             "value": value,
                             "page": table_info['page'],
                             "table": table_info['table_num'],
-                            "row": table_data.index(row) + 1
+                            "row": row_idx + 1
                         })
-    
     return results
 
 def main():
@@ -118,7 +116,7 @@ def main():
     folder = dataiku.Folder(folder_name)
     
     # Find PDF file in the folder
-    pdf_files = [f for f in folder.list_paths() if f.lower().endswith('.pdf')]
+    pdf_files = [f for f in folder.list_paths_in_partition() if f.lower().endswith('.pdf')]
     
     if not pdf_files:
         raise ValueError(f"No PDF file found in the managed folder '{folder_name}'")
@@ -144,7 +142,7 @@ def main():
         results = []
         
         for table_info in tables:
-            table_results = find_latest_date_value(table_info['data'], financial_keywords)
+            table_results = find_latest_date_value(table_info, financial_keywords)
             results.extend(table_results)
         
         print(f"Found {len(results)} matches")
@@ -152,18 +150,16 @@ def main():
         # Create DataFrame
         df = pd.DataFrame(results)
         
-        if not df.empty:
-            # Clean up the value column - remove percentage signs and convert to numeric
-            df['clean_value'] = df['value'].str.replace('%', '').str.replace(',', '')
+        if not df.empty and 'value' in df.columns:
+            # Clean up the value column
+            df['clean_value'] = df['value'].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
             df['clean_value'] = pd.to_numeric(df['clean_value'], errors='coerce')
             
-            # For ratio values, divide by 100 if they're likely percentages (values between 0-100)
+            # Adjust percentages
             df.loc[df['clean_value'].between(0, 100), 'clean_value'] = df['clean_value'] / 100
             
-            # Keep only one record per keyword (the first occurrence)
+            # Keep only one record per keyword
             df = df.drop_duplicates('keyword', keep='first')
-            
-            # Sort by keyword for consistent output
             df = df.sort_values('keyword')
         
         # Add metadata
@@ -171,8 +167,10 @@ def main():
         df['extraction_date'] = datetime.now().strftime('%Y-%m-%d')
         
         # Select final columns
-        final_columns = ['keyword', 'value', 'clean_value', 'date', 'page', 'table', 'row', 
-                        'source_file', 'extraction_date']
+        final_columns = [
+            'keyword', 'value', 'clean_value', 'date',
+            'page', 'table', 'row', 'source_file', 'extraction_date'
+        ]
         df = df[[col for col in final_columns if col in df.columns]]
         
         # Write to Dataiku dataset
@@ -182,7 +180,6 @@ def main():
         print(df)
     
     finally:
-        # Clean up the temporary file
         if os.path.exists(pdf_path):
             os.remove(pdf_path)
 
