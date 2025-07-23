@@ -1,100 +1,183 @@
-# -*- coding: utf-8 -*-
-import dataiku
-import pandas as pd
-import numpy as np
-from dataiku import pandasutils as pdu
 import pdfplumber
+import pandas as pd
 import re
-import io
 from datetime import datetime
+import dataiku
 
-# ---- CONFIG ----
-TARGET_KEYWORDS = [
-    "Common Equity Tier 1 ratio",
-    "Total capital ratio",
-    "Leverage ratio",
-    "Liquidity coverage ratio"
-]
-
-DATE_PATTERN = re.compile(r"\b\d{2}[\./-]\d{2}[\./-]\d{2,4}\b")
-
-# ---- ACCESS PDF FROM MANAGED FOLDER (HDFS/S3-compatible) ----
-folder = dataiku.Folder("MPJ3zAOO")
-file_list = folder.list_paths_in_partition()
-pdf_files = [f for f in file_list if f.lower().endswith(".pdf")]
-if len(pdf_files) != 1:
-    raise Exception(f"Expected exactly one PDF file in folder, found {len(pdf_files)}.")
-pdf_filename = pdf_files[0]
-pdf_stream = folder.get_download_stream(pdf_filename)
-pdf_bytes = io.BytesIO(pdf_stream.read())
-
-# ---- DATE PARSER ----
-def try_parse_date(text):
-    try:
-        text = text.replace("-", ".").replace("/", ".").strip()
-        return datetime.strptime(text, "%d.%m.%Y")
-    except:
-        try:
-            return datetime.strptime(text, "%d.%m.%y")
-        except:
-            return None
-
-# ---- MAIN PROCESS ----
-results = {}
-with pdfplumber.open(pdf_bytes) as pdf:
-    for page_num, page in enumerate(pdf.pages):
-        tables = page.extract_tables()
-        for table_idx, table in enumerate(tables):
+def extract_tables_from_pdf(pdf_path):
+    """Extract all tables from PDF using pdfplumber"""
+    tables = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(pdf.pages):
             try:
-                df = pd.DataFrame(table)
-                df.dropna(how="all", inplace=True)
-                if df.shape[1] < 2:
-                    continue
-
-                header_row = df.iloc[0].fillna("")
-                df.columns = header_row
-                df = df[1:]
-
-                # Detect date columns
-                date_cols = []
-                for col in df.columns:
-                    col_clean = str(col).strip()
-                    if DATE_PATTERN.match(col_clean):
-                        parsed = try_parse_date(col_clean)
-                        if parsed:
-                            date_cols.append((col_clean, parsed))
-                if not date_cols:
-                    continue
-
-                date_cols.sort(key=lambda x: x[1], reverse=True)
-                latest_col = date_cols[0][0]
-
-                # Search for each keyword not yet found
-                for keyword in TARGET_KEYWORDS:
-                    if keyword in results:
-                        continue  # already found
-
-                    matched_rows = df[df.iloc[:, 0].str.contains(keyword, case=False, na=False)]
-                    for _, row in matched_rows.iterrows():
-                        value = row.get(latest_col, "")
-                        if isinstance(value, str):
-                            value = value.strip()
-                        if value:
-                            results[keyword] = {
-                                "Page": page_num + 1,
-                                "Table": table_idx + 1,
-                                "Keyword": keyword,
-                                "Latest_Date": latest_col,
-                                "Value": value
-                            }
-                            break
+                page_tables = page.extract_tables()
+                for table_num, table in enumerate(page_tables):
+                    if table:  # Only process non-empty tables
+                        tables.append({
+                            "page": page_num + 1,
+                            "table_num": table_num + 1,
+                            "data": table
+                        })
             except Exception as e:
-                print(f"Error on page {page_num+1}, table {table_idx+1}: {e}")
+                print(f"Error processing page {page_num + 1}: {str(e)}")
                 continue
+    return tables
 
-# ---- FINAL OUTPUT ----
-SCB_PDF_Pillar3_df = pd.DataFrame(list(results.values()))
+def find_date_columns(table_data):
+    """Identify columns that contain dates in common formats"""
+    date_columns = []
+    date_patterns = [
+        r'\d{2}/\d{2}/\d{4}',  # dd/mm/yyyy
+        r'\d{2}-\d{2}-\d{4}',  # dd-mm-yyyy
+        r'\d{2}\.\d{2}\.\d{4}',  # dd.mm.yyyy
+        r'\d{2}/\d{2}/\d{2}',  # dd/mm/yy
+        r'\d{2}-\d{2}-\d{2}',  # dd-mm-yy
+        r'\d{2}\.\d{2}\.\d{2}',  # dd.mm.yy
+    ]
+    
+    # Check first few rows for date patterns
+    for col_idx in range(len(table_data[0])):
+        for row_idx, row in enumerate(table_data):
+            if row_idx > 5:  # Only check first 5 rows to save time
+                break
+            if col_idx < len(row) and row[col_idx]:
+                cell_content = str(row[col_idx])
+                for pattern in date_patterns:
+                    if re.search(pattern, cell_content):
+                        date_columns.append(col_idx)
+                        break  # Found date in this column, move to next column
+    
+    return list(set(date_columns))  # Remove duplicates
 
-# Write to Dataiku output dataset
-output_dataset = dataiku.Dataset("SCB_PDF_Pillar3")
-output_dataset.write_with_schema(SCB_PDF_Pillar3_df)
+def parse_date(date_str):
+    """Parse date string in various formats to datetime object"""
+    if not date_str:
+        return None
+    
+    date_str = str(date_str).strip()
+    date_formats = [
+        '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y',
+        '%d/%m/%y', '%d-%m-%y', '%d.%m.%y'
+    ]
+    
+    for fmt in date_formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+    return None
+
+def find_latest_date_column(table_data, date_columns):
+    """Identify which date column has the most recent date"""
+    if not date_columns:
+        return None
+    
+    latest_date = None
+    latest_col = None
+    
+    for col in date_columns:
+        for row in table_data:
+            if col < len(row) and row[col]:
+                date_obj = parse_date(row[col])
+                if date_obj:
+                    if latest_date is None or date_obj > latest_date:
+                        latest_date = date_obj
+                        latest_col = col
+    
+    return latest_col
+
+def search_keywords_in_tables(tables, keywords):
+    """Search for keywords in tables and extract relevant data"""
+    results = []
+    
+    for table_info in tables:
+        table_data = table_info['data']
+        date_columns = find_date_columns(table_data)
+        latest_date_col = find_latest_date_column(table_data, date_columns)
+        
+        if latest_date_col is None:
+            continue  # Skip tables without dates
+            
+        for row_idx, row in enumerate(table_data):
+            if not row:  # Skip empty rows
+                continue
+                
+            row_text = ' '.join([str(cell) for cell in row if cell])
+            for keyword in keywords:
+                if keyword.lower() in row_text.lower():
+                    # Find the value in the latest date column
+                    if latest_date_col < len(row):
+                        date_str = row[latest_date_col] if latest_date_col < len(row) else None
+                        value = row[latest_date_col + 1] if latest_date_col + 1 < len(row) else None
+                        
+                        if value and date_str:
+                            results.append({
+                                "page": table_info['page'],
+                                "table": table_info['table_num'],
+                                "keyword": keyword,
+                                "date": date_str,
+                                "value": value,
+                                "date_col": latest_date_col,
+                                "row": row_idx + 1
+                            })
+    
+    return results
+
+def main():
+    # Configuration
+    financial_keywords = [
+        "Common Equity Tier 1 ratio",
+        "Total capital ratio",
+        "Leverage ratio",
+        "Liquidity coverage ratio"
+    ]
+    
+    # Get input PDF from Dataiku managed folder
+    client = dataiku.api_client()
+    project = client.get_project(dataiku.default_project_key())
+    managed_folder = project.get_managed_folder("FOLDER_ID")  # Replace with your folder ID
+    
+    # Find PDF file in the folder (assuming only one PDF)
+    pdf_files = [f for f in managed_folder.list_paths_in_partition() if f.lower().endswith('.pdf')]
+    
+    if not pdf_files:
+        raise ValueError("No PDF file found in the managed folder")
+    if len(pdf_files) > 1:
+        print(f"Warning: Multiple PDFs found. Using the first one: {pdf_files[0]}")
+    
+    pdf_path = managed_folder.get_download_stream(pdf_files[0]).get_contents_to_file()
+    
+    # Process PDF
+    print("Extracting tables from PDF...")
+    tables = extract_tables_from_pdf(pdf_path)
+    print(f"Found {len(tables)} tables in the PDF")
+    
+    print("Searching for financial keywords...")
+    results = search_keywords_in_tables(tables, financial_keywords)
+    print(f"Found {len(results)} matches")
+    
+    # Create DataFrame
+    df = pd.DataFrame(results)
+    
+    if not df.empty:
+        # Clean up the value column - remove percentage signs and convert to float
+        df['value'] = df['value'].str.replace('%', '').str.replace(',', '').astype(float)
+        
+        # Parse dates properly
+        df['parsed_date'] = df['date'].apply(parse_date)
+        df = df.sort_values('parsed_date', ascending=False)
+        
+        # Keep only the latest record for each keyword (in case of duplicates)
+        df = df.drop_duplicates('keyword', keep='first')
+    
+    # Write to Dataiku dataset
+    output_dataset = dataiku.Dataset("SCB_PDF_Pillar3")
+    output_dataset.write_with_schema(df)
+    print("Results written to SCB_PDF_Pillar3 dataset")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"Error in script execution: {str(e)}")
+        raise
