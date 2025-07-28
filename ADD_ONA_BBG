@@ -1,1 +1,34 @@
-Job failed: Error in Python process: At line 11: <class 'AttributeError'>: 'Folder' object has no attribute 'list_filenames'
+import pdfplumber
+import pandas as pd
+import os
+import dataiku
+
+# Managed folders in Dataiku
+input_folder = dataiku.Folder("input_pdf_folder")     # 🔁 REPLACE with your folder ID
+output_folder = dataiku.Folder("output_csv_folder")   # 🔁 REPLACE with your folder ID
+
+# Correct method for listing files
+pdf_files = input_folder.list_paths_in_partition()
+pdf_files = [f for f in pdf_files if f.lower().endswith(".pdf")]
+
+if not pdf_files:
+    raise Exception("❌ No PDF files found in the input folder.")
+
+pdf_file_path = pdf_files[0]  # Taking the first PDF
+pdf_file_name = os.path.basename(pdf_file_path)
+
+# Open and process the PDF
+with input_folder.get_download_stream(pdf_file_path) as f:
+    with pdfplumber.open(f) as pdf:
+        table_count = 0
+        for page_num, page in enumerate(pdf.pages, start=1):
+            tables = page.extract_tables()
+            for idx, table in enumerate(tables, start=1):
+                if table and len(table) > 1:
+                    df = pd.DataFrame(table[1:], columns=table[0])
+                    table_count += 1
+                    csv_name = f"{os.path.splitext(pdf_file_name)[0]}_page{page_num}_table{idx}.csv"
+                    with output_folder.get_writer(csv_name) as writer:
+                        df.to_csv(writer, index=False)
+
+print(f"✅ {table_count} tables extracted from {pdf_file_name} into the output folder.")
