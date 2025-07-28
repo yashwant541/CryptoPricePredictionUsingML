@@ -1,1 +1,50 @@
-Job failed: Error in Python process: At line 41: <class 'TypeError'>: a bytes-like object is required, not 'str'
+import pdfplumber
+import pandas as pd
+import os
+import dataiku
+import tempfile
+import shutil
+import io
+
+# Folder handles
+input_folder = dataiku.Folder("input_pdf_folder")     # 🔁 Replace with your input folder ID
+output_folder = dataiku.Folder("output_csv_folder")   # 🔁 Replace with your output folder ID
+
+# List all files and filter PDFs
+pdf_files = input_folder.list_paths_in_partition()
+pdf_files = [f for f in pdf_files if f.lower().endswith(".pdf")]
+
+if not pdf_files:
+    raise Exception("❌ No PDF files found in the input folder.")
+
+# Process each PDF
+for pdf_path in pdf_files:
+    file_name = os.path.basename(pdf_path)
+
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_file:
+        tmp_path = tmp_file.name
+        # Download PDF content to temp file
+        with input_folder.get_download_stream(pdf_path) as stream:
+            shutil.copyfileobj(stream, tmp_file)
+
+    # Read with pdfplumber
+    with pdfplumber.open(tmp_path) as pdf:
+        table_count = 0
+        for page_num, page in enumerate(pdf.pages, start=1):
+            tables = page.extract_tables()
+            for idx, table in enumerate(tables, start=1):
+                if table and len(table) > 1:
+                    df = pd.DataFrame(table[1:], columns=table[0])
+                    table_count += 1
+                    csv_name = f"{os.path.splitext(file_name)[0]}_page{page_num}_table{idx}.csv"
+                    
+                    # Use TextIOWrapper to write to binary stream
+                    with output_folder.get_writer(csv_name) as writer:
+                        with io.TextIOWrapper(writer, encoding='utf-8') as text_writer:
+                            df.to_csv(text_writer, index=False)
+
+    # Clean up
+    os.remove(tmp_path)
+
+print(f"✅ Successfully extracted tables from {file_name} into output folder.")
