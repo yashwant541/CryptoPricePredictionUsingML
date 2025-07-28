@@ -1,33 +1,32 @@
-{
-  "$schema": "https://developer.microsoft.com/json-schemas/sp/v2/column-formatting.schema.json",
-  "elmType": "div",
-  "txtContent": {
-    "operator": "+",
-    "operands": [
-      {
-        "operator": "join",
-        "operands": [
-          {
-            "operator": "if",
-            "operands": [
-              {
-                "operator": "equals",
-                "operands": [
-                  {
-                    "operator": "typeof",
-                    "operands": ["@currentField"]
-                  },
-                  "object"
-                ]
-              },
-              "@currentField",
-              []
-            ]
-          },
-          "; "
-        ]
-      },
-      ""
-    ]
-  }
-}
+import pdfplumber
+import pandas as pd
+import os
+import dataiku
+
+# Managed folders in Dataiku
+input_folder = dataiku.Folder("input_pdf_folder")     # REPLACE with your input folder ID
+output_folder = dataiku.Folder("output_csv_folder")   # REPLACE with your output folder ID
+
+# Get PDF filename from input folder
+pdf_files = [f for f in input_folder.list_filenames() if f.lower().endswith(".pdf")]
+if not pdf_files:
+    raise Exception("No PDF files found in the input folder.")
+pdf_file = pdf_files[0]  # You can modify this if multiple PDFs exist
+
+# Process PDF
+with input_folder.get_download_stream(pdf_file) as f:
+    with pdfplumber.open(f) as pdf:
+        table_count = 0
+        for page_num, page in enumerate(pdf.pages, start=1):
+            tables = page.extract_tables()
+            for idx, table in enumerate(tables, start=1):
+                if table and len(table) > 1:
+                    df = pd.DataFrame(table[1:], columns=table[0])
+                    table_count += 1
+                    # Generate file name
+                    pdf_base = os.path.splitext(os.path.basename(pdf_file))[0]
+                    file_name = f"{pdf_base}_page{page_num}_table{idx}.csv"
+                    with output_folder.get_writer(file_name) as writer:
+                        df.to_csv(writer, index=False)
+
+print(f"✅ Extracted {table_count} tables from {pdf_file} into output folder.")
