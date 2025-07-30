@@ -1,90 +1,85 @@
-import pdfplumber
-import pandas as pd
-import os
+import re
 import dataiku
+import PyPDF2
 import tempfile
 import shutil
-import re
+import os
+import sys
 
-# Folder handles
-input_folder = dataiku.Folder("MPJ3zAOO")
-output_folder = dataiku.Folder("MFCPQWtr")
+# Fixed folder handles using Dataiku folder IDs
+input_folder = dataiku.Folder("MPJ3zAOO")    # Replace with your input folder ID
+output_folder = dataiku.Folder("MFCPQWtr")   # Replace with your output folder ID
 
-# Helper to detect date-like entries
-def contains_dates(row):
-    if not row:
-        return False
-    date_pattern = re.compile(r'\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b')  # matches 31.03.2025 or 31-12-24
-    return any(cell and date_pattern.search(cell) for cell in row)
+def log(message):
+    """Logging with flush"""
+    print(f"[LOG] {message}", file=sys.stderr, flush=True)
 
-# List PDF files
-pdf_files = input_folder.list_paths_in_partition()
-pdf_files = [f for f in pdf_files if f.lower().endswith(".pdf")]
+def main():
+    try:
+        log("🔍 Searching for a PDF file in the input folder...")
+        pdf_files = input_folder.list_paths_in_partition()
+        pdf_files = [f for f in pdf_files if f.lower().endswith(".pdf")]
 
-if not pdf_files:
-    raise Exception("❌ No PDF files found in the input folder.")
+        if not pdf_files:
+            raise Exception("❌ No PDF files found in the input folder.")
 
-# Process each PDF
-for pdf_path in pdf_files:
-    file_name = os.path.basename(pdf_path)
+        # We only process the first PDF found
+        pdf_path = pdf_files[0]
+        file_name = os.path.basename(pdf_path)
+        log(f"📄 Found PDF: {file_name}")
 
-    # Save PDF temporarily
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-        tmp_pdf_path = tmp_pdf.name
-        with input_folder.get_download_stream(pdf_path) as stream:
-            shutil.copyfileobj(stream, tmp_pdf)
+        # Download PDF to temp file
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+            tmp_pdf_path = tmp_pdf.name
+            with input_folder.get_download_stream(pdf_path) as stream:
+                shutil.copyfileobj(stream, tmp_pdf)
 
-    with pdfplumber.open(tmp_pdf_path) as pdf:
-        table_count = 0
-        for page_num, page in enumerate(pdf.pages, start=1):
-            # Table extraction with tuned settings
-            settings = {
-                "vertical_strategy": "lines",
-                "horizontal_strategy": "lines",
-                "snap_tolerance": 3,
-                "intersection_tolerance": 3,
-                "edge_min_length": 3,
-                "join_tolerance": 2,
-                "min_words_vertical": 1,
-                "min_words_horizontal": 1,
-                "keep_blank_chars": True
-            }
+        # Define financial ratio keywords
+        KEYWORDS = [
+            'Leverage ratio',
+            'Common Equity Tier 1 ratio',
+            'Total capital ratio',
+            'Liquidity coverage ratio'
+        ]
 
-            tables = page.extract_tables(table_settings=settings)
+        # Extract text and match ratios
+        results = []
+        with open(tmp_pdf_path, "rb") as pdf_stream:
+            reader = PyPDF2.PdfReader(pdf_stream)
+            for page_num, page in enumerate(reader.pages, 1):
+                text = page.extract_text()
+                if text:
+                    log(f"📄 Processing page {page_num}...")
+                    for keyword in KEYWORDS:
+                        pattern = re.escape(keyword) + r'[\s:]*([0-9.,]+ ?%?)'
+                        matches = re.findall(pattern, text, re.IGNORECASE)
+                        for match in matches:
+                            results.append((keyword, match.strip()))
+                            log(f"✅ Found: {keyword} = {match.strip()}")
 
-            for idx, table in enumerate(tables, start=1):
-                if not table or len(table) < 2:
-                    continue
+        os.remove(tmp_pdf_path)
 
-                # Try to detect correct header row
-                header_row = None
-                data_start_index = 1  # Default to skip first row as header
+        if not results:
+            log("⚠️ No financial ratios found in the PDF.")
 
-                for i in range(min(4, len(table))):  # Look in first 4 rows
-                    if contains_dates(table[i]):
-                        header_row = table[i]
-                        data_start_index = i + 1
-                        break
+        # Save to output folder as CSV
+        log("💾 Writing extracted ratios to output folder...")
+        output_filename = "financial_ratios_extracted.csv"
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
+            tmp_csv.write("Financial Ratio,Value\n")
+            for ratio, value in results:
+                tmp_csv.write(f'"{ratio}","{value}"\n')
+            output_csv_path = tmp_csv.name
 
-                if not header_row:
-                    header_row = table[0]
-                    data_start_index = 1
+        with open(output_csv_path, 'rb') as f:
+            output_folder.upload_stream(output_filename, f)
 
-                df = pd.DataFrame(table[data_start_index:], columns=header_row)
-                table_count += 1
+        os.remove(output_csv_path)
+        log(f"✅ Extraction complete. {len(results)} ratio(s) written to {output_filename}")
 
-                # Save to temp CSV
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, newline='', encoding='utf-8') as tmp_csv:
-                    df.to_csv(tmp_csv, index=False)
-                    csv_temp_path = tmp_csv.name
+    except Exception as e:
+        log(f"🔥 ERROR: {str(e)}")
+        raise
 
-                # Upload to Dataiku
-                output_csv_name = f"{os.path.splitext(file_name)[0]}_page{page_num}_table{idx}.csv"
-                with open(csv_temp_path, 'rb') as f:
-                    output_folder.upload_stream(output_csv_name, f)
-
-                os.remove(csv_temp_path)
-
-    os.remove(tmp_pdf_path)
-
-print("✅ All tables extracted with intelligent header detection.")
+if __name__ == "__main__":
+    main()
