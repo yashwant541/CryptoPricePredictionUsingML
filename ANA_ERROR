@@ -1,57 +1,76 @@
-import os
-from docx import Document
-import pandas as pd
-from pathlib import Path
+import re
+import csv
+from typing import List, Tuple
+import PyPDF2
 
-def extract_tables_from_docx(docx_path):
-    """Extract tables from a Word document while preserving special characters."""
-    doc = Document(docx_path)
-    tables = []
-
-    for table in doc.tables:
-        table_data = []
-        for row in table.rows:
-            row_data = []
-            for cell in row.cells:
-                # Preserve newlines and special characters
-                cell_text = cell.text.replace('\n', ' ').strip()
-                row_data.append(cell_text)
-            table_data.append(row_data)
-        tables.append(pd.DataFrame(table_data))
+def extract_text_after_keywords(pdf_path: str, keywords: List[str]) -> List[Tuple[str, str]]:
+    """
+    Extract text immediately following keyword matches in a PDF.
     
-    return tables
-
-def save_tables_to_csv(tables, output_folder, base_name):
-    """Save each table as a CSV file."""
-    os.makedirs(output_folder, exist_ok=True)
-    saved_files = []
-
-    for i, table in enumerate(tables, 1):
-        csv_filename = os.path.join(output_folder, f"{base_name}_table_{i}.csv")
-        table.to_csv(csv_filename, index=False, header=False, encoding='utf-8-sig', escapechar='\\')
-        saved_files.append(csv_filename)
+    Args:
+        pdf_path: Path to the PDF file
+        keywords: List of keywords to search for
+        
+    Returns:
+        List of tuples containing (keyword, text_after_keyword)
+    """
+    results = []
     
-    return saved_files
+    # Open the PDF file
+    with open(pdf_path, 'rb') as file:
+        reader = PyPDF2.PdfReader(file)
+        
+        # Process each page
+        for page in reader.pages:
+            text = page.extract_text()
+            if not text:
+                continue
+                
+            # Search for each keyword
+            for keyword in keywords:
+                # Create a regex pattern that matches the keyword followed by optional whitespace
+                pattern = re.compile(re.escape(keyword) + r'\s*(.*?)(?=\n|$|' + re.escape(keyword) + ')', 
+                                    re.IGNORECASE | re.DOTALL)
+                
+                # Find all matches
+                matches = pattern.findall(text)
+                for match in matches:
+                    # Clean up the matched text (remove leading/trailing whitespace)
+                    text_after = match.strip()
+                    if text_after:  # Only add if there's actually text after the keyword
+                        results.append((keyword, text_after))
+    
+    return results
 
-def main():
-    docx_path = input("Enter path to the .docx file: ").strip()
+def save_to_csv(results: List[Tuple[str, str]], output_path: str):
+    """
+    Save the extraction results to a CSV file.
+    
+    Args:
+        results: List of tuples from extract_text_after_keywords
+        output_path: Path to save the CSV file
+    """
+    with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['Keyword', 'Text After Keyword'])
+        writer.writerows(results)
 
-    if not docx_path.lower().endswith(".docx") or not os.path.exists(docx_path):
-        print("❌ Please provide a valid .docx file path.")
-        return
-
-    base_name = Path(docx_path).stem
-    output_dir = os.path.join("extracted_tables", base_name)
-
-    print(f"🔍 Extracting tables from: {docx_path}")
-    tables = extract_tables_from_docx(docx_path)
-
-    if not tables:
-        print("⚠ No tables found in the document.")
-        return
-
-    saved_files = save_tables_to_csv(tables, output_dir, base_name)
-    print(f"✅ Extracted {len(saved_files)} tables. Files saved in: {output_dir}")
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    # Configuration - modify these values
+    PDF_PATH = 'input.pdf'          # Path to your input PDF
+    OUTPUT_CSV = 'output.csv'       # Path for output CSV
+    KEYWORDS = [                    # List of keywords to search for
+        'Date:',
+        'Invoice Number:',
+        'Customer:',
+        'Total Amount:',
+        # Add more keywords as needed
+    ]
+    
+    # Extract the data
+    extracted_data = extract_text_after_keywords(PDF_PATH, KEYWORDS)
+    
+    # Save to CSV
+    save_to_csv(extracted_data, OUTPUT_CSV)
+    
+    print(f"Successfully extracted {len(extracted_data)} matches to {OUTPUT_CSV}")
