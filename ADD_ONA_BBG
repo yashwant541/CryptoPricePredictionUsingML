@@ -11,24 +11,18 @@ def log_message(message):
 def process_single_pdf():
     # Hardcoded keywords
     KEYWORDS = [
-        'Date:',
-        'Invoice Number:',
-        'Customer:',
-        'Total Amount:',
-        'Account Number:',
-        'Reference:',
-        'Description:',
-        'Amount:',
-        'Due Date:',
-        'Vendor:'
+        'Leverage ratio',
+        'Common Equity Tier 1 ratio',
+        'Total capital ratio',
+        'Liquidity coverage ratio'
     ]
     
     try:
         log_message("Starting PDF processing...")
         
         # Get folder connections
-        input_folder_name = get_input_names_for_role('input_folder')[0]
-        output_folder_name = get_output_names_for_role('output_folder')[0]
+        input_folder_name = get_input_names_for_role('MPJ3zAOO')[0]
+        output_folder_name = get_output_names_for_role('MFCPQWtr')[0]
         
         input_folder = dataiku.Folder(input_folder_name)
         output_folder = dataiku.Folder(output_folder_name)
