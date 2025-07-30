@@ -1,1 +1,1 @@
-Job failed: Error in Python process: At line 84: <class 'IndexError'>: list index out of range
+Job failed: Error in Python process: At line 101: <class 'ValueError'>: Folder connection failed: Could not get folder names - check recipe role configuration
