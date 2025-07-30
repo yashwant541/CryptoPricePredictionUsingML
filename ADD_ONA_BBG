@@ -9,7 +9,7 @@ def log(message):
     print(f"[LOG] {message}", file=sys.stderr, flush=True)
 
 def process_single_pdf():
-    # Hardcoded keywords - financial ratios
+    # Keywords to search for
     KEYWORDS = [
         'Leverage ratio',
         'Common Equity Tier 1 ratio',
@@ -19,12 +19,13 @@ def process_single_pdf():
     
     try:
         log("Starting PDF processing for financial ratios...")
-        
+
         # 1. Validate folder connections
         log("Checking folder connections...")
         try:
-            input_folder_name = get_input_names_for_role('MPJ3zAOO')
-            output_folder_name = get_input_names_for_role('MFCPQWtr')
+            # 🔁 Replace with actual role names from your recipe UI
+            input_folder_name = get_input_names_for_role('input_folder')
+            output_folder_name = get_output_names_for_role('output_folder')
             
             if not input_folder_name or not output_folder_name:
                 raise ValueError("Could not get folder names - check recipe role configuration")
@@ -68,8 +69,8 @@ def process_single_pdf():
                     if text:
                         log(f"Processing page {page_num}...")
                         for keyword in KEYWORDS:
-                            # Enhanced pattern to capture ratios after labels
-                            pattern = re.escape(keyword) + r'[\s:]*([\d.,]+%?)'
+                            # Improved regex pattern
+                            pattern = re.escape(keyword) + r'[\s:]*([0-9.,]+ ?%?)'
                             matches = re.findall(pattern, text, re.IGNORECASE)
                             for match in matches:
                                 results.append((keyword, match.strip()))
@@ -77,6 +78,10 @@ def process_single_pdf():
         
         except Exception as e:
             raise ValueError(f"PDF processing failed: {str(e)}")
+
+        # Log if no results were found
+        if not results:
+            log("No financial ratios found in the PDF.")
 
         # 4. Save results
         log("Saving extracted ratios...")
