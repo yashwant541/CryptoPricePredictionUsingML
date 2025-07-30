@@ -2,6 +2,7 @@ import re
 import csv
 from typing import List, Tuple
 import PyPDF2
+import os
 
 def extract_text_after_keywords(pdf_path: str, keywords: List[str]) -> List[Tuple[str, str]]:
     """
@@ -55,22 +56,57 @@ def save_to_csv(results: List[Tuple[str, str]], output_path: str):
         writer.writerow(['Keyword', 'Text After Keyword'])
         writer.writerows(results)
 
+def get_user_input(prompt: str, is_file: bool = False) -> str:
+    """
+    Get input from user with validation.
+    
+    Args:
+        prompt: The prompt to display
+        is_file: Whether to validate the input as a file path
+        
+    Returns:
+        Validated user input
+    """
+    while True:
+        user_input = input(prompt).strip()
+        if not user_input:
+            print("Error: Input cannot be empty. Please try again.")
+            continue
+        if is_file and not os.path.isfile(user_input):
+            print(f"Error: File '{user_input}' not found. Please try again.")
+            continue
+        return user_input
+
 if __name__ == '__main__':
-    # Configuration - modify these values
-    PDF_PATH = 'input.pdf'          # Path to your input PDF
-    OUTPUT_CSV = 'output.csv'       # Path for output CSV
-    KEYWORDS = [                    # List of keywords to search for
-        'Date:',
-        'Invoice Number:',
-        'Customer:',
-        'Total Amount:',
-        # Add more keywords as needed
-    ]
+    print("PDF Text Extractor Tool")
+    print("-----------------------\n")
+    
+    # Get input PDF file path from user
+    pdf_path = get_user_input("Enter the path to your PDF file: ", is_file=True)
+    
+    # Get keywords from user
+    print("\nEnter the keywords to search for (one per line, press Enter twice when done):")
+    keywords = []
+    while True:
+        keyword = input("> ").strip()
+        if not keyword:
+            if not keywords:
+                print("Please enter at least one keyword.")
+                continue
+            else:
+                break
+        keywords.append(keyword)
+    
+    # Set default output path (same directory as input with .csv extension)
+    default_output = os.path.splitext(pdf_path)[0] + "_extracted.csv"
+    output_csv = input(f"\nEnter output CSV path (press Enter for default '{default_output}'): ").strip()
+    output_csv = output_csv if output_csv else default_output
     
     # Extract the data
-    extracted_data = extract_text_after_keywords(PDF_PATH, KEYWORDS)
+    print("\nProcessing...")
+    extracted_data = extract_text_after_keywords(pdf_path, keywords)
     
     # Save to CSV
-    save_to_csv(extracted_data, OUTPUT_CSV)
+    save_to_csv(extracted_data, output_csv)
     
-    print(f"Successfully extracted {len(extracted_data)} matches to {OUTPUT_CSV}")
+    print(f"\nSuccessfully extracted {len(extracted_data)} matches to '{output_csv}'")
