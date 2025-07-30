@@ -4,12 +4,12 @@ from dataiku.customrecipe import get_input_names_for_role, get_output_names_for_
 import PyPDF2
 import sys
 
-def log_message(message):
-    """Helper function to print messages with flush"""
-    print(message, flush=True)
+def log(message):
+    """Enhanced logging with flush"""
+    print(f"[LOG] {message}", file=sys.stderr, flush=True)
 
 def process_single_pdf():
-    # Hardcoded keywords
+    # Hardcoded keywords - financial ratios
     KEYWORDS = [
         'Leverage ratio',
         'Common Equity Tier 1 ratio',
@@ -18,66 +18,83 @@ def process_single_pdf():
     ]
     
     try:
-        log_message("Starting PDF processing...")
+        log("Starting PDF processing for financial ratios...")
         
-        # Get folder connections
-        input_folder_name = get_input_names_for_role('MPJ3zAOO')[0]
-        output_folder_name = get_output_names_for_role('MFCPQWtr')[0]
-        
-        input_folder = dataiku.Folder(input_folder_name)
-        output_folder = dataiku.Folder(output_folder_name)
-        
-        log_message(f"Connected to input folder: {input_folder_name}")
-        log_message(f"Connected to output folder: {output_folder_name}")
-        
-        # Find PDF file
-        all_files = input_folder.list_paths_in_partition()
-        pdf_files = [f for f in all_files if f.lower().endswith('.pdf')]
-        
-        log_message(f"Files in input folder: {all_files}")
-        log_message(f"PDF files found: {pdf_files}")
-        
-        if not pdf_files:
-            raise ValueError("No PDF file found in input folder")
+        # 1. Validate folder connections
+        log("Checking folder connections...")
+        try:
+            input_folder_name = get_input_names_for_role('MPJ3zAOO')
+            output_folder_name = get_input_names_for_role('MFCPQWtr')
             
-        if len(pdf_files) > 1:
-            log_message("Warning: More than one PDF found - processing first file only")
+            if not input_folder_name or not output_folder_name:
+                raise ValueError("Could not get folder names - check recipe role configuration")
+                
+            log(f"Input folder ID: {input_folder_name}")
+            log(f"Output folder ID: {output_folder_name}")
             
-        pdf_path = pdf_files[0]
-        log_message(f"Processing PDF file: {pdf_path}")
-        
-        # Download and process PDF
-        with input_folder.get_download_stream(pdf_path) as stream:
-            reader = PyPDF2.PdfReader(stream)
-            results = []
+            input_folder = dataiku.Folder(input_folder_name[0])
+            output_folder = dataiku.Folder(output_folder_name[0])
             
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    for keyword in KEYWORDS:
-                        pattern = re.escape(keyword) + r'\s*(.*?)(?=\n|$)'
-                        matches = re.findall(pattern, text, re.IGNORECASE)
-                        for match in matches:
-                            text_after = match.strip()
-                            if text_after:
-                                results.append((keyword, text_after))
+        except Exception as e:
+            raise ValueError(f"Folder connection failed: {str(e)}")
+
+        # 2. Locate PDF file
+        log("Searching for PDF file...")
+        try:
+            all_files = input_folder.list_paths_in_partition()
+            log(f"All files in folder: {all_files}")
+            
+            pdf_files = [f for f in all_files if f.lower().endswith('.pdf')]
+            
+            if not pdf_files:
+                available_files = "\n- ".join(all_files) if all_files else "None"
+                raise ValueError(f"No PDF found. Available files:\n- {available_files}")
+                
+            pdf_path = pdf_files[0]
+            log(f"Found PDF: {pdf_path}")
+            
+        except Exception as e:
+            raise ValueError(f"PDF file detection failed: {str(e)}")
+
+        # 3. Process PDF content
+        log("Extracting financial ratios from PDF...")
+        results = []
+        try:
+            with input_folder.get_download_stream(pdf_path) as stream:
+                reader = PyPDF2.PdfReader(stream)
+                
+                for page_num, page in enumerate(reader.pages, 1):
+                    text = page.extract_text()
+                    if text:
+                        log(f"Processing page {page_num}...")
+                        for keyword in KEYWORDS:
+                            # Enhanced pattern to capture ratios after labels
+                            pattern = re.escape(keyword) + r'[\s:]*([\d.,]+%?)'
+                            matches = re.findall(pattern, text, re.IGNORECASE)
+                            for match in matches:
+                                results.append((keyword, match.strip()))
+                                log(f"Found match: {keyword} = {match.strip()}")
         
-        log_message(f"Found {len(results)} matches in PDF")
-        
-        # Prepare output
-        output_filename = "extracted_results.csv"
-        log_message(f"Saving results to: {output_filename}")
-        
-        with output_folder.get_writer(output_filename) as writer:
-            writer.write("Keyword,Text After Keyword\n".encode('utf-8'))
-            for keyword, text in results:
-                clean_text = text.replace('"', '""')
-                writer.write(f'"{keyword}","{clean_text}"\n'.encode('utf-8'))
-        
-        log_message("Processing completed successfully")
-        
+        except Exception as e:
+            raise ValueError(f"PDF processing failed: {str(e)}")
+
+        # 4. Save results
+        log("Saving extracted ratios...")
+        try:
+            output_filename = "financial_ratios_extracted.csv"
+            
+            with output_folder.get_writer(output_filename) as writer:
+                writer.write("Financial Ratio,Value\n".encode('utf-8'))
+                for ratio, value in results:
+                    writer.write(f'"{ratio}","{value}"\n'.encode('utf-8'))
+            
+            log(f"Success! Saved {len(results)} ratios to {output_filename}")
+            
+        except Exception as e:
+            raise ValueError(f"Failed to save results: {str(e)}")
+
     except Exception as e:
-        log_message(f"ERROR: {str(e)}")
+        log(f"ERROR: {str(e)}")
         raise  # Re-raise to ensure Dataiku sees the failure
 
 if __name__ == '__main__':
