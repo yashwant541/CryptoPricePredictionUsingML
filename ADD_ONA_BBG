@@ -1,1 +1,90 @@
-Job failed: Error in Python process: At line 105: <class 'IndexError'>: list index out of range
+import re
+import dataiku
+from dataiku.customrecipe import get_input_names_for_role, get_output_names_for_role
+import PyPDF2
+import sys
+
+def log_message(message):
+    """Helper function to print messages with flush"""
+    print(message, flush=True)
+
+def process_single_pdf():
+    # Hardcoded keywords
+    KEYWORDS = [
+        'Date:',
+        'Invoice Number:',
+        'Customer:',
+        'Total Amount:',
+        'Account Number:',
+        'Reference:',
+        'Description:',
+        'Amount:',
+        'Due Date:',
+        'Vendor:'
+    ]
+    
+    try:
+        log_message("Starting PDF processing...")
+        
+        # Get folder connections
+        input_folder_name = get_input_names_for_role('input_folder')[0]
+        output_folder_name = get_output_names_for_role('output_folder')[0]
+        
+        input_folder = dataiku.Folder(input_folder_name)
+        output_folder = dataiku.Folder(output_folder_name)
+        
+        log_message(f"Connected to input folder: {input_folder_name}")
+        log_message(f"Connected to output folder: {output_folder_name}")
+        
+        # Find PDF file
+        all_files = input_folder.list_paths_in_partition()
+        pdf_files = [f for f in all_files if f.lower().endswith('.pdf')]
+        
+        log_message(f"Files in input folder: {all_files}")
+        log_message(f"PDF files found: {pdf_files}")
+        
+        if not pdf_files:
+            raise ValueError("No PDF file found in input folder")
+            
+        if len(pdf_files) > 1:
+            log_message("Warning: More than one PDF found - processing first file only")
+            
+        pdf_path = pdf_files[0]
+        log_message(f"Processing PDF file: {pdf_path}")
+        
+        # Download and process PDF
+        with input_folder.get_download_stream(pdf_path) as stream:
+            reader = PyPDF2.PdfReader(stream)
+            results = []
+            
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    for keyword in KEYWORDS:
+                        pattern = re.escape(keyword) + r'\s*(.*?)(?=\n|$)'
+                        matches = re.findall(pattern, text, re.IGNORECASE)
+                        for match in matches:
+                            text_after = match.strip()
+                            if text_after:
+                                results.append((keyword, text_after))
+        
+        log_message(f"Found {len(results)} matches in PDF")
+        
+        # Prepare output
+        output_filename = "extracted_results.csv"
+        log_message(f"Saving results to: {output_filename}")
+        
+        with output_folder.get_writer(output_filename) as writer:
+            writer.write("Keyword,Text After Keyword\n".encode('utf-8'))
+            for keyword, text in results:
+                clean_text = text.replace('"', '""')
+                writer.write(f'"{keyword}","{clean_text}"\n'.encode('utf-8'))
+        
+        log_message("Processing completed successfully")
+        
+    except Exception as e:
+        log_message(f"ERROR: {str(e)}")
+        raise  # Re-raise to ensure Dataiku sees the failure
+
+if __name__ == '__main__':
+    process_single_pdf()
