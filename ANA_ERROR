@@ -1,111 +1,28 @@
-import re
-import csv
-from typing import List, Tuple
-import PyPDF2
+# -*- coding: utf-8 -*-
 import dataiku
-from dataiku.customrecipe import get_input_names_for_role, get_output_names_for_role
+import pandas as pd
+import os
 
-def extract_text_after_keywords(pdf_path: str, keywords: List[str]) -> List[Tuple[str, str]]:
-    """
-    Extract text immediately following keyword matches in a PDF.
-    
-    Args:
-        pdf_path: Path to the PDF file
-        keywords: List of keywords to search for
-        
-    Returns:
-        List of tuples containing (keyword, text_after_keyword)
-    """
-    results = []
-    
-    # Open the PDF file
-    with open(pdf_path, 'rb') as file:
-        reader = PyPDF2.PdfReader(file)
-        
-        # Process each page
-        for page in reader.pages:
-            text = page.extract_text()
-            if not text:
-                continue
-                
-            # Search for each keyword
-            for keyword in keywords:
-                # Create a regex pattern that matches the keyword followed by optional whitespace
-                pattern = re.compile(re.escape(keyword) + r'\s*(.*?)(?=\n|$|' + re.escape(keyword) + ')', 
-                                    re.IGNORECASE | re.DOTALL)
-                
-                # Find all matches
-                matches = pattern.findall(text)
-                for match in matches:
-                    # Clean up the matched text (remove leading/trailing whitespace)
-                    text_after = match.strip()
-                    if text_after:  # Only add if there's actually text after the keyword
-                        results.append((keyword, text_after))
-    
-    return results
+# ==== Step 1: Get folder handle ====
+# Replace with your actual Dataiku folder ID
+input_folder = dataiku.Folder("INPUT_FOLDER_ID")
 
-def process_pdf_in_dataiku():
-    """
-    Main function to handle PDF processing in Dataiku environment
-    with hardcoded keywords.
-    """
-    # Hardcoded keywords - modify this list as needed
-    KEYWORDS = [
-        'Date:',
-        'Invoice Number:',
-        'Customer:',
-        'Total Amount:',
-        'Account Number:',
-        'Reference:',
-        'Description:',
-        'Amount:',
-        'Due Date:',
-        'Vendor:'
-    ]
-    
-    # Get input/output folders from Dataiku
-    input_folder_name = get_input_names_for_role('input_folder')[0]
-    output_folder_name = get_output_names_for_role('output_folder')[0]
-    
-    # Get the PDF file from the input folder
-    input_folder = dataiku.Folder(input_folder_name)
-    pdf_files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith('.pdf')]
-    
-    if not pdf_files:
-        raise ValueError("No PDF files found in the input folder")
-    
-    # Process each PDF file found in the input folder
-    for pdf_path in pdf_files:
-        try:
-            # Download PDF locally for processing
-            local_pdf_path = input_folder.get_download_path(pdf_path)
-            
-            # Extract the data
-            extracted_data = extract_text_after_keywords(local_pdf_path, KEYWORDS)
-            
-            if not extracted_data:
-                print(f"No matches found in {pdf_path}")
-                continue
-            
-            # Prepare output file name
-            output_filename = f"{pdf_path.rsplit('.', 1)[0]}_extracted.csv"
-            
-            # Save to Dataiku output folder
-            output_folder = dataiku.Folder(output_folder_name)
-            with output_folder.get_writer(output_filename) as w:
-                # Write CSV header
-                w.write("Keyword,Text After Keyword\n".encode('utf-8'))
-                # Write data
-                for keyword, text in extracted_data:
-                    # Properly escape quotes and commas in the text
-                    text_escaped = text.replace('"', '""')
-                    w.write(f'"{keyword}","{text_escaped}"\n'.encode('utf-8'))
-            
-            print(f"Successfully extracted {len(extracted_data)} matches from {pdf_path} to {output_filename}")
-            
-        except Exception as e:
-            print(f"Error processing {pdf_path}: {str(e)}")
-            continue
+# ==== Step 2: Get file list from the folder ====
+file_list = input_folder.list_paths_in_partition()
 
-if __name__ == '__main__':
-    process_pdf_in_dataiku()
+# Assuming only one CSV file in the folder
+csv_file_path = file_list[0]
+
+# ==== Step 3: Read CSV from folder ====
+with input_folder.get_download_stream(csv_file_path) as f:
+    df = pd.read_csv(f, encoding="utf-8")
+
+# ==== Step 4: Process Data ====
+# Example processing: Make all column names uppercase
+df.columns = [col.upper() for col in df.columns]
+
+# ==== Step 5: Save final CSV to local path ====
+output_path = "/path/to/save/final_output.csv"  # Change this to your desired path
+df.to_csv(output_path, index=False, encoding="utf-8")
+
+print(f"Processing complete. CSV saved at: {output_path}")
