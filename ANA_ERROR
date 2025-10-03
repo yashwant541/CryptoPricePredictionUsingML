@@ -1,28 +1,51 @@
-# -*- coding: utf-8 -*-
-import dataiku
-import pandas as pd
 import os
+import pandas as pd
+import extract_msg
+from flask import request, jsonify
 
-# ==== Step 1: Get folder handle ====
-# Replace with your actual Dataiku folder ID
-input_folder = dataiku.Folder("INPUT_FOLDER_ID")
+# Upload directory inside DSS
+UPLOAD_DIR = "/tmp/email_uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ==== Step 2: Get file list from the folder ====
-file_list = input_folder.list_paths_in_partition()
+@app.route('/upload_msg', methods=['POST'])
+def upload_msg():
+    """Upload .msg file, extract CSV/XLSX, return preview data"""
+    if 'file' not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    
+    file = request.files['file']
+    msg_path = os.path.join(UPLOAD_DIR, file.filename)
+    file.save(msg_path)
 
-# Assuming only one CSV file in the folder
-csv_file_path = file_list[0]
+    try:
+        msg = extract_msg.Message(msg_path)
 
-# ==== Step 3: Read CSV from folder ====
-with input_folder.get_download_stream(csv_file_path) as f:
-    df = pd.read_csv(f, encoding="utf-8")
+        dataframes = {}
+        extracted_files = []
 
-# ==== Step 4: Process Data ====
-# Example processing: Make all column names uppercase
-df.columns = [col.upper() for col in df.columns]
+        for attachment in msg.attachments:
+            filename = attachment.longFilename or attachment.shortFilename
+            filepath = os.path.join(UPLOAD_DIR, filename)
+            with open(filepath, "wb") as f:
+                f.write(attachment.data)
+            extracted_files.append(filename)
 
-# ==== Step 5: Save final CSV to local path ====
-output_path = "/path/to/save/final_output.csv"  # Change this to your desired path
-df.to_csv(output_path, index=False, encoding="utf-8")
+            # Read CSV/XLSX
+            if filename.lower().endswith(".csv"):
+                df = pd.read_csv(filepath)
+                dataframes[filename] = df.head(50).to_dict(orient="records")
+            elif filename.lower().endswith(".xlsx"):
+                df = pd.read_excel(filepath)
+                dataframes[filename] = df.head(50).to_dict(orient="records")
 
-print(f"Processing complete. CSV saved at: {output_path}")
+        return jsonify({
+            "subject": msg.subject,
+            "from": msg.sender,
+            "to": msg.to,
+            "date": str(msg.date),
+            "attachments": extracted_files,
+            "data": dataframes
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
