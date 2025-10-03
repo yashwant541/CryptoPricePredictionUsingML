@@ -1,86 +1,84 @@
-import re
-import dataiku
-import PyPDF2
-import tempfile
-import shutil
-import os
-import sys
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Email Attachment Reader</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; margin-top: 10px; width: 100%; }
+        th, td { border: 1px solid #ccc; padding: 5px; text-align: left; }
+        th { background: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <h2>Upload .msg File</h2>
+    <input type="file" id="msgFile" />
+    <button onclick="uploadFile()">Upload & Extract</button>
 
-# Fixed folder handles using Dataiku folder IDs
-input_folder = dataiku.Folder("Tw4EvbUb")    # Replace with your input folder ID
-output_folder = dataiku.Folder("pwBGEpop")   # Replace with your output folder ID
+    <h3>Email Info</h3>
+    <pre id="emailInfo"></pre>
 
-def log(message):
-    """Logging with flush"""
-    print(f"[LOG] {message}", file=sys.stderr, flush=True)
+    <h3>Attachment Data</h3>
+    <div id="tables"></div>
 
-def main():
-    try:
-        log("🔍 Searching for a PDF file in the input folder...")
-        pdf_files = input_folder.list_paths_in_partition()
-        pdf_files = [f for f in pdf_files if f.lower().endswith(".pdf")]
+    <script>
+        function uploadFile() {
+            var fileInput = document.getElementById("msgFile").files[0];
+            var formData = new FormData();
+            formData.append("file", fileInput);
 
-        if not pdf_files:
-            raise Exception("❌ No PDF files found in the input folder.")
+            fetch("/upload_msg", {
+                method: "POST",
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    alert("Error: " + data.error);
+                    return;
+                }
 
-        # We only process the first PDF found
-        pdf_path = pdf_files[0]
-        file_name = os.path.basename(pdf_path)
-        log(f"📄 Found PDF: {file_name}")
+                document.getElementById("emailInfo").innerText =
+                    "Subject: " + data.subject + "\n" +
+                    "From: " + data.from + "\n" +
+                    "To: " + data.to + "\n" +
+                    "Date: " + data.date + "\n" +
+                    "Attachments: " + data.attachments.join(", ");
 
-        # Download PDF to temp file
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-            tmp_pdf_path = tmp_pdf.name
-            with input_folder.get_download_stream(pdf_path) as stream:
-                shutil.copyfileobj(stream, tmp_pdf)
+                let tablesDiv = document.getElementById("tables");
+                tablesDiv.innerHTML = "";
 
-        # Define financial ratio keywords
-        KEYWORDS = [
-            "Return on average tangible shareholders' equity",
-            'Common Equity Tier 1 ratio (%)1',
-            'Total capital ratio (%)1,2',
-            'Liquidity coverage ratio (%)5',
-            'Leverage ratio excluding claims on central banks (%)1,4'
-        ]
+                for (let fname in data.data) {
+                    let rows = data.data[fname];
+                    if (rows.length === 0) continue;
 
-        # Extract text and match ratios
-        results = []
-        with open(tmp_pdf_path, "rb") as pdf_stream:
-            reader = PyPDF2.PdfReader(pdf_stream)
-            for page_num, page in enumerate(reader.pages, 1):
-                text = page.extract_text()
-                if text:
-                    log(f"📄 Processing page {page_num}...")
-                    for keyword in KEYWORDS:
-                        pattern = re.escape(keyword) + r'[\s:]*([0-9.,]+ ?%?)'
-                        matches = re.findall(pattern, text, re.IGNORECASE)
-                        for match in matches:
-                            results.append((keyword, match.strip()))
-                            log(f"✅ Found: {keyword} = {match.strip()}")
+                    let table = document.createElement("table");
 
-        os.remove(tmp_pdf_path)
+                    // Header
+                    let header = document.createElement("tr");
+                    Object.keys(rows[0]).forEach(col => {
+                        let th = document.createElement("th");
+                        th.innerText = col;
+                        header.appendChild(th);
+                    });
+                    table.appendChild(header);
 
-        if not results:
-            log("⚠️ No financial ratios found in the PDF.")
+                    // Rows
+                    rows.forEach(row => {
+                        let tr = document.createElement("tr");
+                        Object.values(row).forEach(val => {
+                            let td = document.createElement("td");
+                            td.innerText = val === null ? "" : val;
+                            tr.appendChild(td);
+                        });
+                        table.appendChild(tr);
+                    });
 
-        # Save to output folder as CSV
-        log("💾 Writing extracted ratios to output folder...")
-        output_filename = "financial_ratios_extracted.csv"
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
-            tmp_csv.write("Financial Ratio,Value\n")
-            for ratio, value in results:
-                tmp_csv.write(f'"{ratio}","{value}"\n')
-            output_csv_path = tmp_csv.name
-
-        with open(output_csv_path, 'rb') as f:
-            output_folder.upload_stream(output_filename, f)
-
-        os.remove(output_csv_path)
-        log(f"✅ Extraction complete. {len(results)} ratio(s) written to {output_filename}")
-
-    except Exception as e:
-        log(f"🔥 ERROR: {str(e)}")
-        raise
-
-if __name__ == "__main__":
-    main()
+                    tablesDiv.innerHTML += `<h4>${fname}</h4>`;
+                    tablesDiv.appendChild(table);
+                }
+            })
+            .catch(err => alert("Error: " + err));
+        }
+    </script>
+</body>
+</html>
