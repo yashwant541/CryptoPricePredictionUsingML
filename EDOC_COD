@@ -1,2 +1,55 @@
-response = requests.get(url, auth = auth, verify = False, headers={'Accept':'application/json;odata=verbose'})
-print(response)
+import os
+import pandas as pd
+import extract_msg
+import openpyxl
+import dataiku
+
+# ==== CONFIGURATION ====
+# Managed folder that stores the email (.msg files)
+input_folder = dataiku.Folder("emails_folder")     # replace with your folder ID
+output_dataset = dataiku.Dataset("email_cell_values")  # replace with your dataset name
+
+# Folder path
+folder_path = input_folder.get_path()
+
+# Prepare output storage
+results = []
+
+# Loop through all .msg files in the folder
+for file_name in os.listdir(folder_path):
+    if file_name.endswith(".msg"):
+        msg_path = os.path.join(folder_path, file_name)
+        msg = extract_msg.Message(msg_path)
+
+        # Loop through attachments
+        for att in msg.attachments:
+            if att.longFilename.endswith(".xlsx"):
+                # Save attachment temporarily
+                attachment_path = os.path.join(folder_path, att.longFilename)
+                with open(attachment_path, "wb") as f:
+                    f.write(att.data)
+
+                # Load workbook
+                wb = openpyxl.load_workbook(attachment_path, data_only=True)
+
+                # Pick specific sheet (example: "Sheet1") 
+                sheet_name = "Sheet1"   # 🔹 CHANGE THIS to the exact tab you want
+                ws = wb[sheet_name]
+
+                # Read Q9 and Q10 values
+                q9_value = ws["Q9"].value
+                q10_value = ws["Q10"].value
+
+                results.append({
+                    "email_file": file_name,
+                    "attachment": att.longFilename,
+                    "sheet": sheet_name,
+                    "Q9": q9_value,
+                    "Q10": q10_value
+                })
+
+# Convert to DataFrame
+df = pd.DataFrame(results)
+
+# Write to Dataiku dataset
+output_dataset.write_with_schema(df)
