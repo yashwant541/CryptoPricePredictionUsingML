@@ -240,12 +240,16 @@ def analyze_email_sequentially(parsed_emails):
         # Update potential makers and checkers based on this email
         update_potential_roles(email_analysis, potential_makers, potential_checkers)
     
+    # Determine final roles with conflict resolution
+    final_maker, final_checker, resolution_method = determine_final_roles(potential_makers, potential_checkers)
+    
     return {
         "conversation_history": conversation_history,
         "potential_makers": potential_makers,
         "potential_checkers": potential_checkers,
-        "final_maker": determine_final_maker(potential_makers),
-        "final_checker": determine_final_checker(potential_checkers)
+        "final_maker": final_maker,
+        "final_checker": final_checker,
+        "resolution_method": resolution_method
     }
 
 def analyze_single_email(email, previous_history, current_index, total_emails):
@@ -593,39 +597,83 @@ def update_potential_roles(email_analysis, potential_makers, potential_checkers)
             "time": email_analysis["time"]
         })
 
-def determine_final_maker(potential_makers):
-    """Determine final maker from potential candidates"""
-    if not potential_makers:
-        return None
+def determine_final_roles(potential_makers, potential_checkers):
+    """
+    Determine final roles with conflict resolution when same person is top candidate for both
+    """
+    # Get top candidates for each role
+    top_maker = get_top_candidate(potential_makers, 30)
+    top_checker = get_top_candidate(potential_checkers, 30)
     
-    # Use highest average score with minimum threshold
-    best_maker = None
-    best_score = 0
+    # If different people, return them
+    if top_maker != top_checker:
+        return top_maker, top_checker, "different_participants"
     
-    for participant, data in potential_makers.items():
-        avg_score = data["average_score"]
-        if avg_score > best_score and avg_score > 30:  # Minimum threshold
-            best_maker = participant
-            best_score = avg_score
+    # If same person is top for both roles, resolve conflict
+    if top_maker and top_maker == top_checker:
+        return resolve_role_conflict(potential_makers, potential_checkers, top_maker)
     
-    return best_maker
+    # If no clear candidates
+    return None, None, "no_clear_candidates"
 
-def determine_final_checker(potential_checkers):
-    """Determine final checker from potential candidates"""
-    if not potential_checkers:
+def get_top_candidate(candidates_dict, min_threshold):
+    """Get top candidate from a dictionary of candidates"""
+    if not candidates_dict:
         return None
     
-    # Use highest average score with minimum threshold
-    best_checker = None
+    best_candidate = None
     best_score = 0
     
-    for participant, data in potential_checkers.items():
+    for participant, data in candidates_dict.items():
         avg_score = data["average_score"]
-        if avg_score > best_score and avg_score > 30:  # Minimum threshold
-            best_checker = participant
+        if avg_score > best_score and avg_score > min_threshold:
+            best_candidate = participant
             best_score = avg_score
     
-    return best_checker
+    return best_candidate
+
+def resolve_role_conflict(potential_makers, potential_checkers, conflicted_person):
+    """
+    Resolve when the same person is top candidate for both maker and checker
+    """
+    maker_data = potential_makers.get(conflicted_person, {})
+    checker_data = potential_checkers.get(conflicted_person, {})
+    
+    maker_score = maker_data.get("average_score", 0)
+    checker_score = checker_data.get("average_score", 0)
+    
+    # Assign the role where the person has the higher score
+    if maker_score >= checker_score:
+        # Person becomes maker, find next best checker
+        final_maker = conflicted_person
+        final_checker = get_second_best_candidate(potential_checkers, conflicted_person, 30)
+        resolution_method = f"conflict_resolution_maker_higher({maker_score:.1f} vs {checker_score:.1f})"
+    else:
+        # Person becomes checker, find next best maker
+        final_checker = conflicted_person
+        final_maker = get_second_best_candidate(potential_makers, conflicted_person, 30)
+        resolution_method = f"conflict_resolution_checker_higher({checker_score:.1f} vs {maker_score:.1f})"
+    
+    return final_maker, final_checker, resolution_method
+
+def get_second_best_candidate(candidates_dict, exclude_person, min_threshold):
+    """Get second best candidate excluding a specific person"""
+    if not candidates_dict:
+        return None
+    
+    best_candidate = None
+    best_score = 0
+    
+    for participant, data in candidates_dict.items():
+        if participant == exclude_person:
+            continue
+            
+        avg_score = data["average_score"]
+        if avg_score > best_score and avg_score > min_threshold:
+            best_candidate = participant
+            best_score = avg_score
+    
+    return best_candidate
 
 # -----------------------------
 # Enhanced CSV Output Functions
@@ -690,7 +738,7 @@ def save_sequential_analysis_csv(conversation_history, output_folder, filename):
     log(f"✅ Saved sequential analysis: {filename}")
 
 def save_enhanced_summary(parsed_emails, potential_makers, potential_checkers, output_folder, 
-                         filename, final_maker, final_checker, conversation_history):
+                         filename, final_maker, final_checker, conversation_history, resolution_method):
     """Save enhanced summary with all analysis details"""
     output_path = os.path.join(tempfile.gettempdir(), filename)
     
@@ -698,6 +746,7 @@ def save_enhanced_summary(parsed_emails, potential_makers, potential_checkers, o
         f.write("=== SEQUENTIAL MAKER-CHECKER ANALYSIS ===\n\n")
         f.write(f"Final Maker (Requester): {final_maker or 'Not identified'}\n")
         f.write(f"Final Checker (Approver): {final_checker or 'Not identified'}\n")
+        f.write(f"Resolution Method: {resolution_method}\n")
         f.write(f"Total Emails Analyzed: {len(parsed_emails)}\n\n")
         
         f.write("=== POTENTIAL MAKERS ===\n")
@@ -790,13 +839,15 @@ def main():
             f"enhanced_summary_{base_name}.txt",
             sequential_analysis["final_maker"],
             sequential_analysis["final_checker"],
-            sequential_analysis["conversation_history"]
+            sequential_analysis["conversation_history"],
+            sequential_analysis["resolution_method"]
         )
         
         os.remove(tmp_path)
         log(f"✅ Finished processing {txt_file}")
         log(f"   Final Maker: {sequential_analysis['final_maker']}")
         log(f"   Final Checker: {sequential_analysis['final_checker']}")
+        log(f"   Resolution Method: {sequential_analysis['resolution_method']}")
 
 if __name__ == "__main__":
     main()
