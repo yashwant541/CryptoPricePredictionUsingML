@@ -1,5 +1,5 @@
 import dataiku
-import extractmsg
+import extract_msg
 import pandas as pd
 import tempfile
 import shutil
@@ -22,51 +22,107 @@ output_folder = dataiku.Folder(OUTPUT_FOLDER_ID)
 # LOGGING
 # -----------------------------
 def log(message):
-    print(f"[LOG] {message}", file=sys.stderr, flush=True)
+    print(f"[LOG] {str(message)}", file=sys.stderr, flush=True)
 
 # -----------------------------
-# CONVERT MSG TO TXT
+# SAFE STRING FORMATTING
+# -----------------------------
+def safe_str(obj):
+    """Safely convert any object to string"""
+    if obj is None:
+        return ""
+    try:
+        return str(obj)
+    except:
+        return ""
+
+def safe_parse_date(date_string):
+    """
+    Safely parse email date strings without timezone issues
+    """
+    date_str = safe_str(date_string)
+    if not date_str:
+        return ""
+    
+    try:
+        # Try built-in email date parsing
+        return parsedate_to_datetime(date_str).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception as e:
+        try:
+            # Fallback: simple string cleaning
+            cleaned_date = re.sub(r'\([^)]*\)', '', date_str).strip()
+            return cleaned_date
+        except:
+            return date_str  # Return original if all fails
+
+# -----------------------------
+# CONVERT MSG TO TXT (WITH ERROR HANDLING)
 # -----------------------------
 def msg_to_txt(msg_file_path, txt_file_path):
     """
     Convert .msg file to .txt format with structured content
     """
+    msg = None
     try:
-        msg = extractmsg.Message(msg_file_path)
+        msg = extract_msg.Message(msg_file_path)
         
         with open(txt_file_path, 'w', encoding='utf-8') as txt_file:
             # Write headers in a structured format
             txt_file.write("=== EMAIL HEADERS ===\n")
-            txt_file.write(f"From: {msg.sender or ''}\n")
-            txt_file.write(f"To: {msg.to or ''}\n")
-            txt_file.write(f"CC: {msg.cc or ''}\n")
-            txt_file.write(f"BCC: {msg.bcc or ''}\n")
-            txt_file.write(f"Subject: {msg.subject or ''}\n")
-            txt_file.write(f"Date: {msg.date or ''}\n")
-            txt_file.write(f"Message-ID: {getattr(msg, 'message_id', '')}\n")
+            txt_file.write(f"From: {safe_str(msg.sender)}\n")
+            txt_file.write(f"To: {safe_str(msg.to)}\n")
+            txt_file.write(f"CC: {safe_str(msg.cc)}\n")
+            txt_file.write(f"BCC: {safe_str(msg.bcc)}\n")
+            txt_file.write(f"Subject: {safe_str(msg.subject)}\n")
+            txt_file.write(f"Date: {safe_parse_date(msg.date)}\n")
+            
+            # Try to get message ID safely
+            try:
+                message_id = safe_str(getattr(msg, 'message_id', ''))
+                txt_file.write(f"Message-ID: {message_id}\n")
+            except Exception as e:
+                txt_file.write("Message-ID: \n")
             
             # Write body
             txt_file.write("\n=== EMAIL BODY ===\n")
-            txt_file.write(msg.body or '')
+            body_content = safe_str(msg.body)
+            # Clean up body content
+            body_content = re.sub(r'\r\n', '\n', body_content)
+            txt_file.write(body_content)
             
             # Write attachments list
             txt_file.write("\n=== ATTACHMENTS ===\n")
             attachments = []
-            for att in msg.attachments:
-                att_name = att.longFilename or "Unknown"
-                attachments.append(att_name)
-                txt_file.write(f"{att_name}\n")
+            if hasattr(msg, 'attachments'):
+                for att in msg.attachments:
+                    try:
+                        att_name = safe_str(getattr(att, 'longFilename', 'Unknown'))
+                        attachments.append(att_name)
+                        txt_file.write(f"{att_name}\n")
+                    except Exception as att_error:
+                        log(f"⚠️ Attachment error: {str(att_error)}")
+                        txt_file.write("Unknown_Attachment\n")
+            else:
+                txt_file.write("No attachments found\n")
                 
-            msg.close()
-            
         return len(attachments)
         
     except Exception as e:
         log(f"❌ Error converting .msg to .txt: {str(e)}")
         # Create error file
-        with open(txt_file_path, 'w', encoding='utf-8') as txt_file:
-            txt_file.write(f"ERROR: {str(e)}\n")
+        try:
+            with open(txt_file_path, 'w', encoding='utf-8') as txt_file:
+                txt_file.write(f"ERROR: {str(e)}\n")
+        except:
+            pass
         return 0
+    finally:
+        # Ensure message is closed
+        if msg:
+            try:
+                msg.close()
+            except:
+                pass
 
 # -----------------------------
 # PARSE TXT TO STRUCTURED DATA
@@ -89,7 +145,7 @@ def parse_txt_to_data(txt_file_path, original_filename):
             "Date": "",
             "Body": "",
             "Attachments": "",
-            "Filename": original_filename,
+            "Filename": safe_str(original_filename),
             "Processing_Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "Message_ID": ""
         }
@@ -99,39 +155,30 @@ def parse_txt_to_data(txt_file_path, original_filename):
         if headers_section:
             headers_text = headers_section.group(1)
             
-            # Extract individual headers
-            sender_match = re.search(r'From:\s*(.*)', headers_text)
-            to_match = re.search(r'To:\s*(.*)', headers_text)
-            cc_match = re.search(r'CC:\s*(.*)', headers_text)
-            bcc_match = re.search(r'BCC:\s*(.*)', headers_text)
-            subject_match = re.search(r'Subject:\s*(.*)', headers_text)
-            date_match = re.search(r'Date:\s*(.*)', headers_text)
-            msg_id_match = re.search(r'Message-ID:\s*(.*)', headers_text)
+            # Extract individual headers with safe matching
+            def safe_extract(pattern, text, default=""):
+                match = re.search(pattern, text)
+                return safe_str(match.group(1)).strip() if match else default
             
-            email_data["Sender"] = sender_match.group(1).strip() if sender_match else ""
-            email_data["To"] = to_match.group(1).strip() if to_match else ""
-            email_data["CC"] = cc_match.group(1).strip() if cc_match else ""
-            email_data["BCC"] = bcc_match.group(1).strip() if bcc_match else ""
-            email_data["Subject"] = subject_match.group(1).strip() if subject_match else ""
-            email_data["Date"] = date_match.group(1).strip() if date_match else ""
-            email_data["Message_ID"] = msg_id_match.group(1).strip() if msg_id_match else ""
+            email_data["Sender"] = safe_extract(r'From:\s*(.*)', headers_text)
+            email_data["To"] = safe_extract(r'To:\s*(.*)', headers_text)
+            email_data["CC"] = safe_extract(r'CC:\s*(.*)', headers_text)
+            email_data["BCC"] = safe_extract(r'BCC:\s*(.*)', headers_text)
+            email_data["Subject"] = safe_extract(r'Subject:\s*(.*)', headers_text)
+            email_data["Date"] = safe_extract(r'Date:\s*(.*)', headers_text)
+            email_data["Message_ID"] = safe_extract(r'Message-ID:\s*(.*)', headers_text)
         
         # Parse body section
-        body_section = re.search(r'=== EMAIL BODY ===(.*?)=== ATTACHMENTS ===', content, re.DOTALL)
+        body_section = re.search(r'=== EMAIL BODY ===(.*?)(=== ATTACHMENTS ===|$)', content, re.DOTALL)
         if body_section:
-            email_data["Body"] = body_section.group(1).strip()
-        else:
-            # If attachments section is missing, try to get everything after body marker
-            body_section = re.search(r'=== EMAIL BODY ===(.*)', content, re.DOTALL)
-            if body_section:
-                email_data["Body"] = body_section.group(1).strip()
+            email_data["Body"] = safe_str(body_section.group(1)).strip()
         
         # Parse attachments section
         attachments_section = re.search(r'=== ATTACHMENTS ===(.*)', content, re.DOTALL)
         if attachments_section:
             attachments_text = attachments_section.group(1).strip()
             # Clean up attachments list - remove empty lines and join with comma
-            attachments_list = [att.strip() for att in attachments_text.split('\n') if att.strip()]
+            attachments_list = [att.strip() for att in attachments_text.split('\n') if att.strip() and att.strip() != "No attachments found"]
             email_data["Attachments"] = ", ".join(attachments_list)
         
         return [email_data]
@@ -147,65 +194,56 @@ def parse_txt_to_data(txt_file_path, original_filename):
             "Date": "",
             "Body": f"Error parsing .txt: {str(e)}",
             "Attachments": "",
-            "Filename": original_filename,
+            "Filename": safe_str(original_filename),
             "Processing_Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Error": str(e)
+            "Error": safe_str(e)
         }]
 
 # -----------------------------
-# PROCESS NESTED MSG FILES
+# PROCESS SINGLE MSG FILE (NON-RECURSIVE)
 # -----------------------------
-def process_nested_msg_attachments(msg_file_path, original_filename):
+def process_single_msg(msg_file_path, original_filename):
     """
-    Handle nested .msg attachments recursively and return all emails
+    Process a single .msg file without recursive attachment handling
     """
     all_emails = []
     
+    # Process the main email by converting to txt and parsing
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode='w', encoding='utf-8') as tmp_txt:
+        tmp_txt_path = tmp_txt.name
+    
     try:
-        msg = extractmsg.Message(msg_file_path)
-        
-        # Process the main email first by converting to txt and parsing
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode='w', encoding='utf-8') as tmp_txt:
-            tmp_txt_path = tmp_txt.name
-        
         # Convert main message to txt
         msg_to_txt(msg_file_path, tmp_txt_path)
         main_emails = parse_txt_to_data(tmp_txt_path, original_filename)
         all_emails.extend(main_emails)
         
-        # Process nested .msg attachments
-        for att in msg.attachments:
-            if att.longFilename and att.longFilename.lower().endswith(".msg"):
-                log(f"  📎 Processing nested .msg: {att.longFilename}")
-                with tempfile.NamedTemporaryFile(suffix=".msg", delete=False) as tmp_att_file:
-                    att.save(tmp_att_file.name)
-                    nested_emails = process_nested_msg_attachments(tmp_att_file.name, att.longFilename)
-                    all_emails.extend(nested_emails)
-                    os.unlink(tmp_att_file.name)
-        
-        msg.close()
-        os.unlink(tmp_txt_path)
-        
     except Exception as e:
-        log(f"❌ Error processing nested attachments: {str(e)}")
+        log(f"❌ Error processing {original_filename}: {str(e)}")
         all_emails.append({
             "Sender": "",
             "To": "",
             "CC": "",
             "BCC": "",
-            "Subject": "ERROR_NESTED_PROCESSING",
+            "Subject": "ERROR_PROCESSING_FILE",
             "Date": "",
-            "Body": f"Error processing nested: {str(e)}",
+            "Body": f"Error: {str(e)}",
             "Attachments": "",
-            "Filename": original_filename,
+            "Filename": safe_str(original_filename),
             "Processing_Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Error": str(e)
+            "Error": safe_str(e)
         })
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(tmp_txt_path)
+        except:
+            pass
     
     return all_emails
 
 # -----------------------------
-# MAIN PROCESS
+# SIMPLIFIED MAIN PROCESS
 # -----------------------------
 def main():
     try:
@@ -221,6 +259,7 @@ def main():
         
         processed_count = 0
         error_count = 0
+        all_data = []
         
         for msg_path in msg_files:
             file_name = os.path.basename(msg_path)
@@ -233,37 +272,52 @@ def main():
                     with input_folder.get_download_stream(msg_path) as stream:
                         shutil.copyfileobj(stream, tmp_msg)
                 
-                # Step 2: Process main email and any nested .msg attachments
-                all_emails = process_nested_msg_attachments(tmp_msg_path, file_name)
+                # Step 2: Process main email (skip nested attachments for now)
+                email_data = process_single_msg(tmp_msg_path, file_name)
+                all_data.extend(email_data)
                 
-                # Step 3: Convert to DataFrame
-                df = pd.DataFrame(all_emails)
-                
-                # Step 4: Save as CSV
-                output_csv_name = file_name.replace(".msg", ".csv")
-                
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8-sig', newline='') as tmp_csv:
-                    df.to_csv(tmp_csv, index=False)
-                    tmp_csv_path = tmp_csv.name
-                
-                with open(tmp_csv_path, 'rb') as f:
-                    output_folder.upload_stream(output_csv_name, f)
-                
-                # Optional: Also save the intermediate .txt file for debugging
-                # txt_output_name = file_name.replace(".msg", ".txt")
-                # with open(tmp_txt_path, 'rb') as f:
-                #     output_folder.upload_stream(txt_output_name, f)
-                
-                # Clean up temp files
+                # Clean up temp file
                 os.unlink(tmp_msg_path)
-                os.unlink(tmp_csv_path)
                 
                 processed_count += 1
-                log(f"✅ Completed: {file_name} -> {output_csv_name} ({len(all_emails)} email(s))")
+                log(f"✅ Completed: {file_name} -> {len(email_data)} email(s)")
                 
             except Exception as e:
                 error_count += 1
                 log(f"❌ Failed to process {file_name}: {str(e)}")
+                # Add error record
+                all_data.append({
+                    "Sender": "",
+                    "To": "",
+                    "CC": "",
+                    "BCC": "",
+                    "Subject": "ERROR_FILE_PROCESSING",
+                    "Date": "",
+                    "Body": f"Failed to process file: {str(e)}",
+                    "Attachments": "",
+                    "Filename": safe_str(file_name),
+                    "Processing_Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "Error": safe_str(e)
+                })
+        
+        # Step 3: Save all data to CSV
+        if all_data:
+            df = pd.DataFrame(all_data)
+            
+            # Generate output filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_csv_name = f"processed_emails_{timestamp}.csv"
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8-sig', newline='') as tmp_csv:
+                df.to_csv(tmp_csv, index=False)
+                tmp_csv_path = tmp_csv.name
+            
+            with open(tmp_csv_path, 'rb') as f:
+                output_folder.upload_stream(output_csv_name, f)
+            
+            os.unlink(tmp_csv_path)
+            
+            log(f"📊 Saved {len(all_data)} email records to {output_csv_name}")
                 
         log(f"📊 Processing complete: {processed_count} successful, {error_count} failed")
 
