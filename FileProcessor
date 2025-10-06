@@ -44,67 +44,85 @@ function previewUploadedFile() {
 
     console.log("Calling do_parse_file with file:", currentFileName);
     
-    // Use Dataiku's webapp_async_call
-    dataiku.webapp_async_call(
-        'do_parse_file',
-        {
+    // Use fetch instead of dataiku.webapp_async_call
+    fetch('/your-webapp-prefix/do_parse_file', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
             file_data: currentFileData,
             file_name: currentFileName
-        },
-        function(response) {
-            console.log("do_parse_file response:", response);
-            showLoading(false);
-            
-            if (response && response.error) {
-                alert("Error: " + response.error);
-                updateStepProgress(1); // Go back to step 1 on error
-            } else if (response && response.success) {
-                displayFilePreview(response);
-                updateStepProgress(3);
-                // Auto-process after preview
-                setTimeout(processAnalysis, 500); // Small delay for better UX
-            } else {
-                alert("Unexpected response from server");
-                updateStepProgress(1);
-            }
-        },
-        function(error) {
-            console.error("do_parse_file error:", error);
-            showLoading(false);
-            alert("Preview failed: " + error);
+        })
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok: ' + response.statusText);
+        }
+        return response.json();
+    })
+    .then(response => {
+        console.log("do_parse_file response:", response);
+        showLoading(false);
+        
+        if (response && response.error) {
+            alert("Error: " + response.error);
+            updateStepProgress(1);
+        } else if (response && response.success) {
+            displayFilePreview(response);
+            updateStepProgress(3);
+            // Auto-process after preview
+            setTimeout(processAnalysis, 500);
+        } else {
+            alert("Unexpected response from server");
             updateStepProgress(1);
         }
-    );
+    })
+    .catch(error => {
+        console.error("do_parse_file error:", error);
+        showLoading(false);
+        alert("Preview failed: " + error.message);
+        updateStepProgress(1);
+    });
 }
 
 function processAnalysis() {
     showLoading(true, "Analyzing email chain...");
     console.log("Calling do_analyze_emails...");
     
-    dataiku.webapp_async_call(
-        'do_analyze_emails',
-        {
+    fetch('/your-webapp-prefix/do_analyze_emails', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
             file_data: currentFileData,
             file_name: currentFileName
-        },
-        function(response) {
-            console.log("do_analyze_emails response:", response);
-            showLoading(false);
-            
-            if (response && response.error) {
-                alert("Analysis error: " + response.error);
-            } else if (response && response.success) {
-                displayResults(response.results);
-            } else {
-                alert("Unexpected response from analysis");
-            }
-        },
-        function(error) {
-            console.error("do_analyze_emails error:", error);
-            showLoading(false);
-            alert("Analysis failed: " + error);
+        })
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok: ' + response.statusText);
         }
-    );
+        return response.json();
+    })
+    .then(response => {
+        console.log("do_analyze_emails response:", response);
+        showLoading(false);
+        
+        if (response && response.error) {
+            alert("Analysis error: " + response.error);
+        } else if (response && response.success) {
+            displayResults(response.results);
+        } else {
+            alert("Unexpected response from analysis");
+        }
+    })
+    .catch(error => {
+        console.error("do_analyze_emails error:", error);
+        showLoading(false);
+        alert("Analysis failed: " + error.message);
+    });
 }
 
 function displayFilePreview(data) {
