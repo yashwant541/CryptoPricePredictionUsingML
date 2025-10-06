@@ -51,6 +51,13 @@ REQUESTER_KEYWORDS = {
 def log(message):
     print(f"[LOG] {message}", file=sys.stderr, flush=True)
 
+def clean_email_addresses(text):
+    """Remove email addresses with leading whitespace from text"""
+    # Pattern to match: whitespace + <email>
+    pattern = r'\s*<[^>]+@[^>]+>'
+    cleaned_text = re.sub(pattern, '', text)
+    return cleaned_text
+
 def split_emails(raw_text):
     parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
     if parts and not parts[0].strip().lower().startswith("from:"):
@@ -61,7 +68,11 @@ def split_emails(raw_text):
 def extract_field(email, field):
     pattern = rf"{field}:(.*)"
     match = re.search(pattern, email, re.IGNORECASE)
-    return match.group(1).strip() if match else ""
+    if match:
+        field_content = match.group(1).strip()
+        # Clean email addresses from the field content
+        return clean_email_addresses(field_content)
+    return ""
 
 def parse_date_time(date_str):
     if not date_str:
@@ -73,12 +84,16 @@ def parse_date_time(date_str):
 
 def extract_body(email):
     split_point = re.search(r"\n\s*\n", email)
-    return email[split_point.end():].strip() if split_point else ""
+    body = email[split_point.end():].strip() if split_point else ""
+    # Clean email addresses from the body as well
+    return clean_email_addresses(body)
 
 def clean_participant_name(raw_name):
     if not raw_name:
         return ""
-    cleaned = re.sub(r'<[^>]+>', '', raw_name)
+    # First remove email addresses with the pattern you specified
+    cleaned = re.sub(r'\s*<[^>]+>', '', raw_name)
+    # Then remove any remaining special characters
     cleaned = re.sub(r'[;"\']', '', cleaned)
     cleaned = ' '.join(cleaned.split()).strip()
     cleaned = cleaned.rstrip(',')
@@ -995,6 +1010,9 @@ def main():
         with open(tmp_path, "r", encoding="utf-8") as f:
             email_text = f.read()
 
+        # Clean email addresses from the entire text before processing
+        email_text = clean_email_addresses(email_text)
+        
         parsed_emails = parse_email_chain(email_text)
         if not parsed_emails:
             log(f"⚠️ No emails parsed in {txt_file}. Skipping.")
