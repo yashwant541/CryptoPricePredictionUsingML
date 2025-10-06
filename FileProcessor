@@ -1,112 +1,46 @@
-<input type="file" id="emailFile" />
-<button id="analyzeBtn">Analyze Emails</button>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maker-Checker Email Analysis</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Upload Section -->
+        <div class="upload-area" id="uploadArea">
+            <p>Drag & Drop your .txt file here or click to upload</p>
+            <input type="file" id="fileInput" accept=".txt">
+        </div>
 
-<div id="results"></div>
+        <!-- Step Indicator -->
+        <div class="step-indicator">
+            <div class="step active"><div class="step-number">1</div><div>Upload</div></div>
+            <div class="step"><div class="step-number">2</div><div>Parse</div></div>
+            <div class="step"><div class="step-number">3</div><div>Results</div></div>
+            <div class="step-line"></div>
+            <div class="step-line-progress" id="stepProgress"></div>
+        </div>
 
-<script>
-async function analyzeEmails(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = async function(e) {
-            try {
-                let fileData = e.target.result; // base64
-                const response = await fetch('do_analyze_emails', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        file_name: file.name,
-                        file_data: fileData
-                    })
-                });
+        <!-- Loading -->
+        <div id="loading" class="loading">
+            <div class="spinner-border"></div> <span id="loadingText">Loading...</span>
+        </div>
 
-                const result = await response.json();
-                resolve(result);
-            } catch (err) {
-                reject(err);
-            }
-        };
-        reader.readAsDataURL(file);
-    });
-}
+        <!-- File Preview -->
+        <div id="filePreview" class="file-preview">
+            <h5>File Preview:</h5>
+            <pre id="previewContent" class="email-preview"></pre>
+        </div>
 
-function displayResults(results) {
-    const container = document.getElementById("results");
-    container.innerHTML = ""; // Clear previous
+        <!-- Results -->
+        <div id="results" class="results">
+            <h5>Analysis Results:</h5>
+            <div id="resultsContent"></div>
+        </div>
+    </div>
 
-    if (!results.success) {
-        container.textContent = "Error: " + (results.error || "Unknown error");
-        return;
-    }
-
-    const data = results.results;
-
-    // Show Final Maker / Checker
-    const header = document.createElement("div");
-    header.innerHTML = `<strong>Final Maker:</strong> ${data.final_maker} <br>
-                        <strong>Final Checker:</strong> ${data.final_checker} <br>
-                        <strong>Resolution:</strong> ${data.resolution_method} <br>
-                        <strong>Total Emails:</strong> ${data.stats.total_emails} <br>
-                        <strong>Total Participants:</strong> ${data.stats.total_participants}`;
-    container.appendChild(header);
-
-    // Create table for email analysis
-    const table = document.createElement("table");
-    table.style.borderCollapse = "collapse";
-    table.style.marginTop = "10px";
-
-    // Table header
-    const headerRow = document.createElement("tr");
-    ["Seq", "Date", "Time", "Sender", "Receivers", "Maker Score", "Checker Score", "Can be Maker", "Can be Checker"].forEach(text => {
-        const th = document.createElement("th");
-        th.textContent = text;
-        th.style.border = "1px solid #ccc";
-        th.style.padding = "4px 8px";
-        th.style.backgroundColor = "#f0f0f0";
-        headerRow.appendChild(th);
-    });
-    table.appendChild(headerRow);
-
-    // Table rows
-    data.email_analysis.forEach(email => {
-        const row = document.createElement("tr");
-        [email.sequence, email.date, email.time, email.sender, email.receivers,
-         email.maker_score, email.checker_score,
-         email.can_be_maker, email.can_be_checker
-        ].forEach(val => {
-            const td = document.createElement("td");
-            td.textContent = val;
-            td.style.border = "1px solid #ccc";
-            td.style.padding = "4px 8px";
-            row.appendChild(td);
-        });
-        table.appendChild(row);
-    });
-
-    container.appendChild(table);
-
-    // Optional: Show potential makers and checkers
-    const potentialDiv = document.createElement("div");
-    potentialDiv.style.marginTop = "10px";
-    potentialDiv.innerHTML = `<strong>Potential Makers:</strong> ${data.potential_makers.map(p => p.participant).join(", ")} <br>
-                              <strong>Potential Checkers:</strong> ${data.potential_checkers.map(p => p.participant).join(", ")}`;
-    container.appendChild(potentialDiv);
-}
-
-document.getElementById("analyzeBtn").addEventListener("click", async () => {
-    const fileInput = document.getElementById("emailFile");
-    if (!fileInput.files.length) {
-        alert("Please select a file!");
-        return;
-    }
-
-    const file = fileInput.files[0];
-    document.getElementById("results").textContent = "Analyzing emails, please wait...";
-
-    try {
-        const results = await analyzeEmails(file);
-        displayResults(results);
-    } catch (err) {
-        document.getElementById("results").textContent = "Network error: " + err.message;
-    }
-});
-</script>
+    <script src="script.js"></script>
+</body>
+</html>
