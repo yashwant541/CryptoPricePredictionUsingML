@@ -1,82 +1,138 @@
-import re
 import dataiku
-import PyPDF2
+import extract_msg
+import pandas as pd
 import tempfile
 import shutil
 import os
 import sys
+from datetime import datetime
 
 # Fixed folder handles using Dataiku folder IDs
-input_folder = dataiku.Folder("Tw4EvbUb")    # Replace with your input folder ID
-output_folder = dataiku.Folder("pwBGEpop")   # Replace with your output folder ID
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")    # Replace with your input folder ID
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")   # Replace with your output folder ID
 
 def log(message):
     """Logging with flush"""
     print(f"[LOG] {message}", file=sys.stderr, flush=True)
 
+def extract_msg_details(msg_file_path):
+    """
+    Extract all details from a .msg file
+    """
+    try:
+        msg = extract_msg.Message(msg_file_path)
+        
+        # Extract message details
+        data = {
+            "Sender": msg.sender or "",
+            "To": msg.to or "",
+            "CC": msg.cc or "",
+            "BCC": msg.bcc or "",
+            "Subject": msg.subject or "",
+            "Date": msg.date or "",
+            "Body": msg.body or "",
+            "Attachments": ", ".join([att.longFilename for att in msg.attachments]) if msg.attachments else "",
+            "Filename": os.path.basename(msg_file_path),
+            "Processing_Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # Close the message file to prevent resource leaks
+        msg.close()
+        return data
+        
+    except Exception as e:
+        log(f"Error processing message file: {str(e)}")
+        # Return minimal data with error information
+        return {
+            "Sender": "",
+            "To": "", 
+            "CC": "",
+            "BCC": "",
+            "Subject": f"ERROR_PROCESSING_FILE",
+            "Date": "",
+            "Body": f"Error: {str(e)}",
+            "Attachments": "",
+            "Filename": os.path.basename(msg_file_path),
+            "Processing_Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Error": str(e)
+        }
+
 def main():
     try:
-        log("🔍 Searching for a PDF file in the input folder...")
-        pdf_files = input_folder.list_paths_in_partition()
-        pdf_files = [f for f in pdf_files if f.lower().endswith(".pdf")]
+        log("🔍 Searching for .msg files in the input folder...")
+        
+        # List all files in the input folder
+        all_files = input_folder.list_paths_in_partition()
+        msg_files = [f for f in all_files if f.lower().endswith(".msg")]
+        
+        if not msg_files:
+            raise Exception("❌ No .msg files found in the input folder.")
 
-        if not pdf_files:
-            raise Exception("❌ No PDF files found in the input folder.")
+        log(f"📧 Found {len(msg_files)} .msg file(s) to process")
 
-        # We only process the first PDF found
-        pdf_path = pdf_files[0]
-        file_name = os.path.basename(pdf_path)
-        log(f"📄 Found PDF: {file_name}")
+        processed_count = 0
+        error_count = 0
+        all_results = []
 
-        # Download PDF to temp file
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-            tmp_pdf_path = tmp_pdf.name
-            with input_folder.get_download_stream(pdf_path) as stream:
-                shutil.copyfileobj(stream, tmp_pdf)
+        for msg_path in msg_files:
+            try:
+                file_name = os.path.basename(msg_path)
+                log(f"📨 Processing: {file_name}")
 
-        # Define financial ratio keywords
-        KEYWORDS = [
-            "Return on average tangible shareholders' equity",
-            'Common Equity Tier 1 ratio (%)1',
-            'Total capital ratio (%)1,2',
-            'Liquidity coverage ratio (%)5',
-            'Leverage ratio excluding claims on central banks (%)1,4'
-        ]
+                # Download .msg file to temp file
+                with tempfile.NamedTemporaryFile(suffix=".msg", delete=False) as tmp_msg:
+                    tmp_msg_path = tmp_msg.name
+                    with input_folder.get_download_stream(msg_path) as stream:
+                        shutil.copyfileobj(stream, tmp_msg)
 
-        # Extract text and match ratios
-        results = []
-        with open(tmp_pdf_path, "rb") as pdf_stream:
-            reader = PyPDF2.PdfReader(pdf_stream)
-            for page_num, page in enumerate(reader.pages, 1):
-                text = page.extract_text()
-                if text:
-                    log(f"📄 Processing page {page_num}...")
-                    for keyword in KEYWORDS:
-                        pattern = re.escape(keyword) + r'[\s:]*([0-9.,]+ ?%?)'
-                        matches = re.findall(pattern, text, re.IGNORECASE)
-                        for match in matches:
-                            results.append((keyword, match.strip()))
-                            log(f"✅ Found: {keyword} = {match.strip()}")
+                # Extract message details
+                msg_data = extract_msg_details(tmp_msg_path)
+                all_results.append(msg_data)
+                
+                # Clean up temp file
+                os.remove(tmp_msg_path)
+                
+                processed_count += 1
+                log(f"✅ Successfully processed: {file_name}")
 
-        os.remove(tmp_pdf_path)
+            except Exception as e:
+                error_count += 1
+                log(f"❌ Failed to process {msg_path}: {str(e)}")
+                # Add error record
+                all_results.append({
+                    "Sender": "",
+                    "To": "", 
+                    "CC": "",
+                    "BCC": "",
+                    "Subject": f"ERROR_PROCESSING_FILE",
+                    "Date": "",
+                    "Body": f"Error processing {msg_path}: {str(e)}",
+                    "Attachments": "",
+                    "Filename": os.path.basename(msg_path),
+                    "Processing_Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "Error": str(e)
+                })
 
-        if not results:
-            log("⚠️ No financial ratios found in the PDF.")
+        # Convert all results to DataFrame
+        df = pd.DataFrame(all_results)
 
         # Save to output folder as CSV
-        log("💾 Writing extracted ratios to output folder...")
-        output_filename = "financial_ratios_extracted.csv"
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
-            tmp_csv.write("Financial Ratio,Value\n")
-            for ratio, value in results:
-                tmp_csv.write(f'"{ratio}","{value}"\n')
-            output_csv_path = tmp_csv.name
+        log("💾 Writing extracted email data to output folder...")
+        output_filename = "extracted_emails.csv"
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8-sig', newline='') as tmp_csv:
+            df.to_csv(tmp_csv, index=False)
+            tmp_csv_path = tmp_csv.name
 
-        with open(output_csv_path, 'rb') as f:
+        # Upload to Dataiku folder
+        with open(tmp_csv_path, 'rb') as f:
             output_folder.upload_stream(output_filename, f)
 
-        os.remove(output_csv_path)
-        log(f"✅ Extraction complete. {len(results)} ratio(s) written to {output_filename}")
+        # Clean up temp file
+        os.remove(tmp_csv_path)
+        
+        log(f"✅ Processing complete: {processed_count} successful, {error_count} errors")
+        log(f"📊 Results written to: {output_filename}")
 
     except Exception as e:
         log(f"🔥 ERROR: {str(e)}")
