@@ -4,43 +4,103 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Maker-Checker Email Analysis</title>
-    <link rel="stylesheet" href="styles.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 600px;
+            margin: auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        input[type="file"] {
+            margin-top: 10px;
+        }
+        button {
+            margin-top: 15px;
+            padding: 10px 20px;
+            cursor: pointer;
+        }
+        #loading {
+            display: none;
+            margin-top: 10px;
+            color: #555;
+        }
+        pre {
+            background: #eee;
+            padding: 10px;
+            overflow-x: auto;
+        }
+        .result-section {
+            margin-top: 20px;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
-        <!-- Upload Section -->
-        <div class="upload-area" id="uploadArea">
-            <p>Drag & Drop your .txt file here or click to upload</p>
-            <input type="file" id="fileInput" accept=".txt">
-        </div>
+        <h2>Maker-Checker Email Analysis</h2>
+        <input type="file" id="fileInput" accept=".txt"><br>
+        <button id="processBtn">Process</button>
+        <div id="loading">Processing...</div>
 
-        <!-- Step Indicator -->
-        <div class="step-indicator">
-            <div class="step active"><div class="step-number">1</div><div>Upload</div></div>
-            <div class="step"><div class="step-number">2</div><div>Parse</div></div>
-            <div class="step"><div class="step-number">3</div><div>Results</div></div>
-            <div class="step-line"></div>
-            <div class="step-line-progress" id="stepProgress"></div>
-        </div>
-
-        <!-- Loading -->
-        <div id="loading" class="loading">
-            <div class="spinner-border"></div> <span id="loadingText">Loading...</span>
-        </div>
-
-        <!-- File Preview -->
-        <div id="filePreview" class="file-preview">
-            <h5>File Preview:</h5>
-            <pre id="previewContent" class="email-preview"></pre>
-        </div>
-
-        <!-- Results -->
-        <div id="results" class="results">
-            <h5>Analysis Results:</h5>
-            <div id="resultsContent"></div>
+        <div class="result-section" id="results">
+            <h3>Results:</h3>
+            <pre id="resultsContent"></pre>
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const processBtn = document.getElementById('processBtn');
+        const loading = document.getElementById('loading');
+        const resultsContent = document.getElementById('resultsContent');
+
+        processBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file) {
+                alert('Please select a .txt file');
+                return;
+            }
+
+            loading.style.display = 'block';
+            resultsContent.textContent = '';
+
+            try {
+                const fileData = await readFileAsBase64(file);
+
+                // Call your backend function
+                // Replace with actual fetch to your Dataiku backend if needed
+                const payload = { file_data: fileData, file_name: file.name };
+
+                // For local testing, assuming backend functions are exposed globally:
+                const response = await do_analyze_emails(payload, {}, {}, {});
+
+                if (response.error) {
+                    resultsContent.textContent = 'Error: ' + response.error;
+                } else {
+                    resultsContent.textContent = JSON.stringify(response.results, null, 2);
+                }
+
+            } catch (err) {
+                resultsContent.textContent = 'Error: ' + err.message;
+            } finally {
+                loading.style.display = 'none';
+            }
+        });
+
+        function readFileAsBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = error => reject(error);
+                reader.readAsDataURL(file);
+            });
+        }
+    </script>
 </body>
 </html>
