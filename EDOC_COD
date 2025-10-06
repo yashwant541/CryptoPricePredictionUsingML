@@ -1,23 +1,3 @@
-"""
-Dataiku Webapp: Maker-Checker Analyzer
-Single-file Flask-style webapp suitable for deployment as a Dataiku Webapp (Python webapp).
-
-Features:
-- Enter Dataiku input folder code and output folder code (or upload a single .txt file).
-- Lists .txt files in input folder and lets user pick which to process (or process all).
-- Runs your provided maker-checker analysis pipeline on selected files.
-- Saves three outputs per input (.csv parsed_emails_..., .csv sequential_analysis_..., .txt enhanced_summary_...)
-- Provides links to download processed outputs from the Dataiku output folder.
-
-Notes for Dataiku deployment:
-- Put this file in a Dataiku webapp Python Webapp (server side) or in the appropriate project webapp folder.
-- Dataiku webapps provide Flask and Jinja; this file uses flask and inline templates to keep it single-file.
-- Ensure the Python environment contains the dependencies: fuzzywuzzy, python-Levenshtein (optional but recommended) and dataiku.
-
-Save this file as `webapp.py` in your Dataiku webapp. If Dataiku expects a different entrypoint, adapt accordingly.
-"""
-
-from flask import Flask, request, render_template_string, redirect, url_for, send_file, flash
 import os
 import re
 import sys
@@ -28,15 +8,11 @@ import tempfile
 from datetime import datetime
 import dataiku
 from fuzzywuzzy import fuzz
-from io import BytesIO
-
-app = Flask(__name__)
-app.secret_key = os.urandom(24)
+import base64
 
 # -----------------------------
-# (1) Inserted analysis code (exactly as provided by the user) but slightly adapted to run inside the webapp
+# Enhanced Configuration
 # -----------------------------
-
 class Config:
     SCORE_WEIGHTS = {
         'keyword_presence': 25,
@@ -53,34 +29,36 @@ class Config:
         'low': 0.0
     }
 
-    APPROVER_KEYWORDS = {
-        "approved": 100, "granted": 95, "confirmed": 90, "accepted": 90,
-        "authorized": 95, "approve": 80, "confirm": 80, "accept": 80,
-        "approval": 50, "clearance": 70, "endorsed": 75, "signed off": 85,
-        "cleared": 80, "validated": 85, "ratified": 90, "sanctioned": 90,
-        "permission granted": 95, "fully supported": 85, "completely endorse": 80,
-        "ok": 40, "yes": 40, "agreed": 70, "go ahead": 80
-    }
+# Enhanced keyword dictionaries with weights
+APPROVER_KEYWORDS = {
+    "approved": 100, "granted": 95, "confirmed": 90, "accepted": 90,
+    "authorized": 95, "approve": 80, "confirm": 80, "accept": 80,
+    "approval": 50, "clearance": 70, "endorsed": 75, "signed off": 85,
+    "cleared": 80, "validated": 85, "ratified": 90, "sanctioned": 90,
+    "permission granted": 95, "fully supported": 85, "completely endorse": 80,
+    "ok": 40, "yes": 40, "agreed": 70, "go ahead": 80
+}
 
-    REQUESTER_KEYWORDS = {
-        "request": 100, "require": 95, "seek approval": 90, "need approval": 90,
-        "asking": 80, "petition": 75, "approval": 30, "pending": 60, "remind": 70,
-        "follow up": 65, "submitted": 85, "application": 80, "awaiting": 75,
-        "seeking": 85, "would like to request": 95, "please approve": 90,
-        "kindly approve": 90, "require authorization": 85, "please review": 85,
-        "need your input": 70, "looking for approval": 80, "requesting": 90
-    }
+REQUESTER_KEYWORDS = {
+    "request": 100, "require": 95, "seek approval": 90, "need approval": 90,
+    "asking": 80, "petition": 75, "approval": 30, "pending": 60,
+    "remind": 70, "follow up": 65, "submitted": 85, "application": 80,
+    "awaiting": 75, "seeking": 85, "would like to request": 95,
+    "please approve": 90, "kindly approve": 90, "require authorization": 85,
+    "please review": 85, "need your input": 70, "looking for approval": 80, "requesting": 90
+}
 
-
+# -----------------------------
+# Enhanced Helper Functions
+# -----------------------------
 def log(message):
     print(f"[LOG] {message}", file=sys.stderr, flush=True)
 
-
 def clean_email_addresses(text):
+    """Remove email addresses with leading whitespace from text"""
     pattern = r'\s*<[^>]*@[^>]*>'
     cleaned_text = re.sub(pattern, '', text)
     return cleaned_text
-
 
 def split_emails(raw_text):
     parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
@@ -88,7 +66,6 @@ def split_emails(raw_text):
         first = parts.pop(0)
         parts = [first] + parts
     return parts
-
 
 def extract_field(email, field):
     pattern = rf"{field}:(.*)"
@@ -98,27 +75,18 @@ def extract_field(email, field):
         return clean_email_addresses(field_content)
     return ""
 
-
 def parse_date_time(date_str):
     if not date_str:
         return None
     try:
         return datetime.strptime(date_str.strip(), "%A, %B %d, %Y %I:%M %p")
     except Exception:
-        # Try common alternatives
-        for fmt in ["%a, %d %b %Y %H:%M:%S %z", "%d %b %Y %H:%M", "%Y-%m-%d %H:%M:%S"]:
-            try:
-                return datetime.strptime(date_str.strip(), fmt)
-            except Exception:
-                continue
-    return None
-
+        return None
 
 def extract_body(email):
     split_point = re.search(r"\n\s*\n", email)
     body = email[split_point.end():].strip() if split_point else ""
     return clean_email_addresses(body)
-
 
 def clean_participant_name(raw_name):
     if not raw_name:
@@ -130,11 +98,9 @@ def clean_participant_name(raw_name):
     cleaned = cleaned.rstrip(',')
     return cleaned
 
-
 def find_matching_statement(email_body, keywords, threshold=80):
     sentences = re.split(r'(?<=[.!?])\s+', email_body.strip())
     exact_matches, fuzzy_matches = [], []
-    
     for sentence in sentences:
         clean_sentence = sentence.lower()
         for kw in keywords:
@@ -144,7 +110,6 @@ def find_matching_statement(email_body, keywords, threshold=80):
                 ratio = fuzz.partial_ratio(kw, clean_sentence)
                 if ratio >= threshold:
                     fuzzy_matches.append((sentence.strip(), kw, ratio))
-    
     if exact_matches:
         return "; ".join(exact_matches), "exact"
     elif fuzzy_matches:
@@ -152,8 +117,11 @@ def find_matching_statement(email_body, keywords, threshold=80):
         return best_match[0], "fuzzy"
     return "", ""
 
-
+# -----------------------------
+# Enhanced Linguistic Analysis
+# -----------------------------
 def extract_semantic_patterns(email_body):
+    """Extract more sophisticated linguistic patterns"""
     patterns = {
         "explicit_approval": [
             r"(?:I\s+)?(?:hereby\s+)?approve(?:\s+the\s+request)?",
@@ -190,7 +158,9 @@ def extract_semantic_patterns(email_body):
                 found_patterns[pattern_type] = found_patterns.get(pattern_type, 0) + 1
     return found_patterns
 
-
+# -----------------------------
+# Enhanced Email Parsing
+# -----------------------------
 def parse_email_chain(text):
     email_chunks = split_emails(text)
     parsed = []
@@ -210,8 +180,8 @@ def parse_email_chain(text):
             
             body = extract_body(email)
             
-            approval_statement, approval_type = find_matching_statement(body, Config.APPROVER_KEYWORDS.keys())
-            request_statement, request_type = find_matching_statement(body, Config.REQUESTER_KEYWORDS.keys())
+            approval_statement, approval_type = find_matching_statement(body, APPROVER_KEYWORDS.keys())
+            request_statement, request_type = find_matching_statement(body, REQUESTER_KEYWORDS.keys())
             
             semantic_patterns = extract_semantic_patterns(body)
             
@@ -243,294 +213,495 @@ def parse_email_chain(text):
     
     return parsed
 
-# Sequential analysis functions
-# (Copy functions: analyze_email_sequentially, analyze_single_email, analyze_role_restrictions, calculate_maker_score, calculate_checker_score,
-# is_conversation_initiator, is_responding_to_request, is_responding_to_approval, analyze_hierarchy_indicators, update_potential_roles,
-# determine_final_roles, get_top_candidate, resolve_role_conflict, get_second_best_candidate_by_highest)
-
-# For brevity in the single-file webapp, include the remaining functions exactly as in the original script (they are added below)
-
-# (--- trimmed in this doc preview --- full functions included in the actual file)
-
-# To keep this code block concise here we add the rest of functions programmatically
-
-# -------------- Insert rest of original functions verbatim --------------
-
-# (Because this code will be put into the canvas code editor, the full remaining functions are present there.)
-
-# -----------------------------
-# Output saving functions
-# -----------------------------
-
-def save_enhanced_csv(parsed_emails, output_folder, filename):
-    output_path = os.path.join(tempfile.gettempdir(), filename)
-    fieldnames = [
-        "Email Sequence", "Sender", "Receiver", "cc", "bcc", "subject",
-        "email body", "approval statement", "approval match type",
-        "request statement", "request match type", "semantic_patterns",
-        "datetime", "date", "time"
-    ]
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in parsed_emails:
-            # Ensure serializable values
-            row2 = row.copy()
-            if isinstance(row2.get('datetime'), datetime):
-                row2['datetime'] = row2['datetime'].isoformat()
-            writer.writerow(row2)
-    with open(output_path, "rb") as f:
-        output_folder.upload_stream(filename, f)
-    os.remove(output_path)
-    log(f"✅ Saved {filename}")
-
-
-def save_sequential_analysis_csv(conversation_history, output_folder, filename):
-    output_path = os.path.join(tempfile.gettempdir(), filename)
-    fieldnames = [
-        "Email_Sequence", "Date", "Time", "Sender", "Receivers",
-        "Can_Be_Maker", "Can_Be_Checker", "Maker_Score", "Checker_Score",
-        "Role_Restrictions", "Maker_Keywords_Found", "Checker_Keywords_Found",
-        "Maker_Semantic_Patterns", "Checker_Semantic_Patterns"
-    ]
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for analysis in conversation_history:
-            writer.writerow({
-                "Email_Sequence": analysis.get("email_sequence", ''),
-                "Date": analysis.get("date", ''),
-                "Time": analysis.get("time", ''),
-                "Sender": analysis.get("sender", ''),
-                "Receivers": "; ".join(analysis.get("receivers", [])),
-                "Can_Be_Maker": analysis.get("can_be_maker", ''),
-                "Can_Be_Checker": analysis.get("can_be_checker", ''),
-                "Maker_Score": analysis.get("maker_score", ''),
-                "Checker_Score": analysis.get("checker_score", ''),
-                "Role_Restrictions": "; ".join(analysis.get("role_restrictions", [])),
-                "Maker_Keywords_Found": "; ".join(analysis.get("maker_keywords_found", [])),
-                "Checker_Keywords_Found": "; ".join(analysis.get("checker_keywords_found", [])),
-                "Maker_Semantic_Patterns": "; ".join(analysis.get("maker_semantic_patterns", [])),
-                "Checker_Semantic_Patterns": "; ".join(analysis.get("checker_semantic_patterns", []))
-            })
-    with open(output_path, "rb") as f:
-        output_folder.upload_stream(filename, f)
-    os.remove(output_path)
-    log(f"✅ Saved sequential analysis: {filename}")
-
-
-def save_enhanced_summary(parsed_emails, potential_makers, potential_checkers, output_folder, 
-                         filename, final_maker, final_checker, conversation_history, resolution_method):
-    output_path = os.path.join(tempfile.gettempdir(), filename)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write("=== SEQUENTIAL MAKER-CHECKER ANALYSIS ===\n\n")
-        f.write(f"Final Maker (Requester): {final_maker or 'Not identified'}\n")
-        f.write(f"Final Checker (Approver): {final_checker or 'Not identified'}\n")
-        f.write(f"Resolution Method: {resolution_method}\n")
-        f.write(f"Total Emails Analyzed: {len(parsed_emails)}\n\n")
-        f.write("=== POTENTIAL MAKERS ===\n")
-        for participant, data in potential_makers.items():
-            f.write(f"  {participant}: Avg Score={data['average_score']:.1f}, "
-                   f"Emails={data['email_count']}, Highest={data['highest_score']:.1f}\n")
-        f.write("\n=== POTENTIAL CHECKERS ===\n")
-        for participant, data in potential_checkers.items():
-            f.write(f"  {participant}: Avg Score={data['average_score']:.1f}, "
-                   f"Emails={data['email_count']}, Highest={data['highest_score']:.1f}\n")
-        f.write("\n=== EMAIL-BY-EMAIL ANALYSIS ===\n")
-        for analysis in conversation_history:
-            f.write(f"\nEmail {analysis.get('email_sequence','?')} - {analysis.get('date','')} {analysis.get('time','')}\n")
-            f.write(f"  Sender: {analysis.get('sender','')}\n")
-            f.write(f"  Receivers: {'; '.join(analysis.get('receivers', []))}\n")
-            f.write(f"  Maker Score: {analysis.get('maker_score',0):.1f}\n")
-            f.write(f"  Checker Score: {analysis.get('checker_score',0):.1f}\n")
-            f.write(f"  Role Restrictions: {'; '.join(analysis.get('role_restrictions', [])) or 'None'}\n")
-            if analysis.get('maker_keywords_found'):
-                f.write(f"  Maker Keywords: {'; '.join(analysis.get('maker_keywords_found'))}\n")
-            if analysis.get('checker_keywords_found'):
-                f.write(f"  Checker Keywords: {'; '.join(analysis.get('checker_keywords_found'))}\n")
-    with open(output_path, "rb") as f:
-        output_folder.upload_stream(filename, f)
-    os.remove(output_path)
-    log(f"✅ Saved enhanced summary: {filename}")
+def extract_all_participants(parsed_emails):
+    participants = set()
+    for email in parsed_emails:
+        sender = clean_participant_name(email.get("Sender", ""))
+        if sender: participants.add(sender)
+        
+        receiver_field = email.get("Receiver", "")
+        receivers = [clean_participant_name(r) for r in receiver_field.split(',')] if receiver_field else []
+        participants.update([r for r in receivers if r])
+        
+        cc_field = email.get("cc", "")
+        cc = [clean_participant_name(c) for c in cc_field.split(',')] if cc_field else []
+        participants.update([c for c in cc if c])
+        
+        bcc_field = email.get("bcc", "")
+        bcc = [clean_participant_name(b) for b in bcc_field.split(',')] if bcc_field else []
+        participants.update([b for b in bcc if b])
+    return sorted(participants)
 
 # -----------------------------
-# Core processing flow used by the webapp endpoint
+# Sequential Analysis Functions
 # -----------------------------
-
-def process_text_file_from_input_folder(input_folder, output_folder, txt_file):
-    # Download to temp file
-    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp_file:
-        tmp_path = tmp_file.name
-        with input_folder.get_download_stream(txt_file) as stream:
-            shutil.copyfileobj(stream, tmp_file)
-    with open(tmp_path, "r", encoding="utf-8") as f:
-        email_text = f.read()
-    email_text = clean_email_addresses(email_text)
-    parsed_emails = parse_email_chain(email_text)
-    if not parsed_emails:
-        os.remove(tmp_path)
-        log(f"⚠️ No emails parsed in {txt_file}.")
-        return None
-    sequential_analysis = analyze_email_sequentially(parsed_emails)
-    base_name = os.path.splitext(os.path.basename(txt_file))[0]
-    save_enhanced_csv(parsed_emails, output_folder, f"parsed_emails_{base_name}.csv")
-    save_sequential_analysis_csv(
-        sequential_analysis["conversation_history"],
-        output_folder,
-        f"sequential_analysis_{base_name}.csv"
-    )
-    save_enhanced_summary(
-        parsed_emails,
-        sequential_analysis["potential_makers"],
-        sequential_analysis["potential_checkers"],
-        output_folder,
-        f"enhanced_summary_{base_name}.txt",
-        sequential_analysis["final_maker"],
-        sequential_analysis["final_checker"],
-        sequential_analysis["conversation_history"],
-        sequential_analysis["resolution_method"]
-    )
-    os.remove(tmp_path)
+def analyze_email_sequentially(parsed_emails):
+    """
+    Analyze emails sequentially from oldest to newest, tracking potential makers/checkers
+    """
+    # Sort emails by date to ensure chronological processing
+    sorted_emails = sorted(parsed_emails, key=lambda x: x["datetime"] if x["datetime"] else datetime.min)
+    
+    # Track potential makers and checkers throughout the conversation
+    potential_makers = {}
+    potential_checkers = {}
+    conversation_history = []
+    
+    for i, email in enumerate(sorted_emails):
+        email_analysis = analyze_single_email(email, conversation_history, i, len(sorted_emails))
+        conversation_history.append(email_analysis)
+        
+        # Update potential makers and checkers based on this email
+        update_potential_roles(email_analysis, potential_makers, potential_checkers)
+    
+    # Determine final roles with conflict resolution
+    final_maker, final_checker, resolution_method = determine_final_roles(potential_makers, potential_checkers)
+    
     return {
-        'final_maker': sequential_analysis['final_maker'],
-        'final_checker': sequential_analysis['final_checker'],
-        'resolution_method': sequential_analysis['resolution_method']
+        "conversation_history": conversation_history,
+        "potential_makers": potential_makers,
+        "potential_checkers": potential_checkers,
+        "final_maker": final_maker,
+        "final_checker": final_checker,
+        "resolution_method": resolution_method
     }
 
+def analyze_single_email(email, previous_history, current_index, total_emails):
+    """
+    Analyze a single email against all rules
+    """
+    sender = clean_participant_name(email.get("Sender", ""))
+    receiver_field = email.get("Receiver", "")
+    receivers = [clean_participant_name(r.strip()) for r in receiver_field.split(';') if r.strip()]
+    
+    analysis = {
+        "date": email.get("date", ""),
+        "time": email.get("time", ""),
+        "datetime": email.get("datetime"),
+        "sender": sender,
+        "receivers": receivers,
+        "email_sequence": email.get("Email Sequence", 0),
+        "can_be_maker": False,
+        "can_be_checker": False,
+        "maker_score": 0,
+        "checker_score": 0,
+        "role_restrictions": [],
+        "maker_keywords_found": [],
+        "checker_keywords_found": [],
+        "maker_semantic_patterns": [],
+        "checker_semantic_patterns": []
+    }
+    
+    # Rule 1: Basic Role Restrictions
+    role_analysis = analyze_role_restrictions_single(sender, receivers, email)
+    analysis["role_restrictions"] = role_analysis["restrictions"]
+    analysis["can_be_maker"] = role_analysis["can_be_maker"]
+    analysis["can_be_checker"] = role_analysis["can_be_checker"]
+    
+    if analysis["can_be_maker"]:
+        maker_score, maker_details = calculate_maker_score_single(email, previous_history, current_index, total_emails)
+        analysis["maker_score"] = maker_score
+        analysis["maker_keywords_found"] = maker_details.get("keywords_found", [])
+        analysis["maker_semantic_patterns"] = maker_details.get("semantic_patterns", [])
+    
+    if analysis["can_be_checker"]:
+        checker_score, checker_details = calculate_checker_score_single(email, previous_history, current_index, total_emails)
+        analysis["checker_score"] = checker_score
+        analysis["checker_keywords_found"] = checker_details.get("keywords_found", [])
+        analysis["checker_semantic_patterns"] = checker_details.get("semantic_patterns", [])
+    
+    return analysis
+
+def analyze_role_restrictions_single(sender, receivers, email):
+    """
+    Determine if sender can be maker/checker based on role restrictions for single email
+    """
+    restrictions = []
+    can_be_maker = True
+    can_be_checker = True
+    
+    # Check if sender is only in CC/BCC (not in To field)
+    cc_field = email.get("cc", "")
+    bcc_field = email.get("bcc", "")
+    cc_list = [clean_participant_name(c.strip()) for c in cc_field.split(';')] if cc_field else []
+    bcc_list = [clean_participant_name(b.strip()) for b in bcc_field.split(';')] if bcc_field else []
+    
+    # If sender is only in CC/BCC and not in receivers, restrict roles
+    if sender in cc_list and sender not in receivers:
+        restrictions.append("CC-only participant")
+        can_be_maker = False
+        can_be_checker = False
+    
+    if sender in bcc_list and sender not in receivers:
+        restrictions.append("BCC-only participant") 
+        can_be_maker = False
+        can_be_checker = False
+    
+    return {
+        "restrictions": restrictions,
+        "can_be_maker": can_be_maker,
+        "can_be_checker": can_be_checker
+    }
+
+def calculate_maker_score_single(email, previous_history, current_index, total_emails):
+    """
+    Calculate maker score for this specific email
+    """
+    score = 0
+    email_body = email.get("email body", "").lower()
+    keywords_found = []
+    semantic_patterns_found = []
+    
+    # Rule 1: Request Keywords
+    for keyword, weight in REQUESTER_KEYWORDS.items():
+        if keyword in email_body:
+            score += weight
+            keywords_found.append(f"{keyword}({weight})")
+    
+    # Rule 2: Semantic Patterns for Requests
+    semantic_patterns = extract_semantic_patterns(email_body)
+    if "explicit_request" in semantic_patterns:
+        score += 80
+        semantic_patterns_found.append("explicit_request")
+    if "conditional_request" in semantic_patterns:
+        score += 60
+        semantic_patterns_found.append("conditional_request")
+    
+    # Rule 3: Temporal Position (first email gets bonus)
+    if current_index == 0:  # This is the first email
+        score += 100
+    
+    # Rule 4: Conversation Flow - Initiator pattern
+    if is_conversation_initiator(current_index):
+        score += 50
+    
+    return score, {
+        "keywords_found": keywords_found,
+        "semantic_patterns": semantic_patterns_found
+    }
+
+def calculate_checker_score_single(email, previous_history, current_index, total_emails):
+    """
+    Calculate checker score for this specific email
+    """
+    score = 0
+    email_body = email.get("email body", "").lower()
+    keywords_found = []
+    semantic_patterns_found = []
+    
+    # Rule 1: Approval Keywords
+    for keyword, weight in APPROVER_KEYWORDS.items():
+        if keyword in email_body:
+            score += weight
+            keywords_found.append(f"{keyword}({weight})")
+    
+    # Rule 2: Semantic Patterns for Approval
+    semantic_patterns = extract_semantic_patterns(email_body)
+    if "explicit_approval" in semantic_patterns:
+        score += 80
+        semantic_patterns_found.append("explicit_approval")
+    if "conditional_approval" in semantic_patterns:
+        score += 60
+        semantic_patterns_found.append("conditional_approval")
+    if "delegated_authority" in semantic_patterns:
+        score += 40
+        semantic_patterns_found.append("delegated_authority")
+    
+    # Rule 3: Temporal Position (last email gets bonus)
+    if current_index == total_emails - 1:  # Last email
+        score += 100
+    
+    # Rule 4: Response to Request
+    if is_responding_to_request_single(email, previous_history):
+        score += 70
+    
+    # Rule 5: Hierarchy Indicators
+    hierarchy_score = analyze_hierarchy_indicators_single(email_body)
+    score += hierarchy_score
+    
+    return score, {
+        "keywords_found": keywords_found,
+        "semantic_patterns": semantic_patterns_found
+    }
+
+def is_conversation_initiator(current_index):
+    return current_index == 0
+
+def is_responding_to_request_single(email, previous_history):
+    """Check if this email is responding to a previous request"""
+    if not previous_history:
+        return False
+    
+    for prev_analysis in previous_history[-3:]:
+        if prev_analysis.get("maker_score", 0) > 50:
+            return True
+    return False
+
+def analyze_hierarchy_indicators_single(email_body):
+    """Analyze hierarchy indicators in email body"""
+    score = 0
+    superior_indicators = [
+        "please review", "for your approval", "seeking your guidance", 
+        "your decision", "awaiting your input", "kindly approve",
+        "request your approval", "need your authorization"
+    ]
+    
+    for indicator in superior_indicators:
+        if indicator in email_body.lower():
+            score += 20
+    
+    return min(score, 100)
+
+def update_potential_roles(email_analysis, potential_makers, potential_checkers):
+    """Update potential roles based on current email analysis"""
+    sender = email_analysis["sender"]
+    
+    # Update potential makers
+    if email_analysis["can_be_maker"] and email_analysis["maker_score"] > 0:
+        if sender not in potential_makers:
+            potential_makers[sender] = {
+                "total_score": 0,
+                "email_count": 0,
+                "highest_score": 0,
+                "average_score": 0
+            }
+        
+        potential_makers[sender]["total_score"] += email_analysis["maker_score"]
+        potential_makers[sender]["email_count"] += 1
+        potential_makers[sender]["highest_score"] = max(
+            potential_makers[sender]["highest_score"], 
+            email_analysis["maker_score"]
+        )
+        potential_makers[sender]["average_score"] = potential_makers[sender]["total_score"] / potential_makers[sender]["email_count"]
+    
+    # Update potential checkers
+    if email_analysis["can_be_checker"] and email_analysis["checker_score"] > 0:
+        if sender not in potential_checkers:
+            potential_checkers[sender] = {
+                "total_score": 0,
+                "email_count": 0,
+                "highest_score": 0,
+                "average_score": 0
+            }
+        
+        potential_checkers[sender]["total_score"] += email_analysis["checker_score"]
+        potential_checkers[sender]["email_count"] += 1
+        potential_checkers[sender]["highest_score"] = max(
+            potential_checkers[sender]["highest_score"], 
+            email_analysis["checker_score"]
+        )
+        potential_checkers[sender]["average_score"] = potential_checkers[sender]["total_score"] / potential_checkers[sender]["email_count"]
+
+def determine_final_roles(potential_makers, potential_checkers):
+    """
+    Determine final roles with conflict resolution when same person is top candidate for both
+    """
+    # Get top candidates for each role
+    top_maker = get_top_candidate(potential_makers, 30)
+    top_checker = get_top_candidate(potential_checkers, 30)
+    
+    # If different people, return them
+    if top_maker != top_checker:
+        return top_maker, top_checker, "different_participants"
+    
+    # If same person is top for both roles, resolve conflict
+    if top_maker and top_maker == top_checker:
+        return resolve_role_conflict(potential_makers, potential_checkers, top_maker)
+    
+    # If no clear candidates
+    return None, None, "no_clear_candidates"
+
+def get_top_candidate(candidates_dict, min_threshold):
+    """Get top candidate from a dictionary of candidates"""
+    if not candidates_dict:
+        return None
+    
+    best_candidate = None
+    best_score = 0
+    
+    for participant, data in candidates_dict.items():
+        avg_score = data["average_score"]
+        if avg_score > best_score and avg_score > min_threshold:
+            best_candidate = participant
+            best_score = avg_score
+    
+    return best_candidate
+
+def resolve_role_conflict(potential_makers, potential_checkers, conflicted_person):
+    """
+    Resolve when the same person is top candidate for both maker and checker
+    Uses HIGHEST single score for conflict resolution
+    """
+    maker_data = potential_makers.get(conflicted_person, {})
+    checker_data = potential_checkers.get(conflicted_person, {})
+    
+    # Use HIGHEST score (peak performance) for conflict resolution
+    maker_highest = maker_data.get("highest_score", 0)
+    checker_highest = checker_data.get("highest_score", 0)
+    
+    # Assign the role where the person has the higher peak score
+    if maker_highest >= checker_highest:
+        # Person becomes maker, find next best checker
+        final_maker = conflicted_person
+        final_checker = get_second_best_candidate_by_highest(potential_checkers, conflicted_person, 30)
+        resolution_method = f"conflict_resolution_maker_highest_peak({maker_highest:.1f} vs {checker_highest:.1f})"
+    else:
+        # Person becomes checker, find next best maker
+        final_checker = conflicted_person
+        final_maker = get_second_best_candidate_by_highest(potential_makers, conflicted_person, 30)
+        resolution_method = f"conflict_resolution_checker_highest_peak({checker_highest:.1f} vs {maker_highest:.1f})"
+    
+    return final_maker, final_checker, resolution_method
+
+def get_second_best_candidate_by_highest(candidates_dict, exclude_person, min_threshold):
+    """Get second best candidate based on HIGHEST score excluding a specific person"""
+    if not candidates_dict:
+        return None
+    
+    best_candidate = None
+    best_score = 0
+    
+    for participant, data in candidates_dict.items():
+        if participant == exclude_person:
+            continue
+            
+        highest_score = data.get("highest_score", 0)
+        if highest_score > best_score and highest_score > min_threshold:
+            best_candidate = participant
+            best_score = highest_score
+    
+    return best_candidate
+
 # -----------------------------
-# Web routes and UI (inline Jinja templates)
+# WebApp Endpoints
 # -----------------------------
+def do(payload, config, plugin_config, inputs):
+    """Main webapp endpoint"""
+    return {"status": "ready"}
 
-INDEX_HTML = """
-<!doctype html>
-<title>Maker-Checker Analyzer</title>
-<h1>Maker-Checker Analyzer (Dataiku Webapp)</h1>
-<form method="post" action="/list_files">
-  <label>Input Folder Code: <input type="text" name="input_folder" required></label><br>
-  <label>Output Folder Code: <input type="text" name="output_folder" required></label><br>
-  <p>
-  <button type="submit">List .txt files</button>
-</form>
-<hr>
-<h3>Or upload a single .txt file to analyze (local upload)</h3>
-<form method="post" action="/upload" enctype="multipart/form-data">
-  <input type="file" name="file" accept=".txt" required>
-  <label>Output Folder Code: <input type="text" name="output_folder" required></label>
-  <button type="submit">Upload & Analyze</button>
-</form>
-"""
-
-LIST_HTML = """
-<!doctype html>
-<title>Files</title>
-<h1>Files in Input Folder: {{ input_folder_code }}</h1>
-{% if files %}
-  <form method="post" action="/run">
-    <input type="hidden" name="input_folder" value="{{ input_folder_code }}">
-    <input type="hidden" name="output_folder" value="{{ output_folder_code }}">
-    <ul>
-    {% for f in files %}
-      <li><label><input type="checkbox" name="files" value="{{ f }}"> {{ f }}</label></li>
-    {% endfor %}
-    </ul>
-    <button type="submit">Process selected files</button>
-  </form>
-{% else %}
-  <p>No .txt files found.</p>
-{% endif %}
-<p><a href="/">Back</a></p>
-"""
-
-RESULT_HTML = """
-<!doctype html>
-<title>Run Results</title>
-<h1>Run Results</h1>
-{% if results %}
-  <ul>
-  {% for r in results %}
-    <li>{{ r.file }} - Maker: {{ r.final_maker or 'N/A' }}, Checker: {{ r.final_checker or 'N/A' }}, Method: {{ r.resolution_method }}</li>
-  {% endfor %}
-  </ul>
-{% else %}
-  <p>No results (nothing processed).</p>
-{% endif %}
-<p><a href="/">Back</a></p>
-"""
-
-@app.route('/')
-def index():
-    return render_template_string(INDEX_HTML)
-
-@app.route('/list_files', methods=['POST'])
-def list_files():
-    input_code = request.form['input_folder'].strip()
-    output_code = request.form['output_folder'].strip()
+def do_parse_file(payload, config, plugin_config, inputs):
+    """Endpoint to preview uploaded file content"""
     try:
-        input_folder = dataiku.Folder(input_code)
-        files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith('.txt')]
+        file_data = payload.get('file_data', '')
+        file_name = payload.get('file_name', 'uploaded_file.txt')
+        
+        if not file_data:
+            return {"error": "No file uploaded"}
+        
+        # Decode base64 file data
+        if ',' in file_data:
+            file_data = file_data.split(',')[1]
+        
+        file_content = base64.b64decode(file_data).decode('utf-8')
+        
+        # Clean and parse emails for preview
+        email_text = clean_email_addresses(file_content)
+        parsed_emails = parse_email_chain(email_text)
+        
+        if not parsed_emails:
+            return {"error": "No emails could be parsed from the uploaded file"}
+        
+        participants = extract_all_participants(parsed_emails)
+        
+        return {
+            "success": True,
+            "file_name": file_name,
+            "file_size": len(file_content),
+            "parsed_emails_count": len(parsed_emails),
+            "participants": list(participants),
+            "email_preview": [{
+                "sequence": email["Email Sequence"],
+                "sender": email["Sender"],
+                "receivers": email["Receiver"],
+                "subject": email["subject"],
+                "date": email["date"],
+                "body_preview": (email["email body"][:100] + "...") if len(email["email body"]) > 100 else email["email body"]
+            } for email in parsed_emails[:3]]
+        }
+        
     except Exception as e:
-        flash(f"Error accessing input folder: {e}")
-        return redirect(url_for('index'))
-    return render_template_string(LIST_HTML, files=files, input_folder_code=input_code, output_folder_code=output_code)
+        return {"error": f"File parsing failed: {str(e)}"}
 
-@app.route('/run', methods=['POST'])
-def run():
-    input_code = request.form['input_folder'].strip()
-    output_code = request.form['output_folder'].strip()
-    selected = request.form.getlist('files')
+def do_analyze_emails(payload, config, plugin_config, inputs):
+    """Endpoint to perform full analysis from uploaded file"""
     try:
-        input_folder = dataiku.Folder(input_code)
-        output_folder = dataiku.Folder(output_code)
+        # Get the uploaded file data
+        file_data = payload.get('file_data', '')
+        file_name = payload.get('file_name', 'uploaded_file.txt')
+        
+        if not file_data:
+            return {"error": "No file uploaded"}
+        
+        # Decode base64 file data
+        if ',' in file_data:
+            file_data = file_data.split(',')[1]
+        
+        file_content = base64.b64decode(file_data).decode('utf-8')
+        
+        # Clean and parse emails
+        email_text = clean_email_addresses(file_content)
+        parsed_emails = parse_email_chain(email_text)
+        
+        if not parsed_emails:
+            return {"error": "No emails could be parsed from the uploaded file"}
+        
+        # Perform sequential analysis
+        sequential_analysis = analyze_email_sequentially(parsed_emails)
+        
+        # Format results for web display
+        results = format_results_for_web(sequential_analysis, parsed_emails)
+        
+        return {
+            "success": True,
+            "results": results,
+            "file_name": file_name
+        }
+        
     except Exception as e:
-        flash(f"Error accessing folders: {e}")
-        return redirect(url_for('index'))
-    results = []
-    for f in selected:
-        try:
-            res = process_text_file_from_input_folder(input_folder, output_folder, f)
-            results.append({'file': f, 'final_maker': res.get('final_maker'), 'final_checker': res.get('final_checker'), 'resolution_method': res.get('resolution_method')})
-        except Exception as e:
-            log(f"Error processing {f}: {e}")
-            results.append({'file': f, 'final_maker': None, 'final_checker': None, 'resolution_method': f'error: {e}'})
-    return render_template_string(RESULT_HTML, results=results)
+        return {"error": f"Analysis failed: {str(e)}"}
 
-@app.route('/upload', methods=['POST'])
-def upload():
-    uploaded = request.files.get('file')
-    output_code = request.form['output_folder'].strip()
-    if not uploaded:
-        flash('No file uploaded')
-        return redirect(url_for('index'))
-    if not uploaded.filename.lower().endswith('.txt'):
-        flash('Only .txt files are supported')
-        return redirect(url_for('index'))
-    try:
-        output_folder = dataiku.Folder(output_code)
-    except Exception as e:
-        flash(f"Error accessing output folder: {e}")
-        return redirect(url_for('index'))
-    # Save upload to temp and parse
-    with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as tmp:
-        uploaded.save(tmp.name)
-        tmp_path = tmp.name
-    with open(tmp_path, 'r', encoding='utf-8') as f:
-        text = f.read()
-    os.remove(tmp_path)
-    parsed = parse_email_chain(clean_email_addresses(text))
-    if not parsed:
-        flash('No emails parsed from uploaded file')
-        return redirect(url_for('index'))
-    sequential_analysis = analyze_email_sequentially(parsed)
-    base_name = os.path.splitext(uploaded.filename)[0]
-    save_enhanced_csv(parsed, output_folder, f"parsed_emails_{base_name}.csv")
-    save_sequential_analysis_csv(sequential_analysis['conversation_history'], output_folder, f"sequential_analysis_{base_name}.csv")
-    save_enhanced_summary(parsed, sequential_analysis['potential_makers'], sequential_analysis['potential_checkers'], output_folder, f"enhanced_summary_{base_name}.txt", sequential_analysis['final_maker'], sequential_analysis['final_checker'], sequential_analysis['conversation_history'], sequential_analysis['resolution_method'])
-    flash(f"Processed upload: Maker={sequential_analysis['final_maker']}, Checker={sequential_analysis['final_checker']}")
-    return redirect(url_for('index'))
-
-# If you want to enable direct downloading from Dataiku output folder, you can implement a download route that uses the folder API.
-# However in Dataiku usually output folders are visible to users via the Dataiku UI; adding a download proxy requires additional permissions.
-
-if __name__ == '__main__':
-    # Run locally for testing
-    app.run(host='0.0.0.0', port=5000, debug=True)
+def format_results_for_web(analysis, parsed_emails):
+    """Format analysis results for web display"""
+    return {
+        "final_maker": analysis["final_maker"] or "Not identified",
+        "final_checker": analysis["final_checker"] or "Not identified",
+        "resolution_method": analysis.get("resolution_method", "standard"),
+        "stats": {
+            "total_emails": len(parsed_emails),
+            "total_participants": len(extract_all_participants(parsed_emails)),
+            "potential_makers_count": len(analysis["potential_makers"]),
+            "potential_checkers_count": len(analysis["potential_checkers"])
+        },
+        "potential_makers": [
+            {
+                "participant": participant,
+                "average_score": round(data["average_score"], 1),
+                "highest_score": round(data["highest_score"], 1),
+                "email_count": data["email_count"]
+            }
+            for participant, data in analysis["potential_makers"].items()
+        ],
+        "potential_checkers": [
+            {
+                "participant": participant,
+                "average_score": round(data["average_score"], 1),
+                "highest_score": round(data["highest_score"], 1),
+                "email_count": data["email_count"]
+            }
+            for participant, data in analysis["potential_checkers"].items()
+        ],
+        "email_analysis": [
+            {
+                "sequence": email_analysis["email_sequence"],
+                "sender": email_analysis["sender"],
+                "date": email_analysis["date"],
+                "time": email_analysis["time"],
+                "maker_score": round(email_analysis["maker_score"], 1),
+                "checker_score": round(email_analysis["checker_score"], 1),
+                "can_be_maker": email_analysis["can_be_maker"],
+                "can_be_checker": email_analysis["can_be_checker"],
+                "receivers": ", ".join(email_analysis["receivers"])
+            }
+            for email_analysis in analysis["conversation_history"]
+        ]
+    }
