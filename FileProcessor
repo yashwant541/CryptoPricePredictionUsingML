@@ -1,237 +1,294 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
-import pandas as pd
-import re
-import os
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maker-Checker Email Analysis</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .loading { display: none; }
+        .results { display: none; }
+        .email-preview { max-height: 300px; overflow-y: auto; }
+        .score-badge { font-size: 0.8em; }
+        .role-marker { font-weight: bold; padding: 2px 6px; border-radius: 3px; }
+        .maker-role { background-color: #d4edda; color: #155724; }
+        .checker-role { background-color: #d1ecf1; color: #0c5460; }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-12">
+                <h1 class="text-center">Maker-Checker Email Analysis</h1>
+                <p class="text-center text-muted">Analyze email chains to identify requesters (makers) and approvers (checkers)</p>
+            </div>
+        </div>
 
-class ColumnMatcherApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Column Matcher")
-        self.root.state('zoomed')  # Maximize window
+        <div class="row mt-4">
+            <div class="col-md-8 offset-md-2">
+                <!-- Upload Section -->
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">Upload Email Chain</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="emailText" class="form-label">Paste email chain text:</label>
+                            <textarea class="form-control" id="emailText" rows="10" 
+                                      placeholder="Paste your email chain here. Make sure it includes 'From:', 'To:', 'Subject:', 'Sent:' headers..."></textarea>
+                        </div>
+                        <button class="btn btn-primary" onclick="analyzeEmails()">Analyze Email Chain</button>
+                        
+                        <div class="mt-3">
+                            <small class="text-muted">
+                                <strong>Format expected:</strong><br>
+                                From: John Doe<br>
+                                To: Jane Smith<br>
+                                Subject: Request for approval<br>
+                                Sent: Monday, January 15, 2024 2:30 PM<br>
+                                <br>
+                                Email body text...
+                            </small>
+                        </div>
+                    </div>
+                </div>
 
-        self.old_file_path = tk.StringVar()
-        self.new_file_path = tk.StringVar()
-        self.output_folder_path = tk.StringVar()
-        self.old_sheet_name = tk.StringVar()
-        self.new_sheet_name = tk.StringVar()
-        self.matched_columns = {}
+                <!-- Loading Indicator -->
+                <div id="loading" class="loading mt-3">
+                    <div class="card">
+                        <div class="card-body text-center">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Analyzing email chain... This may take a few moments.</p>
+                        </div>
+                    </div>
+                </div>
 
-        self.create_widgets()
+                <!-- Results Section -->
+                <div id="results" class="results mt-4">
+                    <div class="card">
+                        <div class="card-header bg-success text-white">
+                            <h5 class="card-title mb-0">Analysis Results</h5>
+                        </div>
+                        <div class="card-body">
+                            <!-- Final Roles -->
+                            <div class="row mb-4">
+                                <div class="col-md-6">
+                                    <div class="card">
+                                        <div class="card-body text-center">
+                                            <h6>Maker (Requester)</h6>
+                                            <h3 id="finalMaker" class="text-primary">-</h3>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="card">
+                                        <div class="card-body text-center">
+                                            <h6>Checker (Approver)</h6>
+                                            <h3 id="finalChecker" class="text-success">-</h3>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
 
-    def create_widgets(self):
-        frame = tk.Frame(self.root)
-        frame.pack(pady=10, padx=10)
+                            <!-- Stats -->
+                            <div class="row mb-4">
+                                <div class="col-12">
+                                    <h6>Analysis Statistics</h6>
+                                    <div class="row text-center">
+                                        <div class="col-3">
+                                            <div class="border rounded p-2">
+                                                <div class="fw-bold" id="totalEmails">-</div>
+                                                <small>Total Emails</small>
+                                            </div>
+                                        </div>
+                                        <div class="col-3">
+                                            <div class="border rounded p-2">
+                                                <div class="fw-bold" id="totalParticipants">-</div>
+                                                <small>Participants</small>
+                                            </div>
+                                        </div>
+                                        <div class="col-3">
+                                            <div class="border rounded p-2">
+                                                <div class="fw-bold" id="potentialMakers">-</div>
+                                                <small>Potential Makers</small>
+                                            </div>
+                                        </div>
+                                        <div class="col-3">
+                                            <div class="border rounded p-2">
+                                                <div class="fw-bold" id="potentialCheckers">-</div>
+                                                <small>Potential Checkers</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
 
-        tk.Label(frame, text="Base file path:").grid(row=0, column=0, sticky="e")
-        tk.Entry(frame, textvariable=self.old_file_path, width=50).grid(row=0, column=1)
-        tk.Button(frame, text="Browse", command=self.browse_old_file).grid(row=0, column=2)
+                            <!-- Potential Candidates -->
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <h6>Potential Makers</h6>
+                                    <div id="makerCandidates" class="mb-3">
+                                        <!-- Filled by JavaScript -->
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6>Potential Checkers</h6>
+                                    <div id="checkerCandidates">
+                                        <!-- Filled by JavaScript -->
+                                    </div>
+                                </div>
+                            </div>
 
-        tk.Label(frame, text="New file path:").grid(row=1, column=0, sticky="e")
-        tk.Entry(frame, textvariable=self.new_file_path, width=50).grid(row=1, column=1)
-        tk.Button(frame, text="Browse", command=self.browse_new_file).grid(row=1, column=2)
+                            <!-- Email-by-Email Analysis -->
+                            <div class="mt-4">
+                                <h6>Email-by-Email Analysis</h6>
+                                <div class="email-preview border rounded p-2">
+                                    <table class="table table-sm table-striped">
+                                        <thead>
+                                            <tr>
+                                                <th>#</th>
+                                                <th>Sender</th>
+                                                <th>Date</th>
+                                                <th>Maker Score</th>
+                                                <th>Checker Score</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="emailAnalysisTable">
+                                            <!-- Filled by JavaScript -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
-        tk.Label(frame, text="Output folder path:").grid(row=2, column=0, sticky="e")
-        tk.Entry(frame, textvariable=self.output_folder_path, width=50).grid(row=2, column=1)
-        tk.Button(frame, text="Browse", command=self.browse_output_folder).grid(row=2, column=2)
+                <!-- Error Section -->
+                <div id="error" class="alert alert-danger mt-3" style="display: none;">
+                    <strong>Error:</strong> <span id="errorMessage"></span>
+                </div>
+            </div>
+        </div>
+    </div>
 
-        tk.Button(frame, text="Next", command=self.process_files).grid(row=3, column=1, pady=10)
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
 
-    def browse_old_file(self):
-        filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("Excel files", "*.xlsx")])
-        if filename:
-            self.old_file_path.set(filename)
-            if filename.endswith('.xlsx'):
-                self.prompt_sheet_name(self.old_file_path.get(), self.old_sheet_name)
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+        }
 
-    def browse_new_file(self):
-        filename = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv"), ("Excel files", "*.xlsx")])
-        if filename:
-            self.new_file_path.set(filename)
-            if filename.endswith('.xlsx'):
-                self.prompt_sheet_name(self.new_file_path.get(), self.new_sheet_name)
+        function hideError() {
+            document.getElementById('error').style.display = 'none';
+        }
 
-    def browse_output_folder(self):
-        folder = filedialog.askdirectory()
-        if folder:
-            self.output_folder_path.set(folder)
-
-    def prompt_sheet_name(self, file_path, sheet_var):
-        try:
-            xl = pd.ExcelFile(file_path)
-            sheet_window = tk.Toplevel(self.root)
-            sheet_window.title("Select Sheet Name")
-
-            tk.Label(sheet_window, text="Select Sheet Name:").pack(pady=10)
-
-            sheet_dropdown = ttk.Combobox(sheet_window, textvariable=sheet_var, values=xl.sheet_names)
-            sheet_dropdown.pack(pady=10)
-            sheet_dropdown.current(0)
-
-            tk.Button(sheet_window, text="Confirm", command=sheet_window.destroy).pack(pady=10)
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to read Excel file sheets: {e}")
-
-    def process_files(self):
-        if not self.old_file_path.get() or not self.new_file_path.get() or not self.output_folder_path.get():
-            messagebox.showerror("Error", "Please select both files and output folder.")
-            return
-
-        try:
-            if self.old_file_path.get().endswith('.csv'):
-                old_df = pd.read_csv(self.old_file_path.get())
-            else:
-                old_df = pd.read_excel(self.old_file_path.get(), sheet_name=self.old_sheet_name.get())
-
-            if self.new_file_path.get().endswith('.csv'):
-                new_df = pd.read_csv(self.new_file_path.get())
-            else:
-                new_df = pd.read_excel(self.new_file_path.get(), sheet_name=self.new_sheet_name.get())
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to read files: {e}")
-            return
-
-        matches = self.match_columns(old_df, new_df)
-        old_columns = old_df.columns.tolist()
-        new_columns = new_df.columns.tolist()
-
-        self.show_match_page(matches, old_columns, new_columns, old_df.head(), new_df.head())
-
-    def clean_column_name(self, col):
-        return re.sub(r'[^a-z0-9]', '', col.lower())
-
-    def match_columns(self, file_a, file_b):
-        matches = {}
-        for col_a in file_a.columns:
-            best_match = None
-            best_score = 0
-            for col_b in file_b.columns:
-                score = 0
-
-                # Compare data types
-                if file_a[col_a].dtype == file_b[col_b].dtype:
-                    score += 1
-                
-                # Compare non-null lengths
-                len_a = file_a[col_a].dropna().shape[0]
-                len_b = file_b[col_b].dropna().shape[0]
-                length_score = 1 - abs(len_a - len_b) / max(len_a, len_b)
-                score += length_score
-                
-                # Compare data match percentage
-                common_values = set(file_a[col_a].dropna()).intersection(set(file_b[col_b].dropna()))
-                match_percentage = len(common_values) / max(len(file_a[col_a].dropna()), len(file_b[col_b].dropna()))
-                score += match_percentage
-                
-                if score > best_score:
-                    best_score = score
-                    best_match = col_b
+        function analyzeEmails() {
+            const emailText = document.getElementById('emailText').value.trim();
             
-            matches[col_a] = best_match
-        return matches
+            if (!emailText) {
+                showError('Please paste an email chain to analyze.');
+                return;
+            }
 
-    def show_match_page(self, matches, old_columns, new_columns, old_sample, new_sample):
-        match_window = tk.Toplevel(self.root)
-        match_window.title("Match Columns")
-        match_window.geometry("1200x800")  # Set window size
+            showLoading(true);
+            hideError();
+            document.getElementById('results').style.display = 'none';
 
-        # Create main frame
-        main_frame = tk.Frame(match_window)
-        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+            // Call the backend analysis endpoint
+            fetch('/dip/api/analysis/do_analyze_emails', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    email_text: emailText
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                showLoading(false);
+                
+                if (data.error) {
+                    showError(data.error);
+                } else if (data.success) {
+                    displayResults(data.results);
+                } else {
+                    showError('Unknown error occurred');
+                }
+            })
+            .catch(error => {
+                showLoading(false);
+                showError('Network error: ' + error.message);
+            });
+        }
 
-        # Create paned window for left and right sections
-        paned_window = ttk.PanedWindow(main_frame, orient="horizontal")
-        paned_window.pack(fill="both", expand=True)
+        function displayResults(results) {
+            // Set final roles
+            document.getElementById('finalMaker').textContent = results.final_maker;
+            document.getElementById('finalChecker').textContent = results.final_checker;
 
-        # Left frame (column matching)
-        left_frame = tk.Frame(paned_window, width=300)
-        paned_window.add(left_frame, weight=1)
+            // Set stats
+            document.getElementById('totalEmails').textContent = results.stats.total_emails;
+            document.getElementById('totalParticipants').textContent = results.stats.total_participants;
+            document.getElementById('potentialMakers').textContent = results.stats.potential_makers_count;
+            document.getElementById('potentialCheckers').textContent = results.stats.potential_checkers_count;
 
-        # Right frame (data samples)
-        right_frame = tk.Frame(paned_window)
-        paned_window.add(right_frame, weight=3)
+            // Display potential makers
+            const makerCandidatesDiv = document.getElementById('makerCandidates');
+            makerCandidatesDiv.innerHTML = results.potential_makers.map(maker => `
+                <div class="d-flex justify-content-between align-items-center mb-1 p-2 border rounded">
+                    <span>${maker.participant}</span>
+                    <div>
+                        <span class="badge bg-primary score-badge">Avg: ${maker.average_score.toFixed(1)}</span>
+                        <span class="badge bg-secondary score-badge">Peak: ${maker.highest_score.toFixed(1)}</span>
+                        <span class="badge bg-light text-dark score-badge">${maker.email_count} emails</span>
+                    </div>
+                </div>
+            `).join('');
 
-        # Column Matching Section
-        left_canvas = tk.Canvas(left_frame)
-        left_scrollbar = ttk.Scrollbar(left_frame, orient="vertical", command=left_canvas.yview)
-        left_scrollbar.pack(side="right", fill="y")
-        left_canvas.pack(side="left", fill="both", expand=True)
-        left_canvas.configure(yscrollcommand=left_scrollbar.set)
-        left_content_frame = tk.Frame(left_canvas)
-        left_canvas.create_window((0, 0), window=left_content_frame, anchor="nw")
-        left_content_frame.bind("<Configure>", lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all")))
+            // Display potential checkers
+            const checkerCandidatesDiv = document.getElementById('checkerCandidates');
+            checkerCandidatesDiv.innerHTML = results.potential_checkers.map(checker => `
+                <div class="d-flex justify-content-between align-items-center mb-1 p-2 border rounded">
+                    <span>${checker.participant}</span>
+                    <div>
+                        <span class="badge bg-success score-badge">Avg: ${checker.average_score.toFixed(1)}</span>
+                        <span class="badge bg-secondary score-badge">Peak: ${checker.highest_score.toFixed(1)}</span>
+                        <span class="badge bg-light text-dark score-badge">${checker.email_count} emails</span>
+                    </div>
+                </div>
+            `).join('');
 
-        # Show column matching confirmation
-        tk.Label(left_content_frame, text="Confirm Column Matching", font=("Arial", 14)).pack(pady=10, padx=10)
+            // Display email analysis
+            const emailTable = document.getElementById('emailAnalysisTable');
+            emailTable.innerHTML = results.email_analysis.map(email => `
+                <tr>
+                    <td>${email.sequence}</td>
+                    <td>${email.sender}</td>
+                    <td>${email.date}</td>
+                    <td>
+                        <span class="badge ${email.maker_score > 50 ? 'bg-primary' : 'bg-light text-dark'}">
+                            ${email.maker_score.toFixed(1)}
+                        </span>
+                    </td>
+                    <td>
+                        <span class="badge ${email.checker_score > 50 ? 'bg-success' : 'bg-light text-dark'}">
+                            ${email.checker_score.toFixed(1)}
+                        </span>
+                    </td>
+                </tr>
+            `).join('');
 
-        self.matched_columns = matches
-        self.dropdown_vars = {col: tk.StringVar(value=match) for col, match in matches.items()}
-
-        for old_col in old_columns:
-            tk.Label(left_content_frame, text=f"Old Column: {old_col}").pack(anchor="w", padx=10)
-            dropdown = ttk.Combobox(left_content_frame, textvariable=self.dropdown_vars[old_col], values=new_columns)
-            dropdown.pack(fill="x", pady=5, padx=10)
-
-        tk.Button(left_content_frame, text="Confirm", command=self.confirm_matches).pack(pady=20, padx=10)
-
-        # Data Samples Section
-        def create_scrollable_frame(parent_frame, columns, data):
-            frame = tk.Frame(parent_frame)
-            frame.pack(fill="both", expand=True)
-
-            canvas = tk.Canvas(frame)
-            v_scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
-            h_scrollbar = ttk.Scrollbar(frame, orient="horizontal", command=canvas.xview)
-
-            canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-            v_scrollbar.pack(side="right", fill="y")
-            h_scrollbar.pack(side="bottom", fill="x")
-            canvas.pack(side="left", fill="both", expand=True)
-
-            content_frame = tk.Frame(canvas)
-            canvas.create_window((0, 0), window=content_frame, anchor="nw")
-
-            content_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-
-            tree = ttk.Treeview(content_frame, columns=columns, show="headings")
-            tree.pack(fill="both", expand=True)
-
-            for col in columns:
-                tree.heading(col, text=col)
-                tree.column(col, width=100, anchor="w")
-
-            for index, row in data.iterrows():
-                tree.insert("", "end", values=row.tolist())
-
-            return tree
-
-        # Create scrollable frames for old and new sample data
-        old_tree = create_scrollable_frame(right_frame, old_sample.columns.tolist(), old_sample)
-        new_tree = create_scrollable_frame(right_frame, new_sample.columns.tolist(), new_sample)
-
-        # Add spacing and labels
-        tk.Label(right_frame, text="Base File Sample Data", font=("Arial", 12)).pack(pady=10)
-        old_tree.pack(fill="both", expand=True)
-
-        tk.Label(right_frame, text="New File Sample Data", font=("Arial", 12)).pack(pady=10)
-        new_tree.pack(fill="both", expand=True)
-
-    def confirm_matches(self):
-        for old_col, var in self.dropdown_vars.items():
-            self.matched_columns[old_col] = var.get()
-        self.save_matches()
-
-    def save_matches(self):
-        try:
-            output_file = os.path.join(self.output_folder_path.get(), "matched_columns.txt")
-            with open(output_file, 'w') as file:
-                for old_col, new_col in self.matched_columns.items():
-                    file.write(f"{old_col} -> {new_col}\n")
-            messagebox.showinfo("Success", f"Matches saved to {output_file}")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to save file: {e}")
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = ColumnMatcherApp(root)
-    root.mainloop()
+            // Show results
+            document.getElementById('results').style.display = 'block';
+        }
+    </script>
+</body>
+</html>
