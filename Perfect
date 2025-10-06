@@ -1155,3 +1155,97 @@ def get_second_best_candidate_by_highest(candidates_dict, exclude_person, min_th
             best_score = highest_score
     
     return best_candidate
+
+
+# -----------------------------
+# WebApp Endpoints (ADD THESE AT THE END)
+# -----------------------------
+import base64
+
+def do(payload, config, plugin_config, inputs):
+    """Main webapp endpoint"""
+    return {"status": "ready"}
+
+def do_analyze_emails(payload, config, plugin_config, inputs):
+    """Endpoint to perform full analysis from uploaded file"""
+    try:
+        # Get the uploaded file data
+        file_data = payload.get('file_data', '')
+        file_name = payload.get('file_name', 'uploaded_file.txt')
+        
+        if not file_data:
+            return {"error": "No file uploaded"}
+        
+        # Decode base64 file data
+        if ',' in file_data:
+            file_data = file_data.split(',')[1]
+        
+        file_content = base64.b64decode(file_data).decode('utf-8')
+        
+        # Clean and parse emails
+        email_text = clean_email_addresses(file_content)
+        parsed_emails = parse_email_chain(email_text)
+        
+        if not parsed_emails:
+            return {"error": "No emails could be parsed from the uploaded file"}
+        
+        # Perform sequential analysis
+        sequential_analysis = analyze_email_sequentially(parsed_emails)
+        
+        # Format results for web display
+        results = format_results_for_web(sequential_analysis, parsed_emails)
+        
+        return {
+            "success": True,
+            "results": results,
+            "file_name": file_name
+        }
+        
+    except Exception as e:
+        return {"error": f"Analysis failed: {str(e)}"}
+
+def format_results_for_web(analysis, parsed_emails):
+    """Format analysis results for web display"""
+    return {
+        "final_maker": analysis["final_maker"] or "Not identified",
+        "final_checker": analysis["final_checker"] or "Not identified",
+        "resolution_method": analysis.get("resolution_method", "standard"),
+        "stats": {
+            "total_emails": len(parsed_emails),
+            "total_participants": len(extract_all_participants(parsed_emails)),
+            "potential_makers_count": len(analysis["potential_makers"]),
+            "potential_checkers_count": len(analysis["potential_checkers"])
+        },
+        "potential_makers": [
+            {
+                "participant": participant,
+                "average_score": round(data["average_score"], 1),
+                "highest_score": round(data["highest_score"], 1),
+                "email_count": data["email_count"]
+            }
+            for participant, data in analysis["potential_makers"].items()
+        ],
+        "potential_checkers": [
+            {
+                "participant": participant,
+                "average_score": round(data["average_score"], 1),
+                "highest_score": round(data["highest_score"], 1),
+                "email_count": data["email_count"]
+            }
+            for participant, data in analysis["potential_checkers"].items()
+        ],
+        "email_analysis": [
+            {
+                "sequence": email_analysis["email_sequence"],
+                "sender": email_analysis["sender"],
+                "date": email_analysis["date"],
+                "time": email_analysis["time"],
+                "maker_score": round(email_analysis["maker_score"], 1),
+                "checker_score": round(email_analysis["checker_score"], 1),
+                "can_be_maker": email_analysis["can_be_maker"],
+                "can_be_checker": email_analysis["can_be_checker"],
+                "receivers": ", ".join(email_analysis["receivers"])
+            }
+            for email_analysis in analysis["conversation_history"]
+        ]
+    }
