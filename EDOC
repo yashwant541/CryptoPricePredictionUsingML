@@ -53,8 +53,8 @@ def log(message):
 
 def clean_email_addresses(text):
     """Remove email addresses with leading whitespace from text"""
-    # Pattern to match: whitespace + <email>
-    pattern = r'\s*<[^>]+@[^>]+>'
+    # More comprehensive pattern to match any email address within <>
+    pattern = r'\s*<[^>]*@[^>]*>'
     cleaned_text = re.sub(pattern, '', text)
     return cleaned_text
 
@@ -91,12 +91,15 @@ def extract_body(email):
 def clean_participant_name(raw_name):
     if not raw_name:
         return ""
+    
     # First remove email addresses with the pattern you specified
-    cleaned = re.sub(r'\s*<[^>]+>', '', raw_name)
-    # Then remove any remaining special characters
-    cleaned = re.sub(r'[;"\']', '', cleaned)
-    cleaned = ' '.join(cleaned.split()).strip()
-    cleaned = cleaned.rstrip(',')
+    # More comprehensive email removal
+    cleaned = re.sub(r'\s*<[^>]*@[^>]*>', '', raw_name)  # Remove <email> patterns
+    cleaned = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '', cleaned)  # Remove standalone emails
+    cleaned = re.sub(r'[;"\']', '', cleaned)  # Remove special characters
+    cleaned = ' '.join(cleaned.split()).strip()  # Normalize whitespace
+    cleaned = cleaned.rstrip(',')  # Remove trailing commas
+    
     return cleaned
 
 def find_matching_statement(email_body, keywords, threshold=80):
