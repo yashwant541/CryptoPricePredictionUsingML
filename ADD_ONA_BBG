@@ -1,64 +1,92 @@
-import dataiku
-import extract_msg
-import pandas as pd
-import os
+# webapp_controller.py
+
+import base64
+import tempfile
+import csv
+from custom_script import *  # import all your parsing/analysis functions from your script
 
 # -----------------------------
-# CONFIGURATION
+# Dataiku Webapp Endpoints
 # -----------------------------
-INPUT_FOLDER_ID = "YOUR_INPUT_FOLDER_ID"   # Replace with your input folder ID
-OUTPUT_FOLDER_ID = "YOUR_OUTPUT_FOLDER_ID" # Replace with your output folder ID
 
-# Get Dataiku folders
-input_folder = dataiku.Folder(INPUT_FOLDER_ID)
-output_folder = dataiku.Folder(OUTPUT_FOLDER_ID)
+def do(payload, config, plugin_config, inputs):
+    """Initial endpoint when page loads"""
+    return {"status": "ready"}
 
-# Temporary local folders
-input_path = input_folder.get_path()
-output_path = output_folder.get_path()
+def do_parse_file(payload, config, plugin_config, inputs):
+    """Preview uploaded file content"""
+    try:
+        file_data = payload.get("file_data", "")
+        file_name = payload.get("file_name", "uploaded_file.txt")
 
-# Function to extract all details from a .msg file
-def extract_msg_details(msg_file_path):
-    msg = extract_msg.Message(msg_file_path)
-    msg_sender = msg.sender
-    msg_to = msg.to
-    msg_cc = msg.cc
-    msg_bcc = msg.bcc
-    msg_subject = msg.subject
-    msg_date = msg.date
-    msg_body = msg.body
-    # Attachments
-    attachments = ", ".join([att.longFilename for att in msg.attachments])
-    
-    data = {
-        "Sender": msg_sender,
-        "To": msg_to,
-        "CC": msg_cc,
-        "BCC": msg_bcc,
-        "Subject": msg_subject,
-        "Date": msg_date,
-        "Body": msg_body,
-        "Attachments": attachments
-    }
-    return data
+        if not file_data:
+            return {"error": "No file uploaded"}
 
-# -----------------------------
-# PROCESS ALL MSG FILES
-# -----------------------------
-for filename in os.listdir(input_path):
-    if filename.lower().endswith(".msg"):
-        msg_file_path = os.path.join(input_path, filename)
-        try:
-            msg_data = extract_msg_details(msg_file_path)
-            df = pd.DataFrame([msg_data])
-            
-            # Output CSV filename (replace .msg with .csv)
-            csv_filename = filename.rsplit(".", 1)[0] + ".csv"
-            output_file_path = os.path.join(output_path, csv_filename)
-            
-            df.to_csv(output_file_path, index=False, encoding="utf-8-sig")
-            print(f"Processed: {filename}")
-        except Exception as e:
-            print(f"Failed to process {filename}: {e}")
+        if "," in file_data:
+            file_data = file_data.split(",")[1]
 
-print("All .msg files processed successfully.")
+        file_content = base64.b64decode(file_data).decode("utf-8")
+        email_text = clean_email_addresses(file_content)
+        parsed_emails = parse_email_chain(email_text)
+
+        if not parsed_emails:
+            return {"error": "No emails parsed"}
+
+        participants = extract_all_participants(parsed_emails)
+
+        return {
+            "success": True,
+            "file_name": file_name,
+            "parsed_emails_count": len(parsed_emails),
+            "participants": list(participants),
+            "email_preview": [
+                {
+                    "sequence": e["Email Sequence"],
+                    "sender": e["Sender"],
+                    "receivers": e["Receiver"],
+                    "subject": e["subject"],
+                    "date": e["date"],
+                    "body_preview": (e["email body"][:100] + "...") if len(e["email body"]) > 100 else e["email body"]
+                }
+                for e in parsed_emails[:3]
+            ]
+        }
+
+    except Exception as e:
+        return {"error": f"File parsing failed: {str(e)}"}
+
+def do_analyze_emails(payload, config, plugin_config, inputs):
+    """Perform full analysis on uploaded file"""
+    try:
+        file_data = payload.get("file_data", "")
+        file_name = payload.get("file_name", "uploaded_file.txt")
+
+        if not file_data:
+            return {"error": "No file uploaded"}
+
+        if "," in file_data:
+            file_data = file_data.split(",")[1]
+
+        file_content = base64.b64decode(file_data).decode("utf-8")
+        email_text = clean_email_addresses(file_content)
+        parsed_emails = parse_email_chain(email_text)
+
+        if not parsed_emails:
+            return {"error": "No emails parsed"}
+
+        sequential_analysis = analyze_email_sequentially(parsed_emails)
+        results = format_results_for_web(sequential_analysis, parsed_emails)
+
+        # Optional: save parsed emails as CSV for download
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+        fieldnames = parsed_emails[0].keys()
+        with open(temp_file.name, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(parsed_emails)
+        results["csv_download_path"] = temp_file.name
+
+        return {"success": True, "results": results, "file_name": file_name}
+
+    except Exception as e:
+        return {"error": f"Analysis failed: {str(e)}"}
