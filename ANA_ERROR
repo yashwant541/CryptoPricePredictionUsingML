@@ -1,51 +1,437 @@
-import os
-import pandas as pd
-import extract_msg
-from flask import request, jsonify
+# -----------------------------
+# Enhanced Sequential Analysis
+# -----------------------------
 
-# Upload directory inside DSS
-UPLOAD_DIR = "/tmp/email_uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-@app.route('/upload_msg', methods=['POST'])
-def upload_msg():
-    """Upload .msg file, extract CSV/XLSX, return preview data"""
-    if 'file' not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+def analyze_email_sequentially(parsed_emails):
+    """
+    Analyze emails sequentially from oldest to newest, tracking potential makers/checkers
+    """
+    # Sort emails by date to ensure chronological processing
+    sorted_emails = sorted(parsed_emails, key=lambda x: x["datetime"] if x["datetime"] else datetime.min)
     
-    file = request.files['file']
-    msg_path = os.path.join(UPLOAD_DIR, file.filename)
-    file.save(msg_path)
+    # Track potential makers and checkers throughout the conversation
+    potential_makers = {}
+    potential_checkers = {}
+    conversation_history = []
+    
+    for email in sorted_emails:
+        email_analysis = analyze_single_email(email, conversation_history)
+        conversation_history.append(email_analysis)
+        
+        # Update potential makers and checkers based on this email
+        update_potential_roles(email_analysis, potential_makers, potential_checkers)
+    
+    return {
+        "conversation_history": conversation_history,
+        "potential_makers": potential_makers,
+        "potential_checkers": potential_checkers,
+        "final_maker": determine_final_maker(potential_makers),
+        "final_checker": determine_final_checker(potential_checkers)
+    }
 
-    try:
-        msg = extract_msg.Message(msg_path)
+def analyze_single_email(email, previous_history):
+    """
+    Analyze a single email against all rules
+    """
+    sender = clean_participant_name(email.get("Sender", ""))
+    receivers = [clean_participant_name(r.strip()) for r in email.get("Receiver", "").split(';') if r.strip()]
+    
+    # Extract email content for analysis
+    email_body = email.get("email body", "").lower()
+    subject = email.get("subject", "").lower()
+    
+    analysis = {
+        "date": email.get("date", ""),
+        "time": email.get("time", ""),
+        "datetime": email.get("datetime"),
+        "sender": sender,
+        "receivers": receivers,
+        "email_sequence": email.get("Email Sequence", 0),
+        "can_be_maker": False,
+        "can_be_checker": False,
+        "maker_score": 0,
+        "checker_score": 0,
+        "rule_breakdown": {},
+        "keywords_found": [],
+        "semantic_patterns": [],
+        "role_restrictions": []
+    }
+    
+    # Rule 1: Basic Role Restrictions
+    role_analysis = analyze_role_restrictions(sender, receivers, email)
+    analysis["role_restrictions"] = role_analysis["restrictions"]
+    analysis["can_be_maker"] = role_analysis["can_be_maker"]
+    analysis["can_be_checker"] = role_analysis["can_be_checker"]
+    
+    if analysis["can_be_maker"]:
+        analysis["maker_score"] += calculate_maker_score(email, previous_history)
+    
+    if analysis["can_be_checker"]:
+        analysis["checker_score"] += calculate_checker_score(email, previous_history)
+    
+    return analysis
 
-        dataframes = {}
-        extracted_files = []
+def analyze_role_restrictions(sender, receivers, email):
+    """
+    Determine if sender can be maker/checker based on role restrictions
+    """
+    restrictions = []
+    can_be_maker = True
+    can_be_checker = True
+    
+    # Check if sender is only in CC/BCC (not in To field)
+    cc_field = email.get("cc", "")
+    bcc_field = email.get("bcc", "")
+    cc_list = [clean_participant_name(c.strip()) for c in cc_field.split(';')] if cc_field else []
+    bcc_list = [clean_participant_name(b.strip()) for b in bcc_field.split(';')] if bcc_field else []
+    
+    # If sender is only in CC/BCC and not in receivers, restrict roles
+    if sender in cc_list and sender not in receivers:
+        restrictions.append("CC-only participant")
+        can_be_maker = False
+        can_be_checker = False
+    
+    if sender in bcc_list and sender not in receivers:
+        restrictions.append("BCC-only participant") 
+        can_be_maker = False
+        can_be_checker = False
+    
+    return {
+        "restrictions": restrictions,
+        "can_be_maker": can_be_maker,
+        "can_be_checker": can_be_checker
+    }
 
-        for attachment in msg.attachments:
-            filename = attachment.longFilename or attachment.shortFilename
-            filepath = os.path.join(UPLOAD_DIR, filename)
-            with open(filepath, "wb") as f:
-                f.write(attachment.data)
-            extracted_files.append(filename)
+def calculate_maker_score(email, previous_history):
+    """
+    Calculate maker score for this specific email
+    """
+    score = 0
+    email_body = email.get("email body", "").lower()
+    rule_breakdown = {}
+    
+    # Rule 1: Request Keywords
+    request_keywords_found = []
+    for keyword, weight in REQUESTER_KEYWORDS.items():
+        if keyword in email_body:
+            score += weight
+            request_keywords_found.append(keyword)
+    
+    rule_breakdown["request_keywords"] = {
+        "score": sum(REQUESTER_KEYWORDS.get(k, 0) for k in request_keywords_found),
+        "keywords": request_keywords_found
+    }
+    
+    # Rule 2: Semantic Patterns for Requests
+    semantic_patterns = extract_semantic_patterns(email_body)
+    request_patterns = []
+    
+    if "explicit_request" in semantic_patterns:
+        score += 80
+        request_patterns.append("explicit_request")
+    if "conditional_request" in semantic_patterns:
+        score += 60
+        request_patterns.append("conditional_request")
+    
+    rule_breakdown["semantic_patterns"] = {
+        "score": (80 if "explicit_request" in request_patterns else 0) + 
+                (60 if "conditional_request" in request_patterns else 0),
+        "patterns": request_patterns
+    }
+    
+    # Rule 3: Temporal Position (first email gets bonus)
+    if len(previous_history) == 0:  # This is the first email
+        score += 100
+        rule_breakdown["temporal_position"] = {"score": 100, "reason": "First email in chain"}
+    
+    # Rule 4: Conversation Flow - Initiator pattern
+    if is_conversation_initiator(email, previous_history):
+        score += 50
+        rule_breakdown["conversation_flow"] = {"score": 50, "reason": "Conversation initiator"}
+    
+    email["maker_rule_breakdown"] = rule_breakdown
+    email["maker_keywords_found"] = request_keywords_found
+    
+    return score
 
-            # Read CSV/XLSX
-            if filename.lower().endswith(".csv"):
-                df = pd.read_csv(filepath)
-                dataframes[filename] = df.head(50).to_dict(orient="records")
-            elif filename.lower().endswith(".xlsx"):
-                df = pd.read_excel(filepath)
-                dataframes[filename] = df.head(50).to_dict(orient="records")
+def calculate_checker_score(email, previous_history):
+    """
+    Calculate checker score for this specific email
+    """
+    score = 0
+    email_body = email.get("email body", "").lower()
+    rule_breakdown = {}
+    
+    # Rule 1: Approval Keywords
+    approval_keywords_found = []
+    for keyword, weight in APPROVER_KEYWORDS.items():
+        if keyword in email_body:
+            score += weight
+            approval_keywords_found.append(keyword)
+    
+    rule_breakdown["approval_keywords"] = {
+        "score": sum(APPROVER_KEYWORDS.get(k, 0) for k in approval_keywords_found),
+        "keywords": approval_keywords_found
+    }
+    
+    # Rule 2: Semantic Patterns for Approval
+    semantic_patterns = extract_semantic_patterns(email_body)
+    approval_patterns = []
+    
+    if "explicit_approval" in semantic_patterns:
+        score += 80
+        approval_patterns.append("explicit_approval")
+    if "conditional_approval" in semantic_patterns:
+        score += 60
+        approval_patterns.append("conditional_approval")
+    if "delegated_authority" in semantic_patterns:
+        score += 40
+        approval_patterns.append("delegated_authority")
+    
+    rule_breakdown["semantic_patterns"] = {
+        "score": (80 if "explicit_approval" in approval_patterns else 0) + 
+                (60 if "conditional_approval" in approval_patterns else 0) +
+                (40 if "delegated_authority" in approval_patterns else 0),
+        "patterns": approval_patterns
+    }
+    
+    # Rule 3: Temporal Position (last email gets bonus)
+    # Note: We can't know if it's the last email during sequential processing,
+    # but we can check if it's responding to a request
+    if is_responding_to_request(email, previous_history):
+        score += 70
+        rule_breakdown["response_to_request"] = {"score": 70, "reason": "Responding to previous request"}
+    
+    # Rule 4: Hierarchy Indicators
+    hierarchy_score = analyze_hierarchy_indicators(email_body)
+    score += hierarchy_score
+    rule_breakdown["hierarchy_analysis"] = {"score": hierarchy_score, "indicators_found": hierarchy_score > 0}
+    
+    email["checker_rule_breakdown"] = rule_breakdown
+    email["checker_keywords_found"] = approval_keywords_found
+    
+    return score
 
-        return jsonify({
-            "subject": msg.subject,
-            "from": msg.sender,
-            "to": msg.to,
-            "date": str(msg.date),
-            "attachments": extracted_files,
-            "data": dataframes
+def is_conversation_initiator(email, previous_history):
+    """Check if this email initiates the conversation"""
+    return len(previous_history) == 0
+
+def is_responding_to_request(email, previous_history):
+    """Check if this email is responding to a previous request"""
+    if not previous_history:
+        return False
+    
+    # Check if any previous email had high maker score
+    for prev_email in previous_history[-3:]:  # Check last 3 emails
+        if prev_email.get("maker_score", 0) > 50:
+            return True
+    
+    return False
+
+def analyze_hierarchy_indicators(email_body):
+    """Analyze hierarchy indicators in email body"""
+    score = 0
+    superior_indicators = [
+        "please review", "for your approval", "seeking your guidance", 
+        "your decision", "awaiting your input", "kindly approve",
+        "request your approval", "need your authorization"
+    ]
+    
+    for indicator in superior_indicators:
+        if indicator in email_body.lower():
+            score += 20
+    
+    return min(score, 100)  # Cap at 100
+
+def update_potential_roles(email_analysis, potential_makers, potential_checkers):
+    """Update potential roles based on current email analysis"""
+    sender = email_analysis["sender"]
+    
+    # Update potential makers
+    if email_analysis["can_be_maker"] and email_analysis["maker_score"] > 0:
+        if sender not in potential_makers:
+            potential_makers[sender] = {
+                "total_score": 0,
+                "email_count": 0,
+                "highest_score": 0,
+                "emails": []
+            }
+        
+        potential_makers[sender]["total_score"] += email_analysis["maker_score"]
+        potential_makers[sender]["email_count"] += 1
+        potential_makers[sender]["highest_score"] = max(
+            potential_makers[sender]["highest_score"], 
+            email_analysis["maker_score"]
+        )
+        potential_makers[sender]["emails"].append({
+            "sequence": email_analysis["email_sequence"],
+            "score": email_analysis["maker_score"],
+            "date": email_analysis["date"]
+        })
+    
+    # Update potential checkers
+    if email_analysis["can_be_checker"] and email_analysis["checker_score"] > 0:
+        if sender not in potential_checkers:
+            potential_checkers[sender] = {
+                "total_score": 0,
+                "email_count": 0,
+                "highest_score": 0,
+                "emails": []
+            }
+        
+        potential_checkers[sender]["total_score"] += email_analysis["checker_score"]
+        potential_checkers[sender]["email_count"] += 1
+        potential_checkers[sender]["highest_score"] = max(
+            potential_checkers[sender]["highest_score"], 
+            email_analysis["checker_score"]
+        )
+        potential_checkers[sender]["emails"].append({
+            "sequence": email_analysis["email_sequence"],
+            "score": email_analysis["checker_score"],
+            "date": email_analysis["date"]
         })
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+def determine_final_maker(potential_makers):
+    """Determine final maker from potential candidates"""
+    if not potential_makers:
+        return None
+    
+    # Use highest average score with minimum threshold
+    best_maker = None
+    best_score = 0
+    
+    for participant, data in potential_makers.items():
+        avg_score = data["total_score"] / data["email_count"]
+        if avg_score > best_score and avg_score > 30:  # Minimum threshold
+            best_maker = participant
+            best_score = avg_score
+    
+    return best_maker
+
+def determine_final_checker(potential_checkers):
+    """Determine final checker from potential candidates"""
+    if not potential_checkers:
+        return None
+    
+    # Use highest average score with minimum threshold
+    best_checker = None
+    best_score = 0
+    
+    for participant, data in potential_checkers.items():
+        avg_score = data["total_score"] / data["email_count"]
+        if avg_score > best_score and avg_score > 30:  # Minimum threshold
+            best_checker = participant
+            best_score = avg_score
+    
+    return best_checker
+
+# -----------------------------
+# Enhanced CSV Output for Sequential Analysis
+# -----------------------------
+
+def save_sequential_analysis_csv(conversation_history, output_folder, filename):
+    """Save detailed sequential analysis to CSV"""
+    output_path = os.path.join(tempfile.gettempdir(), filename)
+    
+    fieldnames = [
+        "Email_Sequence", "Date", "Time", "Sender", "Receivers",
+        "Can_Be_Maker", "Can_Be_Checker", "Maker_Score", "Checker_Score",
+        "Role_Restrictions", "Maker_Keywords_Found", "Checker_Keywords_Found",
+        "Maker_Semantic_Patterns", "Checker_Semantic_Patterns"
+    ]
+    
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        for analysis in conversation_history:
+            writer.writerow({
+                "Email_Sequence": analysis["email_sequence"],
+                "Date": analysis["date"],
+                "Time": analysis["time"],
+                "Sender": analysis["sender"],
+                "Receivers": "; ".join(analysis["receivers"]),
+                "Can_Be_Maker": analysis["can_be_maker"],
+                "Can_Be_Checker": analysis["can_be_checker"],
+                "Maker_Score": analysis["maker_score"],
+                "Checker_Score": analysis["checker_score"],
+                "Role_Restrictions": "; ".join(analysis["role_restrictions"]),
+                "Maker_Keywords_Found": "; ".join(analysis.get("maker_keywords_found", [])),
+                "Checker_Keywords_Found": "; ".join(analysis.get("checker_keywords_found", [])),
+                "Maker_Semantic_Patterns": "; ".join(analysis.get("maker_semantic_patterns", [])),
+                "Checker_Semantic_Patterns": "; ".join(analysis.get("checker_semantic_patterns", []))
+            })
+    
+    with open(output_path, "rb") as f:
+        output_folder.upload_stream(filename, f)
+    os.remove(output_path)
+    log(f"✅ Saved sequential analysis: {filename}")
+
+# -----------------------------
+# Updated Main Function
+# -----------------------------
+
+def main():
+    INPUT_FOLDER_CODE = "XXXXXXX"
+    OUTPUT_FOLDER_CODE = "XXXXXXX"
+    
+    input_folder = dataiku.Folder(INPUT_FOLDER_CODE)
+    output_folder = dataiku.Folder(OUTPUT_FOLDER_CODE)
+    
+    txt_files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith(".txt")]
+    
+    if not txt_files:
+        log("❌ No .txt email files found in input folder.")
+        return
+    
+    for txt_file in txt_files:
+        log(f"📄 Processing {txt_file}...")
+        
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp_file:
+            tmp_path = tmp_file.name
+            with input_folder.get_download_stream(txt_file) as stream:
+                shutil.copyfileobj(stream, tmp_file)
+        
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            email_text = f.read()
+        
+        email_text = clean_email_addresses(email_text)
+        parsed_emails = parse_email_chain(email_text)
+        
+        if not parsed_emails:
+            log(f"⚠️ No emails parsed in {txt_file}. Skipping.")
+            os.remove(tmp_path)
+            continue
+        
+        # Perform sequential analysis
+        sequential_analysis = analyze_email_sequentially(parsed_emails)
+        
+        base_name = os.path.splitext(os.path.basename(txt_file))[0]
+        
+        # Save enhanced outputs
+        save_enhanced_csv(parsed_emails, output_folder, f"parsed_emails_{base_name}.csv")
+        save_sequential_analysis_csv(
+            sequential_analysis["conversation_history"], 
+            output_folder, 
+            f"sequential_analysis_{base_name}.csv"
+        )
+        
+        # Save summary with final results
+        save_enhanced_summary(
+            parsed_emails,
+            sequential_analysis["potential_makers"],
+            sequential_analysis["potential_checkers"],
+            output_folder,
+            f"enhanced_summary_{base_name}.txt",
+            sequential_analysis["final_maker"],
+            sequential_analysis["final_checker"],
+            sequential_analysis["conversation_history"]
+        )
+        
+        os.remove(tmp_path)
+        log(f"✅ Finished processing {txt_file}")
+        log(f" Final Maker: {sequential_analysis['final_maker']}")
+        log(f" Final Checker: {sequential_analysis['final_checker']}")
+
+if __name__ == "__main__":
+    main()
