@@ -3,6 +3,7 @@ import re
 import csv
 import math
 from datetime import datetime
+import dataiku
 
 # -----------------------------
 # Weighted keyword lists
@@ -25,7 +26,6 @@ REQUESTER_KEYWORDS = {
 # Helper functions
 # -----------------------------
 def split_emails(raw_text):
-    """Split email chain into individual emails."""
     parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
     if parts and not parts[0].strip().lower().startswith("from:"):
         first = parts.pop(0)
@@ -59,7 +59,6 @@ def clean_participant_name(raw_name):
     return cleaned
 
 def find_matching_statement(email_body, keywords):
-    """Return the sentence containing any keyword."""
     sentences = re.split(r'(?<=[.!?])\s+', email_body.strip())
     matches = []
     for sentence in sentences:
@@ -200,7 +199,6 @@ def identify_requester_approver(parsed_emails):
     approver = potential_approvers[0][0] if potential_approvers else ""
     requester = first_sender if any(s == first_sender for s, _ in potential_requesters) else (potential_requesters[0][0] if potential_requesters else "")
 
-    # Fallback last sender
     if not approver and potential_requesters:
         for email in reversed(parsed_emails):
             sender = clean_participant_name(email["Sender"])
@@ -213,24 +211,18 @@ def identify_requester_approver(parsed_emails):
     return requester, approver, scores, first_sender
 
 # -----------------------------
-# Dataiku folder I/O functions
+# Dataiku folder I/O
 # -----------------------------
 def save_to_csv(parsed_emails, output_folder_path, output_file="parsed_emails.csv"):
-    os.makedirs(output_folder_path, exist_ok=True)
     output_path = os.path.join(output_folder_path, output_file)
-    if not parsed_emails:
-        print("❌ No emails found.")
-        return
     fieldnames = parsed_emails[0].keys()
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        for row in parsed_emails:
-            writer.writerow(row)
+        writer.writerows(parsed_emails)
     print(f"✅ CSV saved: {output_path}")
 
 def save_summary(parsed_emails, scores, output_folder_path, summary_file="summary_output.txt"):
-    os.makedirs(output_folder_path, exist_ok=True)
     output_path = os.path.join(output_folder_path, summary_file)
     requester, approver, _, first_sender = identify_requester_approver(parsed_emails)
     with open(output_path, "w", encoding="utf-8") as f:
@@ -246,32 +238,22 @@ def save_summary(parsed_emails, scores, output_folder_path, summary_file="summar
             f.write("Score Components:\n")
             for detail in score_data["details"]:
                 f.write(f"  - {detail}\n")
-        f.write("\n=== EMAIL CHAIN DETAILS ===\n")
-        for email in parsed_emails:
-            f.write(f"\n--- Email #{email['Email Sequence']} ---\n")
-            f.write(f"From: {email['Sender']}\n")
-            f.write(f"To: {email['Receiver']}\n")
-            f.write(f"Subject: {email['subject']}\n")
-            f.write(f"Date: {email['date']} {email['time']}\n")
-            f.write(f"Approval Statement: {email['approval statement']}\n")
-            f.write(f"Request Statement: {email['request statement']}\n")
     print(f"✅ Summary saved: {output_path}")
 
 def create_user_role_mapping(parsed_emails, requester, approver):
     participants = extract_all_participants(parsed_emails)
-    mapping = []
-    for participant in participants:
-        if participant == requester:
+    role_mapping = []
+    for p in participants:
+        if p == requester:
             role = "Requester"
-        elif participant == approver:
+        elif p == approver:
             role = "Approver"
         else:
             role = "Participant"
-        mapping.append({"Name": participant, "Role": role})
-    return mapping
+        role_mapping.append({"Name": p, "Role": role})
+    return role_mapping
 
 def save_user_roles_to_csv(role_mapping, output_folder_path, filename="Email_Users.csv"):
-    os.makedirs(output_folder_path, exist_ok=True)
     output_path = os.path.join(output_folder_path, filename)
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["Name", "Role"])
@@ -280,10 +262,13 @@ def save_user_roles_to_csv(role_mapping, output_folder_path, filename="Email_Use
     print(f"✅ User roles saved: {output_path}")
 
 # -----------------------------
-# Main function
+# Main Dataiku workflow
 # -----------------------------
-def main(input_folder_path, output_folder_path, input_file="email_text.txt"):
-    input_path = os.path.join(input_folder_path, input_file)
+def main(input_folder_code, output_folder_code, input_file="email_text.txt"):
+    input_folder = dataiku.Folder(input_folder_code)
+    output_folder = dataiku.Folder(output_folder_code)
+
+    input_path = os.path.join(input_folder.get_path(), input_file)
     if not os.path.exists(input_path):
         print(f"❌ File not found: {input_path}")
         return
@@ -293,27 +278,26 @@ def main(input_folder_path, output_folder_path, input_file="email_text.txt"):
 
     parsed_emails = parse_email_chain(email_text)
     if not parsed_emails:
-        print("❌ No emails could be parsed.")
+        print("❌ No emails parsed.")
         return
 
-    save_to_csv(parsed_emails, output_folder_path)
-    requester, approver, scores, first_sender = identify_requester_approver(parsed_emails)
-    save_summary(parsed_emails, scores, output_folder_path)
+    output_path = output_folder.get_path()
 
+    save_to_csv(parsed_emails, output_path)
+    requester, approver, scores, first_sender = identify_requester_approver(parsed_emails)
+    save_summary(parsed_emails, scores, output_path)
     role_mapping = create_user_role_mapping(parsed_emails, requester, approver)
-    save_user_roles_to_csv(role_mapping, output_folder_path)
+    save_user_roles_to_csv(role_mapping, output_path)
 
     print("\n🔍 Identified Roles:")
-    print(f"First Sender (can't be approver): {first_sender}")
+    print(f"First Sender: {first_sender}")
     print(f"Requester: {requester}")
     print(f"Approver: {approver}")
-    print(f"\nUser roles saved to Email_Users.csv in {output_folder_path}")
 
 # -----------------------------
-# Example usage
+# Example execution in DSS
 # -----------------------------
 if __name__ == "__main__":
-    # Set Dataiku folder paths
-    input_folder = "dataiku_input_folder"
-    output_folder = "dataiku_output_folder"
-    main(input_folder, output_folder, input_file="email_text.txt")
+    INPUT_FOLDER_CODE = "MY_INPUT_FOLDER"
+    OUTPUT_FOLDER_CODE = "MY_OUTPUT_FOLDER"
+    main(INPUT_FOLDER_CODE, OUTPUT_FOLDER_CODE)
