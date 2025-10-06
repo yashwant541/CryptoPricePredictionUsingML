@@ -7,136 +7,146 @@ import os
 import sys
 from datetime import datetime
 
-# Fixed folder handles using Dataiku folder IDs
-input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")    # Replace with your input folder ID
-output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")   # Replace with your output folder ID
+# -----------------------------
+# CONFIGURATION
+# -----------------------------
+INPUT_FOLDER_ID = "YOUR_INPUT_FOLDER_ID"
+OUTPUT_FOLDER_ID = "YOUR_OUTPUT_FOLDER_ID"
 
+input_folder = dataiku.Folder(INPUT_FOLDER_ID)
+output_folder = dataiku.Folder(OUTPUT_FOLDER_ID)
+
+# -----------------------------
+# LOGGING
+# -----------------------------
 def log(message):
-    """Logging with flush"""
     print(f"[LOG] {message}", file=sys.stderr, flush=True)
 
+# -----------------------------
+# EXTRACT EMAIL DETAILS
+# -----------------------------
 def extract_msg_details(msg_file_path):
     """
-    Extract all details from a .msg file
+    Extract main email details from a .msg file and any nested .msg attachments recursively.
+    Returns a list of dictionaries, one per email.
     """
+    emails = []
+    
     try:
         msg = extract_msg.Message(msg_file_path)
+        msg_sender = msg.sender or ""
+        msg_to = msg.to or ""
+        msg_cc = msg.cc or ""
+        msg_bcc = msg.bcc or ""
+        msg_subject = msg.subject or ""
+        msg_date = msg.date or ""
+        msg_body = msg.body or ""
+        attachments = []
         
-        # Extract message details
-        data = {
-            "Sender": msg.sender or "",
-            "To": msg.to or "",
-            "CC": msg.cc or "",
-            "BCC": msg.bcc or "",
-            "Subject": msg.subject or "",
-            "Date": msg.date or "",
-            "Body": msg.body or "",
-            "Attachments": ", ".join([att.longFilename for att in msg.attachments]) if msg.attachments else "",
+        # Check for nested .msg attachments
+        for att in msg.attachments:
+            if att.longFilename.lower().endswith(".msg"):
+                # Save to temp file and process recursively
+                with tempfile.NamedTemporaryFile(suffix=".msg", delete=False) as tmp_att_file:
+                    att.save(tmp_att_file.name)
+                    emails.extend(extract_msg_details(tmp_att_file.name))
+                    os.remove(tmp_att_file.name)
+            else:
+                attachments.append(att.longFilename)
+        
+        email_data = {
+            "Sender": msg_sender,
+            "To": msg_to,
+            "CC": msg_cc,
+            "BCC": msg_bcc,
+            "Subject": msg_subject,
+            "Date": msg_date,
+            "Body": msg_body,
+            "Attachments": ", ".join(attachments),
             "Filename": os.path.basename(msg_file_path),
             "Processing_Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         
-        # Close the message file to prevent resource leaks
+        emails.insert(0, email_data)  # first email
         msg.close()
-        return data
-        
+        return emails
+    
     except Exception as e:
-        log(f"Error processing message file: {str(e)}")
-        # Return minimal data with error information
-        return {
+        log(f"❌ Error processing {os.path.basename(msg_file_path)}: {str(e)}")
+        return [{
             "Sender": "",
-            "To": "", 
+            "To": "",
             "CC": "",
             "BCC": "",
-            "Subject": f"ERROR_PROCESSING_FILE",
+            "Subject": "ERROR_PROCESSING_FILE",
             "Date": "",
             "Body": f"Error: {str(e)}",
             "Attachments": "",
             "Filename": os.path.basename(msg_file_path),
             "Processing_Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "Error": str(e)
-        }
+        }]
 
+# -----------------------------
+# MAIN PROCESS
+# -----------------------------
 def main():
     try:
-        log("🔍 Searching for .msg files in the input folder...")
-        
-        # List all files in the input folder
+        log("🔍 Searching for .msg files in input folder...")
         all_files = input_folder.list_paths_in_partition()
         msg_files = [f for f in all_files if f.lower().endswith(".msg")]
-        
+
         if not msg_files:
-            raise Exception("❌ No .msg files found in the input folder.")
+            log("❌ No .msg files found.")
+            return
 
         log(f"📧 Found {len(msg_files)} .msg file(s) to process")
-
-        processed_count = 0
-        error_count = 0
-        all_results = []
-
+        
         for msg_path in msg_files:
+            file_name = os.path.basename(msg_path)
+            log(f"📨 Processing: {file_name}")
+            
             try:
-                file_name = os.path.basename(msg_path)
-                log(f"📨 Processing: {file_name}")
-
-                # Download .msg file to temp file
+                # Download .msg to temp
                 with tempfile.NamedTemporaryFile(suffix=".msg", delete=False) as tmp_msg:
                     tmp_msg_path = tmp_msg.name
                     with input_folder.get_download_stream(msg_path) as stream:
                         shutil.copyfileobj(stream, tmp_msg)
-
-                # Extract message details
-                msg_data = extract_msg_details(tmp_msg_path)
-                all_results.append(msg_data)
                 
-                # Clean up temp file
+                # Extract all emails (including nested)
+                all_emails = extract_msg_details(tmp_msg_path)
+                
+                # Convert to DataFrame
+                df = pd.DataFrame(all_emails)
+                
+                # Output CSV filename
+                output_csv_name = file_name.replace(".msg", ".csv")
+                
+                # Save CSV to temp and upload
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8-sig', newline='') as tmp_csv:
+                    df.to_csv(tmp_csv, index=False)
+                    tmp_csv_path = tmp_csv.name
+                
+                with open(tmp_csv_path, 'rb') as f:
+                    output_folder.upload_stream(output_csv_name, f)
+                
+                # Clean up temp files
                 os.remove(tmp_msg_path)
+                os.remove(tmp_csv_path)
                 
-                processed_count += 1
-                log(f"✅ Successfully processed: {file_name}")
-
+                log(f"✅ Completed: {file_name} -> {output_csv_name} ({len(all_emails)} email(s))")
+            
             except Exception as e:
-                error_count += 1
-                log(f"❌ Failed to process {msg_path}: {str(e)}")
-                # Add error record
-                all_results.append({
-                    "Sender": "",
-                    "To": "", 
-                    "CC": "",
-                    "BCC": "",
-                    "Subject": f"ERROR_PROCESSING_FILE",
-                    "Date": "",
-                    "Body": f"Error processing {msg_path}: {str(e)}",
-                    "Attachments": "",
-                    "Filename": os.path.basename(msg_path),
-                    "Processing_Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "Error": str(e)
-                })
-
-        # Convert all results to DataFrame
-        df = pd.DataFrame(all_results)
-
-        # Save to output folder as CSV
-        log("💾 Writing extracted email data to output folder...")
-        output_filename = "extracted_emails.csv"
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8-sig', newline='') as tmp_csv:
-            df.to_csv(tmp_csv, index=False)
-            tmp_csv_path = tmp_csv.name
-
-        # Upload to Dataiku folder
-        with open(tmp_csv_path, 'rb') as f:
-            output_folder.upload_stream(output_filename, f)
-
-        # Clean up temp file
-        os.remove(tmp_csv_path)
-        
-        log(f"✅ Processing complete: {processed_count} successful, {error_count} errors")
-        log(f"📊 Results written to: {output_filename}")
+                log(f"❌ Failed to process {file_name}: {str(e)}")
+                
+        log("📊 All files processed.")
 
     except Exception as e:
-        log(f"🔥 ERROR: {str(e)}")
+        log(f"🔥 Fatal error: {str(e)}")
         raise
 
+# -----------------------------
+# EXECUTE
+# -----------------------------
 if __name__ == "__main__":
     main()
