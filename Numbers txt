@@ -1,86 +1,268 @@
-import re
-import dataiku
-import PyPDF2
-import tempfile
-import shutil
 import os
+import re
 import sys
+import csv
+import math
+import shutil
+import tempfile
+from datetime import datetime
+import dataiku
+from fuzzywuzzy import fuzz
 
-# Fixed folder handles using Dataiku folder IDs
-input_folder = dataiku.Folder("Tw4EvbUb")    # Replace with your input folder ID
-output_folder = dataiku.Folder("pwBGEpop")   # Replace with your output folder ID
+# -----------------------------
+# Keywords and scoring
+# -----------------------------
+APPROVER_KEYWORDS = {
+    "approved": 100, "granted": 95, "confirmed": 90, "accepted": 90,
+    "authorized": 95, "approve": 80, "confirm": 80, "accept": 80,
+    "approval": 50, "clearance": 70, "endorsed": 75, "signed off": 85,
+    "cleared": 80, "validated": 85, "ratified": 90, "sanctioned": 90
+}
 
+REQUESTER_KEYWORDS = {
+    "request": 100, "require": 95, "seek approval": 90, "need approval": 90,
+    "asking": 80, "petition": 75, "approval": 30, "pending": 60,
+    "remind": 70, "follow up": 65, "submitted": 85, "application": 80,
+    "awaiting": 75, "petition": 70, "seeking": 85
+}
+
+# -----------------------------
+# Helper functions
+# -----------------------------
 def log(message):
-    """Logging with flush"""
     print(f"[LOG] {message}", file=sys.stderr, flush=True)
 
-def main():
+def split_emails(raw_text):
+    parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
+    if parts and not parts[0].strip().lower().startswith("from:"):
+        first = parts.pop(0)
+        parts = [first] + parts
+    return parts
+
+def extract_field(email, field):
+    pattern = rf"{field}:(.*)"
+    match = re.search(pattern, email, re.IGNORECASE)
+    return match.group(1).strip() if match else ""
+
+def parse_date_time(date_str):
+    if not date_str:
+        return None
     try:
-        log("🔍 Searching for a PDF file in the input folder...")
-        pdf_files = input_folder.list_paths_in_partition()
-        pdf_files = [f for f in pdf_files if f.lower().endswith(".pdf")]
+        return datetime.strptime(date_str.strip(), "%A, %B %d, %Y %I:%M %p")
+    except Exception:
+        return None
 
-        if not pdf_files:
-            raise Exception("❌ No PDF files found in the input folder.")
+def extract_body(email):
+    split_point = re.search(r"\n\s*\n", email)
+    return email[split_point.end():].strip() if split_point else ""
 
-        # We only process the first PDF found
-        pdf_path = pdf_files[0]
-        file_name = os.path.basename(pdf_path)
-        log(f"📄 Found PDF: {file_name}")
+def clean_participant_name(raw_name):
+    if not raw_name:
+        return ""
+    cleaned = re.sub(r'<[^>]+>', '', raw_name)
+    cleaned = re.sub(r'[;"\']', '', cleaned)
+    cleaned = ' '.join(cleaned.split()).strip()
+    cleaned = cleaned.rstrip(',')
+    return cleaned
 
-        # Download PDF to temp file
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-            tmp_pdf_path = tmp_pdf.name
-            with input_folder.get_download_stream(pdf_path) as stream:
-                shutil.copyfileobj(stream, tmp_pdf)
+def find_matching_statement(email_body, keywords, threshold=80):
+    sentences = re.split(r'(?<=[.!?])\s+', email_body.strip())
+    exact_matches, fuzzy_matches = [], []
+    for sentence in sentences:
+        clean_sentence = sentence.lower()
+        for kw in keywords:
+            if kw in clean_sentence:
+                exact_matches.append(sentence.strip())
+            else:
+                ratio = fuzz.partial_ratio(kw, clean_sentence)
+                if ratio >= threshold:
+                    fuzzy_matches.append((sentence.strip(), kw, ratio))
+    if exact_matches:
+        return "; ".join(exact_matches), "exact"
+    elif fuzzy_matches:
+        best_match = max(fuzzy_matches, key=lambda x: x[2])
+        return best_match[0], "fuzzy"
+    return "", ""
 
-        # Define financial ratio keywords
-        KEYWORDS = [
-            "Return on average tangible shareholders' equity",
-            'Common Equity Tier 1 ratio (%)1',
-            'Total capital ratio (%)1,2',
-            'Liquidity coverage ratio (%)5',
-            'Leverage ratio excluding claims on central banks (%)1,4'
-        ]
+# -----------------------------
+# Email parsing and scoring
+# -----------------------------
+def parse_email_chain(text):
+    email_chunks = split_emails(text)
+    parsed = []
+    for i, email in enumerate(email_chunks):
+        sender = extract_field(email, "From")
+        receiver = extract_field(email, "To")
+        cc = extract_field(email, "Cc")
+        bcc = extract_field(email, "Bcc")
+        subject = extract_field(email, "Subject")
+        date_raw = extract_field(email, "Sent")
+        dt = parse_date_time(date_raw)
+        date_str = dt.date().isoformat() if dt else ""
+        time_str = dt.time().isoformat() if dt else ""
+        body = extract_body(email)
+        approval_statement, approval_type = find_matching_statement(body, APPROVER_KEYWORDS.keys())
+        request_statement, request_type = find_matching_statement(body, REQUESTER_KEYWORDS.keys())
+        parsed.append({
+            "Email Sequence": i + 1,
+            "Sender": sender,
+            "Receiver": receiver,
+            "cc": cc,
+            "bcc": bcc,
+            "subject": subject,
+            "email body": body,
+            "approval statement": approval_statement,
+            "approval match type": approval_type,
+            "request statement": request_statement,
+            "request match type": request_type,
+            "datetime": dt,
+            "date": date_str,
+            "time": time_str
+        })
+    parsed = sorted(parsed, key=lambda x: x["datetime"] if x["datetime"] else datetime.min)
+    for i, email in enumerate(parsed):
+        email["Email Sequence"] = i + 1
+    return parsed
 
-        # Extract text and match ratios
-        results = []
-        with open(tmp_pdf_path, "rb") as pdf_stream:
-            reader = PyPDF2.PdfReader(pdf_stream)
-            for page_num, page in enumerate(reader.pages, 1):
-                text = page.extract_text()
-                if text:
-                    log(f"📄 Processing page {page_num}...")
-                    for keyword in KEYWORDS:
-                        pattern = re.escape(keyword) + r'[\s:]*([0-9.,]+ ?%?)'
-                        matches = re.findall(pattern, text, re.IGNORECASE)
-                        for match in matches:
-                            results.append((keyword, match.strip()))
-                            log(f"✅ Found: {keyword} = {match.strip()}")
+def extract_all_participants(parsed_emails):
+    participants = set()
+    for email in parsed_emails:
+        sender = clean_participant_name(email["Sender"])
+        if sender: participants.add(sender)
+        receivers = [clean_participant_name(r) for r in email["Receiver"].split(',') if email["Receiver"]]
+        participants.update([r for r in receivers if r])
+        cc = [clean_participant_name(c) for c in email["cc"].split(',')] if email["cc"] else []
+        participants.update([c for c in cc if c])
+        bcc = [clean_participant_name(b) for b in email["bcc"].split(',')] if email["bcc"] else []
+        participants.update([b for b in bcc if b])
+    return sorted(participants)
 
-        os.remove(tmp_pdf_path)
+def calculate_role_scores(parsed_emails):
+    role_scores = {}
+    total_emails = len(parsed_emails)
+    valid_emails = [e for e in parsed_emails if e["datetime"]]
+    thread_start = min((e["datetime"] for e in valid_emails), default=None)
+    thread_end = max((e["datetime"] for e in valid_emails), default=None)
+    first_email = min(parsed_emails, key=lambda x: x["datetime"] if x["datetime"] else datetime.max)
+    first_sender = clean_participant_name(first_email["Sender"])
+    for i, email in enumerate(parsed_emails):
+        sender = clean_participant_name(email["Sender"])
+        if not sender: continue
+        if sender not in role_scores:
+            role_scores[sender] = {"approver": 0, "requester": 0, "details": []}
+        # Simple positional weighting (can extend later)
+        pos_weight_req = max(0, 1 - i / total_emails)
+        pos_weight_app = min(1, i / total_emails)
+        temporal_requester_score = 20 * pos_weight_req
+        temporal_approver_score = 20 * pos_weight_app
+        role_scores[sender]["requester"] += temporal_requester_score
+        role_scores[sender]["approver"] += temporal_approver_score
+        role_scores[sender]["details"].append(f"+{temporal_requester_score:.1f} (temporal requester weight)")
+        role_scores[sender]["details"].append(f"+{temporal_approver_score:.1f} (temporal approver weight)")
+    return role_scores, first_sender
 
-        if not results:
-            log("⚠️ No financial ratios found in the PDF.")
+def identify_requester_approver(parsed_emails):
+    if not parsed_emails: return "", "", {}, None
+    scores, first_sender = calculate_role_scores(parsed_emails)
+    potential_approvers = [(s, score["approver"]) for s, score in scores.items() if s != first_sender and score["approver"] > 0]
+    potential_approvers.sort(key=lambda x: x[1], reverse=True)
+    potential_requesters = [(s, score["requester"]) for s, score in scores.items() if score["requester"] > 0]
+    potential_requesters.sort(key=lambda x: x[1], reverse=True)
+    approver = potential_approvers[0][0] if potential_approvers else ""
+    requester = first_sender if any(s == first_sender for s, _ in potential_requesters) else (potential_requesters[0][0] if potential_requesters else "")
+    return requester, approver, scores, first_sender
 
-        # Save to output folder as CSV
-        log("💾 Writing extracted ratios to output folder...")
-        output_filename = "financial_ratios_extracted.csv"
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
-            tmp_csv.write("Financial Ratio,Value\n")
-            for ratio, value in results:
-                tmp_csv.write(f'"{ratio}","{value}"\n')
-            output_csv_path = tmp_csv.name
+# -----------------------------
+# Dataiku folder save/load
+# -----------------------------
+def save_csv(parsed_emails, output_folder, filename):
+    output_path = os.path.join(tempfile.gettempdir(), filename)
+    fieldnames = parsed_emails[0].keys()
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in parsed_emails:
+            writer.writerow(row)
+    with open(output_path, "rb") as f:
+        output_folder.upload_stream(filename, f)
+    os.remove(output_path)
+    log(f"✅ Saved {filename}")
 
-        with open(output_csv_path, 'rb') as f:
-            output_folder.upload_stream(output_filename, f)
+def save_summary(parsed_emails, scores, output_folder, filename):
+    requester, approver, _, first_sender = identify_requester_approver(parsed_emails)
+    output_path = os.path.join(tempfile.gettempdir(), filename)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(f"First Sender: {first_sender}\nRequester: {requester}\nApprover: {approver}\n\n")
+        f.write("=== DETAILED SCORES ===\n")
+        for sender, score_data in scores.items():
+            f.write(f"\nSender: {sender}\nTotal Approver: {score_data['approver']}\nTotal Requester: {score_data['requester']}\n")
+            for detail in score_data["details"]:
+                f.write(f"  - {detail}\n")
+    with open(output_path, "rb") as f:
+        output_folder.upload_stream(filename, f)
+    os.remove(output_path)
+    log(f"✅ Saved {filename}")
 
-        os.remove(output_csv_path)
-        log(f"✅ Extraction complete. {len(results)} ratio(s) written to {output_filename}")
+def save_user_roles(parsed_emails, requester, approver, output_folder, filename):
+    participants = extract_all_participants(parsed_emails)
+    role_mapping = []
+    for p in participants:
+        role = "Requester" if p == requester else "Approver" if p == approver else "Participant"
+        role_mapping.append({"Name": p, "Role": role})
+    output_path = os.path.join(tempfile.gettempdir(), filename)
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["Name", "Role"])
+        writer.writeheader()
+        writer.writerows(role_mapping)
+    with open(output_path, "rb") as f:
+        output_folder.upload_stream(filename, f)
+    os.remove(output_path)
+    log(f"✅ Saved {filename}")
 
-    except Exception as e:
-        log(f"🔥 ERROR: {str(e)}")
-        raise
+# -----------------------------
+# Main execution
+# -----------------------------
+def main():
+    INPUT_FOLDER_CODE = "YOUR_INPUT_FOLDER_ID"   # Replace with your Dataiku input folder code
+    OUTPUT_FOLDER_CODE = "YOUR_OUTPUT_FOLDER_ID" # Replace with your Dataiku output folder code
+
+    input_folder = dataiku.Folder(INPUT_FOLDER_CODE)
+    output_folder = dataiku.Folder(OUTPUT_FOLDER_CODE)
+
+    # List all .txt files
+    txt_files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith(".txt")]
+    if not txt_files:
+        log("❌ No .txt email files found in input folder.")
+        return
+
+    for txt_file in txt_files:
+        log(f"📄 Processing {txt_file}...")
+        # Download to temp file
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp_file:
+            tmp_path = tmp_file.name
+            with input_folder.get_download_stream(txt_file) as stream:
+                shutil.copyfileobj(stream, tmp_file)
+
+        # Read file content
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            email_text = f.read()
+
+        parsed_emails = parse_email_chain(email_text)
+        if not parsed_emails:
+            log(f"⚠️ No emails parsed in {txt_file}. Skipping.")
+            os.remove(tmp_path)
+            continue
+
+        requester, approver, scores, _ = identify_requester_approver(parsed_emails)
+        base_name = os.path.splitext(os.path.basename(txt_file))[0]
+
+        # Save outputs
+        save_csv(parsed_emails, output_folder, f"parsed_emails_{base_name}.csv")
+        save_summary(parsed_emails, scores, output_folder, f"summary_{base_name}.txt")
+        save_user_roles(parsed_emails, requester, approver, output_folder, f"users_{base_name}.csv")
+
+        os.remove(tmp_path)
+        log(f"✅ Finished processing {txt_file}")
 
 if __name__ == "__main__":
     main()
