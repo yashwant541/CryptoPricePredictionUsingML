@@ -4,656 +4,70 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Maker-Checker Email Analysis</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
-        .loading { display: none; }
-        .results { display: none; }
-        .file-preview { display: none; }
-        .email-preview { max-height: 300px; overflow-y: auto; }
-        .score-badge { font-size: 0.8em; }
-        .upload-area { 
-            border: 2px dashed #dee2e6; 
-            border-radius: 5px; 
-            padding: 2rem;
-            text-align: center;
-            transition: all 0.3s ease;
-            cursor: pointer;
-        }
-        .upload-area:hover {
-            border-color: #0d6efd;
-            background-color: #f8f9fa;
-        }
-        .upload-area.dragover {
-            border-color: #0d6efd;
-            background-color: #e7f1ff;
-        }
-        .file-info { background-color: #f8f9fa; }
-        .process-btn { display: none; }
-        .step-indicator {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 2rem;
-            position: relative;
-        }
-        .step {
-            text-align: center;
-            flex: 1;
-            position: relative;
-            z-index: 2;
-        }
-        .step-number {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background-color: #e9ecef;
-            color: #6c757d;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 0.5rem;
-            font-weight: bold;
-            border: 3px solid #e9ecef;
-        }
-        .step.active .step-number {
-            background-color: #0d6efd;
-            color: white;
-            border-color: #0d6efd;
-        }
-        .step.completed .step-number {
-            background-color: #198754;
-            color: white;
-            border-color: #198754;
-        }
-        .step-line {
-            position: absolute;
-            top: 20px;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background-color: #e9ecef;
-            z-index: 1;
-        }
-        .step-line-progress {
-            position: absolute;
-            top: 20px;
-            left: 0;
-            height: 3px;
-            background-color: #198754;
-            z-index: 1;
-            transition: width 0.3s ease;
-        }
-        .participant-badge {
-            font-size: 0.75em;
-            margin: 2px;
-        }
-        .email-row:hover {
-            background-color: #f8f9fa;
-        }
+        body { font-family: Arial; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 600px; margin:auto; background:#fff; padding:20px; border-radius:8px; }
+        input, button { margin-top:10px; padding:8px; }
+        #loading { display:none; margin-top:10px; color:#555; }
+        pre { background:#eee; padding:10px; overflow-x:auto; }
     </style>
 </head>
 <body>
-    <div class="container mt-4">
-        <div class="row">
-            <div class="col-12">
-                <h1 class="text-center">Maker-Checker Email Analysis</h1>
-                <p class="text-center text-muted">Upload email chain files to identify requesters (makers) and approvers (checkers)</p>
-            </div>
-        </div>
-
-        <!-- Step Indicator -->
-        <div class="row mt-4">
-            <div class="col-md-10 offset-md-1">
-                <div class="step-indicator">
-                    <div class="step-line"></div>
-                    <div class="step-line-progress" id="stepProgress"></div>
-                    <div class="step active" id="step1">
-                        <div class="step-number">1</div>
-                        <div class="step-label">Upload File</div>
-                    </div>
-                    <div class="step" id="step2">
-                        <div class="step-number">2</div>
-                        <div class="step-label">Preview</div>
-                    </div>
-                    <div class="step" id="step3">
-                        <div class="step-number">3</div>
-                        <div class="step-label">Process & Results</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="row mt-4">
-            <div class="col-md-10 offset-md-1">
-                <!-- Upload Section -->
-                <div class="card" id="uploadCard">
-                    <div class="card-header">
-                        <h5 class="card-title mb-0"><i class="fas fa-upload me-2"></i>Step 1: Upload Email Chain File</h5>
-                    </div>
-                    <div class="card-body">
-                        <div id="uploadArea" class="upload-area">
-                            <i class="fas fa-cloud-upload-alt fa-3x text-muted mb-3"></i>
-                            <h5>Drop your email file here or click to browse</h5>
-                            <p class="text-muted">Supported formats: .txt files with email headers</p>
-                            <input type="file" id="fileInput" accept=".txt" style="display: none;">
-                            <button class="btn btn-primary mt-2" onclick="document.getElementById('fileInput').click()">
-                                <i class="fas fa-folder-open me-2"></i>Choose File
-                            </button>
-                        </div>
-                        
-                        <div id="filePreview" class="file-preview mt-3">
-                            <div class="card file-info">
-                                <div class="card-body">
-                                    <div class="d-flex justify-content-between align-items-center">
-                                        <div>
-                                            <h6 id="fileName" class="mb-1"></h6>
-                                            <small id="fileStats" class="text-muted"></small>
-                                            <div id="participantsList" class="mt-2"></div>
-                                        </div>
-                                        <div>
-                                            <button class="btn btn-success me-2" onclick="processAnalysis()" id="processBtn">
-                                                <i class="fas fa-cogs me-2"></i>Process Analysis
-                                            </button>
-                                            <button class="btn btn-outline-secondary" onclick="clearFile()">
-                                                <i class="fas fa-times me-2"></i>Change File
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Email Preview Table -->
-                            <div class="mt-3" id="emailPreviewTable">
-                                <h6>Email Preview</h6>
-                                <div class="table-responsive">
-                                    <table class="table table-sm table-striped">
-                                        <thead>
-                                            <tr>
-                                                <th>#</th>
-                                                <th>Sender</th>
-                                                <th>Receivers</th>
-                                                <th>Subject</th>
-                                                <th>Date</th>
-                                                <th>Preview</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="emailPreviewBody">
-                                            <!-- Filled by JavaScript -->
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="mt-3">
-                            <small class="text-muted">
-                                <strong>Expected file format:</strong><br>
-                                From: John Doe<br>
-                                To: Jane Smith<br>
-                                Subject: Request for approval<br>
-                                Sent: Monday, January 15, 2024 2:30 PM<br>
-                                <br>
-                                Email body text...<br>
-                                <br>
-                                From: Jane Smith<br>
-                                To: John Doe<br>
-                                ... (multiple emails in one file)
-                            </small>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Loading Indicator -->
-                <div id="loading" class="loading mt-3">
-                    <div class="card">
-                        <div class="card-body text-center">
-                            <div class="spinner-border text-primary" role="status">
-                                <span class="visually-hidden">Loading...</span>
-                            </div>
-                            <p class="mt-2" id="loadingMessage">Processing email chain... This may take a few moments.</p>
-                            <div class="progress mt-3" style="height: 6px;">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Results Section -->
-                <div id="results" class="results mt-4">
-                    <div class="card">
-                        <div class="card-header bg-success text-white">
-                            <h5 class="card-title mb-0"><i class="fas fa-chart-bar me-2"></i>Analysis Results</h5>
-                        </div>
-                        <div class="card-body">
-                            <!-- Final Roles -->
-                            <div class="row mb-4">
-                                <div class="col-md-6">
-                                    <div class="card border-primary">
-                                        <div class="card-body text-center">
-                                            <h6><i class="fas fa-user-edit me-2"></i>Maker (Requester)</h6>
-                                            <h3 id="finalMaker" class="text-primary">-</h3>
-                                            <small class="text-muted">Person who requested the action</small>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-md-6">
-                                    <div class="card border-success">
-                                        <div class="card-body text-center">
-                                            <h6><i class="fas fa-user-check me-2"></i>Checker (Approver)</h6>
-                                            <h3 id="finalChecker" class="text-success">-</h3>
-                                            <small class="text-muted">Person who approved the request</small>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Resolution Method -->
-                            <div class="alert alert-info" id="resolutionAlert" style="display: none;">
-                                <i class="fas fa-info-circle me-2"></i>
-                                <strong>Resolution Method:</strong> <span id="resolutionMethod"></span>
-                            </div>
-
-                            <!-- Stats -->
-                            <div class="row mb-4">
-                                <div class="col-12">
-                                    <h6><i class="fas fa-chart-pie me-2"></i>Analysis Statistics</h6>
-                                    <div class="row text-center">
-                                        <div class="col-3">
-                                            <div class="border rounded p-2">
-                                                <div class="fw-bold fs-5" id="totalEmails">-</div>
-                                                <small>Total Emails</small>
-                                            </div>
-                                        </div>
-                                        <div class="col-3">
-                                            <div class="border rounded p-2">
-                                                <div class="fw-bold fs-5" id="totalParticipants">-</div>
-                                                <small>Participants</small>
-                                            </div>
-                                        </div>
-                                        <div class="col-3">
-                                            <div class="border rounded p-2">
-                                                <div class="fw-bold fs-5" id="potentialMakers">-</div>
-                                                <small>Potential Makers</small>
-                                            </div>
-                                        </div>
-                                        <div class="col-3">
-                                            <div class="border rounded p-2">
-                                                <div class="fw-bold fs-5" id="potentialCheckers">-</div>
-                                                <small>Potential Checkers</small>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Potential Candidates -->
-                            <div class="row">
-                                <div class="col-md-6">
-                                    <h6><i class="fas fa-users me-2"></i>Potential Makers</h6>
-                                    <div id="makerCandidates" class="mb-3">
-                                        <!-- Filled by JavaScript -->
-                                    </div>
-                                </div>
-                                <div class="col-md-6">
-                                    <h6><i class="fas fa-users me-2"></i>Potential Checkers</h6>
-                                    <div id="checkerCandidates">
-                                        <!-- Filled by JavaScript -->
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Email-by-Email Analysis -->
-                            <div class="mt-4">
-                                <h6><i class="fas fa-envelope me-2"></i>Email-by-Email Analysis</h6>
-                                <div class="email-preview border rounded p-2">
-                                    <table class="table table-sm table-striped">
-                                        <thead>
-                                            <tr>
-                                                <th>#</th>
-                                                <th>Sender</th>
-                                                <th>Date</th>
-                                                <th>Receivers</th>
-                                                <th>Maker Score</th>
-                                                <th>Checker Score</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="emailAnalysisTable">
-                                            <!-- Filled by JavaScript -->
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-
-                            <!-- Action Buttons -->
-                            <div class="mt-4 text-center">
-                                <button class="btn btn-primary me-2" onclick="analyzeNewFile()">
-                                    <i class="fas fa-redo me-2"></i>Analyze Another File
-                                </button>
-                                <button class="btn btn-outline-secondary" onclick="downloadResults()">
-                                    <i class="fas fa-download me-2"></i>Download Results
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Error Section -->
-                <div id="error" class="alert alert-danger mt-3" style="display: none;">
-                    <i class="fas fa-exclamation-triangle me-2"></i>
-                    <strong>Error:</strong> <span id="errorMessage"></span>
-                </div>
-            </div>
+    <div class="container">
+        <h2>Maker-Checker Email Analysis</h2>
+        <input type="file" id="fileInput" accept=".txt"><br>
+        <button id="processBtn">Process</button>
+        <div id="loading">Processing...</div>
+        <div class="result-section">
+            <h3>Results:</h3>
+            <pre id="resultsContent"></pre>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        let currentFileData = null;
-        let currentFileName = null;
-
-        // Initialize step progress
-        updateStepProgress(1);
-
-        // Drag and drop functionality
-        const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
+        const processBtn = document.getElementById('processBtn');
+        const loading = document.getElementById('loading');
+        const resultsContent = document.getElementById('resultsContent');
 
-        uploadArea.addEventListener('click', () => {
-            fileInput.click();
-        });
+        processBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file) return alert('Please select a .txt file');
 
-        uploadArea.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadArea.classList.add('dragover');
-        });
+            loading.style.display = 'block';
+            resultsContent.textContent = '';
 
-        uploadArea.addEventListener('dragleave', () => {
-            uploadArea.classList.remove('dragover');
-        });
+            try {
+                const fileData = await readFileAsBase64(file);
 
-        uploadArea.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadArea.classList.remove('dragover');
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                handleFileSelect(files[0]);
-            }
-        });
-
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                handleFileSelect(e.target.files[0]);
-            }
-        });
-
-        function handleFileSelect(file) {
-            if (file.type !== 'text/plain' && !file.name.toLowerCase().endsWith('.txt')) {
-                showError('Please upload a .txt file');
-                return;
-            }
-
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                currentFileData = e.target.result;
-                currentFileName = file.name;
-                
-                // Preview the file
-                previewUploadedFile();
-            };
-            reader.readAsDataURL(file);
-        }
-
-        function previewUploadedFile() {
-            showLoading(true, "Previewing file...");
-            updateStepProgress(1);
-            
-            fetch('/dip/api/analysis/do_parse_file', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    file_data: currentFileData,
-                    file_name: currentFileName
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                showLoading(false);
-                
-                if (data.error) {
-                    showError(data.error);
-                } else if (data.success) {
-                    displayFilePreview(data);
-                    updateStepProgress(2);
-                } else {
-                    showError('Unknown error occurred');
-                }
-            })
-            .catch(error => {
-                showLoading(false);
-                showError('Network error: ' + error.message);
-            });
-        }
-
-        function displayFilePreview(data) {
-            document.getElementById('fileName').textContent = data.file_name;
-            document.getElementById('fileStats').textContent = 
-                `${data.parsed_emails_count} emails, ${data.participants.length} participants`;
-            
-            // Display participants
-            const participantsList = document.getElementById('participantsList');
-            participantsList.innerHTML = '<strong>Participants:</strong> ' + 
-                data.participants.map(p => `<span class="badge bg-secondary participant-badge">${p}</span>`).join(' ');
-            
-            // Display email preview
-            const emailPreviewBody = document.getElementById('emailPreviewBody');
-            emailPreviewBody.innerHTML = data.email_preview.map(email => `
-                <tr class="email-row">
-                    <td>${email.sequence}</td>
-                    <td><strong>${email.sender}</strong></td>
-                    <td><small>${email.receivers}</small></td>
-                    <td>${email.subject || 'No subject'}</td>
-                    <td>${email.date}</td>
-                    <td><small class="text-muted">${email.body_preview}</small></td>
-                </tr>
-            `).join('');
-            
-            document.getElementById('filePreview').style.display = 'block';
-            document.getElementById('emailPreviewTable').style.display = 'block';
-            document.getElementById('results').style.display = 'none';
-            hideError();
-        }
-
-        function processAnalysis() {
-            if (!currentFileData) {
-                showError('No file selected');
-                return;
-            }
-
-            showLoading(true, "Analyzing email chain...");
-            updateStepProgress(2);
-            hideError();
-            document.getElementById('results').style.display = 'none';
-
-            fetch('/dip/api/analysis/do_analyze_emails', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    file_data: currentFileData,
-                    file_name: currentFileName
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                showLoading(false);
-                
-                if (data.error) {
-                    showError(data.error);
-                    updateStepProgress(2);
-                } else if (data.success) {
-                    displayResults(data.results);
-                    updateStepProgress(3);
-                } else {
-                    showError('Unknown error occurred');
-                    updateStepProgress(2);
-                }
-            })
-            .catch(error => {
-                showLoading(false);
-                showError('Network error: ' + error.message);
-                updateStepProgress(2);
-            });
-        }
-
-        function clearFile() {
-            currentFileData = null;
-            currentFileName = null;
-            fileInput.value = '';
-            document.getElementById('filePreview').style.display = 'none';
-            document.getElementById('results').style.display = 'none';
-            updateStepProgress(1);
-            hideError();
-        }
-
-        function analyzeNewFile() {
-            clearFile();
-            document.getElementById('uploadArea').scrollIntoView({ behavior: 'smooth' });
-        }
-
-        function updateStepProgress(step) {
-            // Reset all steps
-            document.querySelectorAll('.step').forEach(s => {
-                s.classList.remove('active', 'completed');
-            });
-            
-            // Update progress
-            const progress = document.getElementById('stepProgress');
-            if (step === 1) {
-                progress.style.width = '0%';
-                document.getElementById('step1').classList.add('active');
-            } else if (step === 2) {
-                progress.style.width = '50%';
-                document.getElementById('step1').classList.add('completed');
-                document.getElementById('step2').classList.add('active');
-            } else if (step === 3) {
-                progress.style.width = '100%';
-                document.querySelectorAll('.step').forEach(s => {
-                    s.classList.add('completed');
+                // Call Dataiku Webapp backend
+                const response = await fetch('/ajax/do_analyze_emails', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file_data: fileData, file_name: file.name })
                 });
-                document.getElementById('step3').classList.add('active');
+
+                const result = await response.json();
+
+                if (result.error) {
+                    resultsContent.textContent = 'Error: ' + result.error;
+                } else {
+                    resultsContent.textContent = JSON.stringify(result.results, null, 2);
+                }
+            } catch (err) {
+                resultsContent.textContent = 'Error: ' + err.message;
+            } finally {
+                loading.style.display = 'none';
             }
-        }
+        });
 
-        function showLoading(show, message = "Processing...") {
-            document.getElementById('loading').style.display = show ? 'block' : 'none';
-            document.getElementById('loadingMessage').textContent = message;
-        }
-
-        function showError(message) {
-            document.getElementById('errorMessage').textContent = message;
-            document.getElementById('error').style.display = 'block';
-            document.getElementById('results').style.display = 'none';
-        }
-
-        function hideError() {
-            document.getElementById('error').style.display = 'none';
-        }
-
-        function displayResults(results) {
-            // Set final roles
-            document.getElementById('finalMaker').textContent = results.final_maker;
-            document.getElementById('finalChecker').textContent = results.final_checker;
-
-            // Show resolution method if applicable
-            if (results.resolution_method && results.resolution_method !== 'standard') {
-                document.getElementById('resolutionMethod').textContent = results.resolution_method;
-                document.getElementById('resolutionAlert').style.display = 'block';
-            } else {
-                document.getElementById('resolutionAlert').style.display = 'none';
-            }
-
-            // Set stats
-            document.getElementById('totalEmails').textContent = results.stats.total_emails;
-            document.getElementById('totalParticipants').textContent = results.stats.total_participants;
-            document.getElementById('potentialMakers').textContent = results.stats.potential_makers_count;
-            document.getElementById('potentialCheckers').textContent = results.stats.potential_checkers_count;
-
-            // Display potential makers
-            const makerCandidatesDiv = document.getElementById('makerCandidates');
-            makerCandidatesDiv.innerHTML = results.potential_makers.map(maker => `
-                <div class="d-flex justify-content-between align-items-center mb-2 p-2 border rounded">
-                    <div>
-                        <strong>${maker.participant}</strong>
-                        <div class="mt-1">
-                            <span class="badge bg-primary score-badge">Avg: ${maker.average_score}</span>
-                            <span class="badge bg-secondary score-badge">Peak: ${maker.highest_score}</span>
-                            <span class="badge bg-light text-dark score-badge">${maker.email_count} emails</span>
-                        </div>
-                    </div>
-                    ${maker.participant === results.final_maker ? '<span class="badge bg-success">Selected</span>' : ''}
-                </div>
-            `).join('');
-
-            // Display potential checkers
-            const checkerCandidatesDiv = document.getElementById('checkerCandidates');
-            checkerCandidatesDiv.innerHTML = results.potential_checkers.map(checker => `
-                <div class="d-flex justify-content-between align-items-center mb-2 p-2 border rounded">
-                    <div>
-                        <strong>${checker.participant}</strong>
-                        <div class="mt-1">
-                            <span class="badge bg-success score-badge">Avg: ${checker.average_score}</span>
-                            <span class="badge bg-secondary score-badge">Peak: ${checker.highest_score}</span>
-                            <span class="badge bg-light text-dark score-badge">${checker.email_count} emails</span>
-                        </div>
-                    </div>
-                    ${checker.participant === results.final_checker ? '<span class="badge bg-success">Selected</span>' : ''}
-                </div>
-            `).join('');
-
-            // Display email analysis
-            const emailTable = document.getElementById('emailAnalysisTable');
-            emailTable.innerHTML = results.email_analysis.map(email => `
-                <tr>
-                    <td>${email.sequence}</td>
-                    <td><strong>${email.sender}</strong></td>
-                    <td>${email.date}</td>
-                    <td><small>${email.receivers}</small></td>
-                    <td>
-                        <span class="badge ${email.maker_score > 50 ? 'bg-primary' : 'bg-light text-dark'}">
-                            ${email.maker_score}
-                        </span>
-                    </td>
-                    <td>
-                        <span class="badge ${email.checker_score > 50 ? 'bg-success' : 'bg-light text-dark'}">
-                            ${email.checker_score}
-                        </span>
-                    </td>
-                </tr>
-            `).join('');
-
-            // Show results
-            document.getElementById('results').style.display = 'block';
-            document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
-        }
-
-        function downloadResults() {
-            // Simple download functionality - you can enhance this to generate CSV/PDF
-            const results = {
-                maker: document.getElementById('finalMaker').textContent,
-                checker: document.getElementById('finalChecker').textContent,
-                timestamp: new Date().toISOString()
-            };
-            
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(results, null, 2));
-            const downloadAnchorNode = document.createElement('a');
-            downloadAnchorNode.setAttribute("href", dataStr);
-            downloadAnchorNode.setAttribute("download", "maker-checker-results.json");
-            document.body.appendChild(downloadAnchorNode);
-            downloadAnchorNode.click();
-            downloadAnchorNode.remove();
+        function readFileAsBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = error => reject(error);
+                reader.readAsDataURL(file);
+            });
         }
     </script>
 </body>
