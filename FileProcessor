@@ -42,6 +42,8 @@ function previewUploadedFile() {
     showLoading(true, "Previewing file...");
     updateStepProgress(2);
 
+    console.log("Calling do_parse_file with file:", currentFileName);
+    
     // Use Dataiku's webapp_async_call
     dataiku.webapp_async_call(
         'do_parse_file',
@@ -49,26 +51,35 @@ function previewUploadedFile() {
             file_data: currentFileData,
             file_name: currentFileName
         },
-        function(data) {
+        function(response) {
+            console.log("do_parse_file response:", response);
             showLoading(false);
-            if (data.error) {
-                alert("Error: " + data.error);
-            } else {
-                displayFilePreview(data);
+            
+            if (response && response.error) {
+                alert("Error: " + response.error);
+                updateStepProgress(1); // Go back to step 1 on error
+            } else if (response && response.success) {
+                displayFilePreview(response);
                 updateStepProgress(3);
                 // Auto-process after preview
-                processAnalysis();
+                setTimeout(processAnalysis, 500); // Small delay for better UX
+            } else {
+                alert("Unexpected response from server");
+                updateStepProgress(1);
             }
         },
         function(error) {
+            console.error("do_parse_file error:", error);
             showLoading(false);
             alert("Preview failed: " + error);
+            updateStepProgress(1);
         }
     );
 }
 
 function processAnalysis() {
     showLoading(true, "Analyzing email chain...");
+    console.log("Calling do_analyze_emails...");
     
     dataiku.webapp_async_call(
         'do_analyze_emails',
@@ -76,15 +87,20 @@ function processAnalysis() {
             file_data: currentFileData,
             file_name: currentFileName
         },
-        function(data) {
+        function(response) {
+            console.log("do_analyze_emails response:", response);
             showLoading(false);
-            if (data.error) {
-                alert("Analysis error: " + data.error);
+            
+            if (response && response.error) {
+                alert("Analysis error: " + response.error);
+            } else if (response && response.success) {
+                displayResults(response.results);
             } else {
-                displayResults(data.results);
+                alert("Unexpected response from analysis");
             }
         },
         function(error) {
+            console.error("do_analyze_emails error:", error);
             showLoading(false);
             alert("Analysis failed: " + error);
         }
@@ -95,39 +111,52 @@ function displayFilePreview(data) {
     const previewContent = document.getElementById('previewContent');
     
     let previewHTML = `
-        <div style="margin-bottom: 20px;">
-            <strong>File:</strong> ${data.file_name}<br>
-            <strong>Size:</strong> ${data.file_size} bytes<br>
-            <strong>Emails Found:</strong> ${data.parsed_emails_count}<br>
-            <strong>Participants:</strong> ${data.participants.join(', ')}
+        <div style="margin-bottom: 20px; padding: 15px; background: white; border-radius: 5px;">
+            <strong>File:</strong> ${data.file_name || 'Unknown'}<br>
+            <strong>Size:</strong> ${data.file_size || 0} bytes<br>
+            <strong>Emails Found:</strong> ${data.parsed_emails_count || 0}<br>
+            <strong>Participants:</strong> ${(data.participants && data.participants.length > 0) ? data.participants.join(', ') : 'None found'}
         </div>
-        <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
-            <strong>Email Preview:</strong>
     `;
     
     if (data.email_preview && data.email_preview.length > 0) {
+        previewHTML += `<div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">`;
+        previewHTML += `<strong>Email Preview (first ${data.email_preview.length} emails):</strong>`;
+        
         data.email_preview.forEach(email => {
             previewHTML += `
-                <div style="border-bottom: 1px solid #ddd; padding: 10px 0; margin: 10px 0;">
-                    <strong>#${email.sequence}</strong> | <strong>From:</strong> ${email.sender}<br>
-                    <strong>To:</strong> ${email.receivers}<br>
-                    <strong>Subject:</strong> ${email.subject}<br>
-                    <strong>Date:</strong> ${email.date}<br>
-                    <strong>Preview:</strong> ${email.body_preview}
+                <div style="border: 1px solid #ddd; padding: 10px; margin: 10px 0; background: white; border-radius: 4px;">
+                    <strong>#${email.sequence || 'N/A'}</strong> | <strong>From:</strong> ${email.sender || 'Unknown'}<br>
+                    <strong>To:</strong> ${email.receivers || 'Unknown'}<br>
+                    <strong>Subject:</strong> ${email.subject || 'No subject'}<br>
+                    <strong>Date:</strong> ${email.date || 'Unknown'}<br>
+                    <strong>Preview:</strong> ${email.body_preview || 'No content'}
                 </div>
             `;
         });
+        previewHTML += `</div>`;
     } else {
-        previewHTML += `<p>No emails preview available</p>`;
+        previewHTML += `<div style="background: #fff3cd; padding: 15px; border-radius: 5px; color: #856404;">
+            <strong>No emails could be parsed from the file.</strong><br>
+            Please check that your file has the correct format with "From:", "To:", "Subject:", "Sent:" headers.
+        </div>`;
     }
     
-    previewHTML += `</div>`;
     previewContent.innerHTML = previewHTML;
     document.getElementById('filePreview').style.display = 'block';
 }
 
 function displayResults(results) {
     const resultsDiv = document.getElementById('resultsContent');
+    
+    if (!results) {
+        resultsDiv.innerHTML = `<div style="background: #f8d7da; padding: 20px; border-radius: 8px; color: #721c24;">
+            <h3>No Results Available</h3>
+            <p>The analysis did not return any results.</p>
+        </div>`;
+        document.getElementById('results').style.display = 'block';
+        return;
+    }
     
     let resultsHTML = `
         <div style="background: #f8f9fa; padding: 20px; border-radius: 8px;">
@@ -171,36 +200,6 @@ function displayResults(results) {
         resultsHTML += `
             <div style="background: #d1ecf1; padding: 10px; border-radius: 4px; margin-bottom: 15px;">
                 <strong>Resolution Method:</strong> ${results.resolution_method}
-            </div>
-        `;
-    }
-    
-    // Add potential candidates if available
-    if (results.potential_makers && results.potential_makers.length > 0) {
-        resultsHTML += `
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                <div style="background: white; padding: 15px; border-radius: 6px;">
-                    <h5>Potential Makers</h5>
-                    ${results.potential_makers.map(maker => `
-                        <div style="border-bottom: 1px solid #eee; padding: 8px 0;">
-                            <strong>${maker.participant}</strong>
-                            <div style="font-size: 12px; color: #666;">
-                                Avg: ${maker.average_score} | Peak: ${maker.highest_score} | Emails: ${maker.email_count}
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-                <div style="background: white; padding: 15px; border-radius: 6px;">
-                    <h5>Potential Checkers</h5>
-                    ${results.potential_checkers.map(checker => `
-                        <div style="border-bottom: 1px solid #eee; padding: 8px 0;">
-                            <strong>${checker.participant}</strong>
-                            <div style="font-size: 12px; color: #666;">
-                                Avg: ${checker.average_score} | Peak: ${checker.highest_score} | Emails: ${checker.email_count}
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
             </div>
         `;
     }
