@@ -1,84 +1,64 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Email Attachment Reader</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        table { border-collapse: collapse; margin-top: 10px; width: 100%; }
-        th, td { border: 1px solid #ccc; padding: 5px; text-align: left; }
-        th { background: #f0f0f0; }
-    </style>
-</head>
-<body>
-    <h2>Upload .msg File</h2>
-    <input type="file" id="msgFile" />
-    <button onclick="uploadFile()">Upload & Extract</button>
+import dataiku
+import extract_msg
+import pandas as pd
+import os
 
-    <h3>Email Info</h3>
-    <pre id="emailInfo"></pre>
+# -----------------------------
+# CONFIGURATION
+# -----------------------------
+INPUT_FOLDER_ID = "YOUR_INPUT_FOLDER_ID"   # Replace with your input folder ID
+OUTPUT_FOLDER_ID = "YOUR_OUTPUT_FOLDER_ID" # Replace with your output folder ID
 
-    <h3>Attachment Data</h3>
-    <div id="tables"></div>
+# Get Dataiku folders
+input_folder = dataiku.Folder(INPUT_FOLDER_ID)
+output_folder = dataiku.Folder(OUTPUT_FOLDER_ID)
 
-    <script>
-        function uploadFile() {
-            var fileInput = document.getElementById("msgFile").files[0];
-            var formData = new FormData();
-            formData.append("file", fileInput);
+# Temporary local folders
+input_path = input_folder.get_path()
+output_path = output_folder.get_path()
 
-            fetch("/upload_msg", {
-                method: "POST",
-                body: formData
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.error) {
-                    alert("Error: " + data.error);
-                    return;
-                }
+# Function to extract all details from a .msg file
+def extract_msg_details(msg_file_path):
+    msg = extract_msg.Message(msg_file_path)
+    msg_sender = msg.sender
+    msg_to = msg.to
+    msg_cc = msg.cc
+    msg_bcc = msg.bcc
+    msg_subject = msg.subject
+    msg_date = msg.date
+    msg_body = msg.body
+    # Attachments
+    attachments = ", ".join([att.longFilename for att in msg.attachments])
+    
+    data = {
+        "Sender": msg_sender,
+        "To": msg_to,
+        "CC": msg_cc,
+        "BCC": msg_bcc,
+        "Subject": msg_subject,
+        "Date": msg_date,
+        "Body": msg_body,
+        "Attachments": attachments
+    }
+    return data
 
-                document.getElementById("emailInfo").innerText =
-                    "Subject: " + data.subject + "\n" +
-                    "From: " + data.from + "\n" +
-                    "To: " + data.to + "\n" +
-                    "Date: " + data.date + "\n" +
-                    "Attachments: " + data.attachments.join(", ");
+# -----------------------------
+# PROCESS ALL MSG FILES
+# -----------------------------
+for filename in os.listdir(input_path):
+    if filename.lower().endswith(".msg"):
+        msg_file_path = os.path.join(input_path, filename)
+        try:
+            msg_data = extract_msg_details(msg_file_path)
+            df = pd.DataFrame([msg_data])
+            
+            # Output CSV filename (replace .msg with .csv)
+            csv_filename = filename.rsplit(".", 1)[0] + ".csv"
+            output_file_path = os.path.join(output_path, csv_filename)
+            
+            df.to_csv(output_file_path, index=False, encoding="utf-8-sig")
+            print(f"Processed: {filename}")
+        except Exception as e:
+            print(f"Failed to process {filename}: {e}")
 
-                let tablesDiv = document.getElementById("tables");
-                tablesDiv.innerHTML = "";
-
-                for (let fname in data.data) {
-                    let rows = data.data[fname];
-                    if (rows.length === 0) continue;
-
-                    let table = document.createElement("table");
-
-                    // Header
-                    let header = document.createElement("tr");
-                    Object.keys(rows[0]).forEach(col => {
-                        let th = document.createElement("th");
-                        th.innerText = col;
-                        header.appendChild(th);
-                    });
-                    table.appendChild(header);
-
-                    // Rows
-                    rows.forEach(row => {
-                        let tr = document.createElement("tr");
-                        Object.values(row).forEach(val => {
-                            let td = document.createElement("td");
-                            td.innerText = val === null ? "" : val;
-                            tr.appendChild(td);
-                        });
-                        table.appendChild(tr);
-                    });
-
-                    tablesDiv.innerHTML += `<h4>${fname}</h4>`;
-                    tablesDiv.appendChild(table);
-                }
-            })
-            .catch(err => alert("Error: " + err));
-        }
-    </script>
-</body>
-</html>
+print("All .msg files processed successfully.")
