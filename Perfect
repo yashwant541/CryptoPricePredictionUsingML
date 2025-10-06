@@ -1,152 +1,997 @@
-import numpy as np
-np.int = int
-np.float = float
-
-import nltk
-import re
-import csv
-import sys
 import os
+import re
+import sys
+import csv
 import math
+import shutil
+import tempfile
 from datetime import datetime
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-from nltk import pos_tag
-import string
-from dateutil.parser import parse as parse_date
-# Setup NLTK path (optional: update as needed)
-nltk.data.path.append(r'C:\Users\2011747\nltk_library')
+import dataiku
 from fuzzywuzzy import fuzz
 
-# Weighted keyword lists
+# -----------------------------
+# Enhanced Configuration
+# -----------------------------
+class Config:
+    SCORE_WEIGHTS = {
+        'keyword_presence': 25,
+        'semantic_patterns': 30,
+        'temporal_position': 20,
+        'conversation_flow': 15,
+        'hierarchy_analysis': 10
+    }
+    
+    CONFIDENCE_THRESHOLDS = {
+        'very_high': 0.5,
+        'high': 0.3,
+        'medium': 0.2,
+        'low': 0.0
+    }
+
+# Enhanced keyword dictionaries with weights
 APPROVER_KEYWORDS = {
     "approved": 100, "granted": 95, "confirmed": 90, "accepted": 90,
     "authorized": 95, "approve": 80, "confirm": 80, "accept": 80,
     "approval": 50, "clearance": 70, "endorsed": 75, "signed off": 85,
-    "cleared": 80, "validated": 85, "ratified": 90, "sanctioned": 90
+    "cleared": 80, "validated": 85, "ratified": 90, "sanctioned": 90,
+    "permission granted": 95, "fully supported": 85, "completely endorse": 80
 }
 
 REQUESTER_KEYWORDS = {
     "request": 100, "require": 95, "seek approval": 90, "need approval": 90,
     "asking": 80, "petition": 75, "approval": 30, "pending": 60,
     "remind": 70, "follow up": 65, "submitted": 85, "application": 80,
-    "awaiting": 75, "petition": 70, "seeking": 85
+    "awaiting": 75, "seeking": 85, "would like to request": 95,
+    "please approve": 90, "kindly approve": 90, "require authorization": 85
 }
 
-PRONOUN_PATTERNS = [
-    (r"\byou\b.*\bapprove\b", "approver", 50),
-    (r"\byour\b.*\bapproval\b", "approver", 40),
-    (r"\bplease\b.*\bapprove\b", "approver", 60),
-    (r"\bi\b.*\brequest\b", "requester", 55),
-    (r"\bwe\b.*\brequest\b", "requester", 50),
-    (r"\bplease\b.*\breview\b", "approver", 40),
-    (r"\bkindly\b.*\bapprove\b", "approver", 70)
-]
+# -----------------------------
+# Enhanced Helper Functions
+# -----------------------------
+def log(message):
+    print(f"[LOG] {message}", file=sys.stderr, flush=True)
 
-# Enhanced Temporal Weighting Functions
-def sigmoid(x, steepness=10, midpoint=0.5):
-    """Smooth S-curve transition between requester and approver weights"""
-    return 1 / (1 + math.exp(-steepness * (x - midpoint)))
+def split_emails(raw_text):
+    parts = re.split(r"(?=^From: )", raw_text, flags=re.IGNORECASE | re.MULTILINE)
+    if parts and not parts[0].strip().lower().startswith("from:"):
+        first = parts.pop(0)
+        parts = [first] + parts
+    return parts
 
-def logarithmic_weight(position, total_emails):
-    """More sensitive to early positions in thread"""
-    if total_emails <= 1:
-        return 0.5
-    normalized_pos = position / (total_emails - 1)
-    return 1 - math.log(1 + (1 - normalized_pos) * 9, 10)
+def extract_field(email, field):
+    pattern = rf"{field}:(.*)"
+    match = re.search(pattern, email, re.IGNORECASE)
+    return match.group(1).strip() if match else ""
 
-def hybrid_temporal_weight(position, total_emails, sigmoid_ratio=0.7):
-    """Combine both sigmoid and logarithmic weights"""
-    if total_emails <= 1:
-        return (0.5, 0.5)
+def parse_date_time(date_str):
+    if not date_str:
+        return None
+    try:
+        return datetime.strptime(date_str.strip(), "%A, %B %d, %Y %I:%M %p")
+    except Exception:
+        return None
+
+def extract_body(email):
+    split_point = re.search(r"\n\s*\n", email)
+    return email[split_point.end():].strip() if split_point else ""
+
+def clean_participant_name(raw_name):
+    if not raw_name:
+        return ""
+    cleaned = re.sub(r'<[^>]+>', '', raw_name)
+    cleaned = re.sub(r'[;"\']', '', cleaned)
+    cleaned = ' '.join(cleaned.split()).strip()
+    cleaned = cleaned.rstrip(',')
+    return cleaned
+
+def find_matching_statement(email_body, keywords, threshold=80):
+    sentences = re.split(r'(?<=[.!?])\s+', email_body.strip())
+    exact_matches, fuzzy_matches = [], []
+    for sentence in sentences:
+        clean_sentence = sentence.lower()
+        for kw in keywords:
+            if kw in clean_sentence:
+                exact_matches.append(sentence.strip())
+            else:
+                ratio = fuzz.partial_ratio(kw, clean_sentence)
+                if ratio >= threshold:
+                    fuzzy_matches.append((sentence.strip(), kw, ratio))
+    if exact_matches:
+        return "; ".join(exact_matches), "exact"
+    elif fuzzy_matches:
+        best_match = max(fuzzy_matches, key=lambda x: x[2])
+        return best_match[0], "fuzzy"
+    return "", ""
+
+# -----------------------------
+# Enhanced Linguistic Analysis
+# -----------------------------
+def extract_semantic_patterns(email_body):
+    """Extract more sophisticated linguistic patterns"""
+    patterns = {
+        "explicit_approval": [
+            r"(?:I\s+)?(?:hereby\s+)?approve(?:\s+the\s+request)?",
+            r"(?:request|application)\s+(?:is\s+)?approved",
+            r"grant(?:ed|ing)\s+(?:the\s+)?(?:request|permission)",
+            r"fully\s+supported|completely\s+endorse"
+        ],
+        "conditional_approval": [
+            r"approved\s+subject\s+to|conditional\s+approval",
+            r"pending\s+[^.]*approval"
+        ],
+        "explicit_request": [
+            r"(?:I\s+)?(?:would\s+like\s+to\s+)?request(?:\s+approval)?",
+            r"seeking\s+(?:your\s+)?approval",
+            r"please\s+approve|kindly\s+approve",
+            r"require\s+(?:your\s+)?authorization"
+        ],
+        "delegated_authority": [
+            r"on\s+behalf\s+of|acting\s+for",
+            r"delegated\s+authority"
+        ]
+    }
     
-    normalized_pos = position / (total_emails - 1)
-    req_sig, app_sig = (1 - sigmoid(normalized_pos)), sigmoid(normalized_pos)
-    log_weight = logarithmic_weight(position, total_emails)
+    found_patterns = {}
+    for pattern_type, regex_list in patterns.items():
+        for regex in regex_list:
+            if re.search(regex, email_body, re.IGNORECASE):
+                found_patterns[pattern_type] = found_patterns.get(pattern_type, 0) + 1
     
-    # Blend them
-    requester_weight = sigmoid_ratio * (1 - log_weight) + (1 - sigmoid_ratio) * req_sig
-    approver_weight = sigmoid_ratio * log_weight + (1 - sigmoid_ratio) * app_sig
-    
-    # Normalize
-    total = requester_weight + approver_weight
-    return (requester_weight/total, approver_weight/total)
+    return found_patterns
 
-def time_decay_weight(email_datetime, thread_start, thread_end, half_life_hours=24):
-    """Weight based on absolute time differences"""
-    total_span = (thread_end - thread_start).total_seconds()
-    if total_span <= 0:
-        return (0.5, 0.5)
+# -----------------------------
+# Enhanced Conversation Flow Analysis
+# -----------------------------
+def analyze_conversation_flow(parsed_emails):
+    """Analyze the flow and structure of the conversation"""
+    flow_analysis = {
+        "initiator": "",
+        "finalizer": "",
+        "turn_taking": {},
+        "response_times": [],
+        "dominant_speakers": []
+    }
     
-    elapsed = (email_datetime - thread_start).total_seconds()
-    decay_factor = 0.5 ** (elapsed / (half_life_hours * 3600))
-    return (decay_factor, 1 - decay_factor)
-
-# [All your existing functions remain unchanged until calculate_role_scores]
-
-def calculate_role_scores(parsed_emails):
-    role_scores = {}
-    total_emails = len(parsed_emails)
+    if not parsed_emails:
+        return flow_analysis
     
-    # Get thread time bounds
-    valid_emails = [e for e in parsed_emails if e["datetime"]]
-    if valid_emails:
-        thread_start = min(e["datetime"] for e in valid_emails)
-        thread_end = max(e["datetime"] for e in valid_emails)
-    else:
-        thread_start = thread_end = None
+    # Identify initiator and finalizer
+    flow_analysis["initiator"] = clean_participant_name(parsed_emails[0]["Sender"])
+    flow_analysis["finalizer"] = clean_participant_name(parsed_emails[-1]["Sender"])
     
-    # Get first sender based on datetime
-    first_email = min(parsed_emails, key=lambda x: x["datetime"] if x["datetime"] else datetime.max)
-    first_sender = clean_participant_name(first_email["Sender"])
-
-    for i, email in enumerate(parsed_emails):
+    # Analyze turn-taking patterns
+    speakers = []
+    for email in parsed_emails:
         sender = clean_participant_name(email["Sender"])
-        body = email["email body"].lower()
-        subject = email["subject"].lower()
-        
-        if not sender:
-            continue
-            
-        if sender not in role_scores:
-            role_scores[sender] = {"approver": 0, "requester": 0, "details": []}
-        
-        # Enhanced Temporal Scoring (20% weight)
-        # Calculate position-based weights
-        pos_weight_req, pos_weight_app = hybrid_temporal_weight(i, total_emails)
-        
-        # Calculate time-decay weights if we have datetimes
-        if email["datetime"] and thread_start and thread_end:
-            time_weight_req, time_weight_app = time_decay_weight(
-                email["datetime"], thread_start, thread_end
-            )
-        else:
-            time_weight_req, time_weight_app = 0.5, 0.5
-        
-        # Combine weights (50% position, 50% time decay)
-        combined_req = 0.5 * pos_weight_req + 0.5 * time_weight_req
-        combined_app = 0.5 * pos_weight_app + 0.5 * time_weight_app
-        
-        # Apply to scores (20% of total score)
-        temporal_requester_score = 20 * combined_req
-        temporal_approver_score = 20 * combined_app
-        
-        role_scores[sender]["requester"] += temporal_requester_score
-        role_scores[sender]["approver"] += temporal_approver_score
-        role_scores[sender]["details"].append(
-            f"+{temporal_requester_score:.1f} (temporal requester weight)")
-        role_scores[sender]["details"].append(
-            f"+{temporal_approver_score:.1f} (temporal approver weight)")
-        
-        # [Rest of your existing scoring logic remains exactly the same]
-        # ULTRA WINNER BONUS, HARD RULE, Keyword Scoring, etc.
-        
-    return role_scores, first_sender
+        speakers.append(sender)
+        flow_analysis["turn_taking"][sender] = flow_analysis["turn_taking"].get(sender, 0) + 1
+    
+    # Calculate response times
+    for i in range(1, len(parsed_emails)):
+        if parsed_emails[i]["datetime"] and parsed_emails[i-1]["datetime"]:
+            response_time = (parsed_emails[i]["datetime"] - parsed_emails[i-1]["datetime"]).total_seconds() / 3600  # hours
+            flow_analysis["response_times"].append({
+                "responder": clean_participant_name(parsed_emails[i]["Sender"]),
+                "response_time_hours": response_time,
+                "previous_sender": clean_participant_name(parsed_emails[i-1]["Sender"])
+            })
+    
+    # Identify dominant speakers (more than 30% of emails)
+    total_emails = len(parsed_emails)
+    flow_analysis["dominant_speakers"] = [
+        speaker for speaker, count in flow_analysis["turn_taking"].items()
+        if count / total_emails > 0.3
+    ]
+    
+    return flow_analysis
 
-# [All remaining functions stay exactly the same as in your original code]
+# -----------------------------
+# Hierarchy and Authority Detection
+# -----------------------------
+def detect_organizational_hierarchy(parsed_emails, participants):
+    """Use linguistic cues to infer hierarchy"""
+    hierarchy_indicators = {
+        "superior_indicators": [
+            r"reporting\s+to", "my\s+team", "my\s+department",
+            r"please\s+review", "for\s+your\s+approval", "seeking\s+your\s+guidance",
+            r"your\s+decision", "awaiting\s+your\s+input"
+        ],
+        "subordinate_indicators": [
+            r"as\s+you\s+requested", "per\s+your\s+instruction",
+            r"following\s+up", "awaiting\s+your\s+decision",
+            r"will\s+implement", "as\s+directed"
+        ],
+        "formal_address": [
+            r"dear\s+(mr|mrs|ms|dr)\.?\s+[A-Z]", "respectfully",
+            r"yours\s+sincerely", "best\s+regards"
+        ]
+    }
+    
+    hierarchy_scores = {participant: {"maker": 0, "checker": 0} for participant in participants}
+    
+    for email in parsed_emails:
+        sender = clean_participant_name(email["Sender"])
+        body_lower = email["email body"].lower()
+        
+        # Superior indicators in emails sent by this person
+        for indicator in hierarchy_indicators["superior_indicators"]:
+            if re.search(indicator, body_lower):
+                hierarchy_scores[sender]["checker"] += 2
+        
+        # Subordinate indicators reduce hierarchy score (more likely to be maker)
+        for indicator in hierarchy_indicators["subordinate_indicators"]:
+            if re.search(indicator, body_lower):
+                hierarchy_scores[sender]["maker"] += 1
+    
+    return hierarchy_scores
+
+# -----------------------------
+# Contextual Analysis
+# -----------------------------
+def analyze_email_context(parsed_emails):
+    """Analyze contextual factors that influence role identification"""
+    context = {
+        "urgency_indicators": 0,
+        "formality_level": "medium",
+        "decision_complexity": "medium",
+        "multi_party_negotiation": False,
+        "total_participants": 0
+    }
+    
+    urgency_keywords = ["urgent", "asap", "immediate", "deadline", "time-sensitive"]
+    formal_keywords = ["respectfully", "sincerely", "dear", "regards", "cordially"]
+    informal_keywords = ["thanks", "cheers", "hi", "hello", "hey"]
+    
+    total_emails = len(parsed_emails)
+    formal_count = 0
+    informal_count = 0
+    urgency_count = 0
+    
+    for email in parsed_emails:
+        body_lower = email["email body"].lower()
+        
+        # Urgency analysis
+        for word in urgency_keywords:
+            if word in body_lower:
+                urgency_count += 1
+                break
+        
+        # Formality analysis
+        for word in formal_keywords:
+            if word in body_lower:
+                formal_count += 1
+                break
+        
+        for word in informal_keywords:
+            if word in body_lower:
+                informal_count += 1
+                break
+    
+    participants = extract_all_participants(parsed_emails)
+    
+    context["urgency_indicators"] = urgency_count / total_emails if total_emails > 0 else 0
+    context["formality_level"] = "high" if formal_count > informal_count else "low" if informal_count > formal_count else "medium"
+    context["multi_party_negotiation"] = len(participants) > 3
+    context["total_participants"] = len(participants)
+    
+    return context
+
+# -----------------------------
+# Participant Role Analysis
+# -----------------------------
+def analyze_participant_roles(parsed_emails):
+    """Analyze each participant's role throughout the email chain"""
+    participants = {}
+    
+    for email in parsed_emails:
+        email_sequence = email["Email Sequence"]
+        
+        # Track sender
+        sender = clean_participant_name(email["Sender"])
+        if sender:
+            if sender not in participants:
+                participants[sender] = {
+                    "Total_Emails": 0, "As_Sender": 0, "As_Receiver": 0, 
+                    "As_CC": 0, "As_BCC": 0, "First_Email_Sender": False,
+                    "First_Email_Receiver": False, "Email_Sequences": []
+                }
+            participants[sender]["As_Sender"] += 1
+            participants[sender]["Total_Emails"] += 1
+            participants[sender]["Email_Sequences"].append(email_sequence)
+            
+            # Check if first email sender
+            if email_sequence == 1:
+                participants[sender]["First_Email_Sender"] = True
+        
+        # Track receivers (To field)
+        receivers = [clean_participant_name(r) for r in email["Receiver"].split(',') if email["Receiver"]]
+        for receiver in receivers:
+            if receiver:
+                if receiver not in participants:
+                    participants[receiver] = {
+                        "Total_Emails": 0, "As_Sender": 0, "As_Receiver": 0, 
+                        "As_CC": 0, "As_BCC": 0, "First_Email_Sender": False,
+                        "First_Email_Receiver": False, "Email_Sequences": []
+                    }
+                participants[receiver]["As_Receiver"] += 1
+                participants[receiver]["Total_Emails"] += 1
+                participants[receiver]["Email_Sequences"].append(email_sequence)
+                
+                # Check if first email receiver
+                if email_sequence == 1:
+                    participants[receiver]["First_Email_Receiver"] = True
+        
+        # Track CC participants
+        cc_list = [clean_participant_name(c) for c in email["cc"].split(',')] if email["cc"] else []
+        for cc_person in cc_list:
+            if cc_person:
+                if cc_person not in participants:
+                    participants[cc_person] = {
+                        "Total_Emails": 0, "As_Sender": 0, "As_Receiver": 0, 
+                        "As_CC": 0, "As_BCC": 0, "First_Email_Sender": False,
+                        "First_Email_Receiver": False, "Email_Sequences": []
+                    }
+                participants[cc_person]["As_CC"] += 1
+                participants[cc_person]["Total_Emails"] += 1
+                participants[cc_person]["Email_Sequences"].append(email_sequence)
+        
+        # Track BCC participants
+        bcc_list = [clean_participant_name(b) for b in email["bcc"].split(',')] if email["bcc"] else []
+        for bcc_person in bcc_list:
+            if bcc_person:
+                if bcc_person not in participants:
+                    participants[bcc_person] = {
+                        "Total_Emails": 0, "As_Sender": 0, "As_Receiver": 0, 
+                        "As_CC": 0, "As_BCC": 0, "First_Email_Sender": False,
+                        "First_Email_Receiver": False, "Email_Sequences": []
+                    }
+                participants[bcc_person]["As_BCC"] += 1
+                participants[bcc_person]["Total_Emails"] += 1
+                participants[bcc_person]["Email_Sequences"].append(email_sequence)
+    
+    return participants
+
+def extract_participants_with_roles(parsed_emails):
+    """Extract participants with their roles in the conversation"""
+    participants = {}
+    
+    for email in parsed_emails:
+        # Sender
+        sender = clean_participant_name(email["Sender"])
+        if sender and sender not in participants:
+            participants[sender] = {"roles": set(["sender"]), "first_sender": False, "first_receiver": False}
+        
+        # Mark first sender
+        if email["Email Sequence"] == 1 and sender in participants:
+            participants[sender]["first_sender"] = True
+        
+        # Direct receivers (To field)
+        receivers = [clean_participant_name(r) for r in email["Receiver"].split(',') if email["Receiver"]]
+        for receiver in receivers:
+            if receiver and receiver not in participants:
+                participants[receiver] = {"roles": set(["receiver"]), "first_sender": False, "first_receiver": False}
+            elif receiver in participants:
+                participants[receiver]["roles"].add("receiver")
+            
+            # Mark first receiver
+            if email["Email Sequence"] == 1 and receiver in participants:
+                participants[receiver]["first_receiver"] = True
+        
+        # CC participants
+        cc = [clean_participant_name(c) for c in email["cc"].split(',')] if email["cc"] else []
+        for cc_person in cc:
+            if cc_person and cc_person not in participants:
+                participants[cc_person] = {"roles": set(["cc"]), "first_sender": False, "first_receiver": False}
+            elif cc_person in participants:
+                participants[cc_person]["roles"].add("cc")
+        
+        # BCC participants
+        bcc = [clean_participant_name(b) for b in email["bcc"].split(',')] if email["bcc"] else []
+        for bcc_person in bcc:
+            if bcc_person and bcc_person not in participants:
+                participants[bcc_person] = {"roles": set(["bcc"]), "first_sender": False, "first_receiver": False}
+            elif bcc_person in participants:
+                participants[bcc_person]["roles"].add("bcc")
+    
+    return participants
+
+def calculate_role_restrictions(participants_with_roles):
+    """Apply restrictions based on participant roles"""
+    restrictions = {}
+    
+    for participant, data in participants_with_roles.items():
+        roles = data["roles"]
+        restrictions[participant] = {
+            "can_be_maker": True,
+            "can_be_checker": True,
+            "restriction_reason": ""
+        }
+        
+        # CC/BCC only participants cannot be maker or checker
+        if roles == {"cc"} or roles == {"bcc"}:
+            restrictions[participant]["can_be_maker"] = False
+            restrictions[participant]["can_be_checker"] = False
+            restrictions[participant]["restriction_reason"] = "CC/BCC only participant"
+        
+        # First sender bonus for maker
+        if data["first_sender"]:
+            restrictions[participant]["maker_bonus"] = 50
+            if restrictions[participant]["restriction_reason"]:
+                restrictions[participant]["restriction_reason"] += " | First sender"
+            else:
+                restrictions[participant]["restriction_reason"] = "First sender"
+        
+        # First receiver bonus for checker
+        if data["first_receiver"]:
+            restrictions[participant]["checker_bonus"] = 50
+            if restrictions[participant]["restriction_reason"]:
+                restrictions[participant]["restriction_reason"] += " | First receiver"
+            else:
+                restrictions[participant]["restriction_reason"] = "First receiver"
+    
+    return restrictions
+
+# -----------------------------
+# Enhanced Scoring Engine
+# -----------------------------
+class AdvancedScoringEngine:
+    def __init__(self):
+        self.weights = Config.SCORE_WEIGHTS
+    
+    def _calculate_keyword_scores(self, parsed_emails):
+        """Calculate scores based on keyword presence"""
+        participants = extract_all_participants(parsed_emails)
+        scores = {p: {"maker": 0, "checker": 0} for p in participants}
+        
+        for email in parsed_emails:
+            sender = clean_participant_name(email["Sender"])
+            if not sender: continue
+            
+            # Approval keywords
+            if email["approval_statement"]:
+                for keyword, weight in APPROVER_KEYWORDS.items():
+                    if keyword in email["approval_statement"].lower():
+                        scores[sender]["checker"] += weight
+                        break
+            
+            # Request keywords
+            if email["request_statement"]:
+                for keyword, weight in REQUESTER_KEYWORDS.items():
+                    if keyword in email["request_statement"].lower():
+                        scores[sender]["maker"] += weight
+                        break
+        
+        return scores
+    
+    def _calculate_semantic_scores(self, parsed_emails):
+        """Calculate scores based on semantic patterns"""
+        participants = extract_all_participants(parsed_emails)
+        scores = {p: {"maker": 0, "checker": 0} for p in participants}
+        
+        for email in parsed_emails:
+            sender = clean_participant_name(email["Sender"])
+            if not sender: continue
+            
+            patterns = extract_semantic_patterns(email["email body"])
+            
+            # Semantic pattern scoring
+            if "explicit_approval" in patterns:
+                scores[sender]["checker"] += 80
+            if "conditional_approval" in patterns:
+                scores[sender]["checker"] += 60
+            if "explicit_request" in patterns:
+                scores[sender]["maker"] += 80
+            if "delegated_authority" in patterns:
+                scores[sender]["checker"] += 40
+        
+        return scores
+    
+    def _calculate_temporal_scores(self, parsed_emails):
+        """Calculate scores based on temporal position"""
+        participants = extract_all_participants(parsed_emails)
+        scores = {p: {"maker": 0, "checker": 0} for p in participants}
+        total_emails = len(parsed_emails)
+        
+        for i, email in enumerate(parsed_emails):
+            sender = clean_participant_name(email["Sender"])
+            if not sender: continue
+            
+            # First email gets high maker score
+            if i == 0:
+                scores[sender]["maker"] += 100
+            
+            # Last email gets high checker score
+            if i == total_emails - 1:
+                scores[sender]["checker"] += 100
+            
+            # Middle positions get weighted scores
+            pos_weight_maker = max(0, 1 - i / total_emails) * 50
+            pos_weight_checker = min(1, i / total_emails) * 50
+            
+            scores[sender]["maker"] += pos_weight_maker
+            scores[sender]["checker"] += pos_weight_checker
+        
+        return scores
+    
+    def _calculate_flow_scores(self, parsed_emails):
+        """Calculate scores based on conversation flow"""
+        participants = extract_all_participants(parsed_emails)
+        scores = {p: {"maker": 0, "checker": 0} for p in participants}
+        flow_analysis = analyze_conversation_flow(parsed_emails)
+        
+        # Initiator gets maker points
+        if flow_analysis["initiator"] in scores:
+            scores[flow_analysis["initiator"]]["maker"] += 80
+        
+        # Finalizer gets checker points
+        if flow_analysis["finalizer"] in scores:
+            scores[flow_analysis["finalizer"]]["checker"] += 80
+        
+        # Dominant speakers get checker points (they control conversation)
+        for speaker in flow_analysis["dominant_speakers"]:
+            if speaker in scores:
+                scores[speaker]["checker"] += 30
+        
+        return scores
+    
+    def _calculate_hierarchy_scores(self, parsed_emails, participants):
+        """Calculate scores based on hierarchy detection"""
+        hierarchy_scores = detect_organizational_hierarchy(parsed_emails, participants)
+        return hierarchy_scores
+    
+    def calculate_comprehensive_scores(self, parsed_emails):
+        participants = extract_all_participants(parsed_emails)
+        scores = {p: {"maker": 0, "checker": 0, "breakdown": {}} for p in participants}
+        
+        # Calculate all score components
+        keyword_scores = self._calculate_keyword_scores(parsed_emails)
+        semantic_scores = self._calculate_semantic_scores(parsed_emails)
+        temporal_scores = self._calculate_temporal_scores(parsed_emails)
+        flow_scores = self._calculate_flow_scores(parsed_emails)
+        hierarchy_scores = self._calculate_hierarchy_scores(parsed_emails, participants)
+        
+        # Combine all scores with weights
+        for participant in participants:
+            # Normalize and combine scores
+            maker_score = (
+                keyword_scores[participant]["maker"] * self.weights['keyword_presence'] +
+                semantic_scores[participant]["maker"] * self.weights['semantic_patterns'] +
+                temporal_scores[participant]["maker"] * self.weights['temporal_position'] +
+                flow_scores[participant]["maker"] * self.weights['conversation_flow'] +
+                hierarchy_scores[participant]["maker"] * self.weights['hierarchy_analysis']
+            ) / sum(self.weights.values())
+            
+            checker_score = (
+                keyword_scores[participant]["checker"] * self.weights['keyword_presence'] +
+                semantic_scores[participant]["checker"] * self.weights['semantic_patterns'] +
+                temporal_scores[participant]["checker"] * self.weights['temporal_position'] +
+                flow_scores[participant]["checker"] * self.weights['conversation_flow'] +
+                hierarchy_scores[participant]["checker"] * self.weights['hierarchy_analysis']
+            ) / sum(self.weights.values())
+            
+            scores[participant]["maker"] = maker_score
+            scores[participant]["checker"] = checker_score
+            
+            # Store breakdown for transparency
+            scores[participant]["breakdown"] = {
+                "keyword": keyword_scores[participant],
+                "semantic": semantic_scores[participant],
+                "temporal": temporal_scores[participant],
+                "flow": flow_scores[participant],
+                "hierarchy": hierarchy_scores[participant]
+            }
+        
+        return scores
+
+# -----------------------------
+# Enhanced Decision Confidence Scoring
+# -----------------------------
+def calculate_decision_confidence(maker, checker, scores, parsed_emails):
+    """Calculate how confident we are in the maker-checker identification"""
+    confidence_factors = {
+        "score_differential": 0,
+        "clear_winner": False,
+        "supporting_evidence": 0,
+        "contradictory_evidence": 0
+    }
+    
+    if not maker or not checker:
+        return "Very Low", confidence_factors
+    
+    # Get all candidates sorted by scores
+    maker_candidates = sorted([(p, s["maker"]) for p, s in scores.items()], key=lambda x: x[1], reverse=True)
+    checker_candidates = sorted([(p, s["checker"]) for p, s in scores.items()], key=lambda x: x[1], reverse=True)
+    
+    # Calculate score differentials
+    if len(maker_candidates) > 1:
+        score_diff_maker = (maker_candidates[0][1] - maker_candidates[1][1]) / max(maker_candidates[0][1], 1)
+    else:
+        score_diff_maker = 1.0  # Only one candidate
+    
+    if len(checker_candidates) > 1:
+        score_diff_checker = (checker_candidates[0][1] - checker_candidates[1][1]) / max(checker_candidates[0][1], 1)
+    else:
+        score_diff_checker = 1.0  # Only one candidate
+    
+    confidence_factors["score_differential"] = (score_diff_maker + score_diff_checker) / 2
+    confidence_factors["clear_winner"] = confidence_factors["score_differential"] > Config.CONFIDENCE_THRESHOLDS['high']
+    
+    # Determine confidence level
+    if confidence_factors["clear_winner"] and confidence_factors["score_differential"] > Config.CONFIDENCE_THRESHOLDS['very_high']:
+        return "Very High", confidence_factors
+    elif confidence_factors["clear_winner"]:
+        return "High", confidence_factors
+    elif confidence_factors["score_differential"] > Config.CONFIDENCE_THRESHOLDS['medium']:
+        return "Medium", confidence_factors
+    else:
+        return "Low", confidence_factors
+
+# -----------------------------
+# Enhanced Fallback Strategies
+# -----------------------------
+def apply_fallback_strategies(parsed_emails, initial_maker, initial_checker, scores):
+    """Apply fallback strategies when primary identification is weak"""
+    participants = extract_all_participants(parsed_emails)
+    
+    # Strategy 1: First-last rule
+    if not initial_maker or not initial_checker:
+        first_sender = clean_participant_name(parsed_emails[0]["Sender"])
+        last_sender = clean_participant_name(parsed_emails[-1]["Sender"])
+        
+        if first_sender != last_sender:
+            return first_sender, last_sender, "first_last_fallback"
+    
+    # Strategy 2: Most active participant as checker
+    if not initial_checker:
+        email_counts = {}
+        for email in parsed_emails:
+            sender = clean_participant_name(email["Sender"])
+            email_counts[sender] = email_counts.get(sender, 0) + 1
+        
+        most_active = max(email_counts.items(), key=lambda x: x[1])[0]
+        if most_active != initial_maker:
+            return initial_maker, most_active, "activity_fallback"
+    
+    # Strategy 3: External participant as checker
+    if len(participants) == 2:
+        other_participant = [p for p in participants if p != initial_maker][0]
+        return initial_maker, other_participant, "two_party_fallback"
+    
+    return initial_maker, initial_checker, "primary_method"
+
+# -----------------------------
+# Enhanced Email Parsing (Updated)
+# -----------------------------
+def parse_email_chain(text):
+    email_chunks = split_emails(text)
+    parsed = []
+    for i, email in enumerate(email_chunks):
+        sender = extract_field(email, "From")
+        receiver = extract_field(email, "To")
+        cc = extract_field(email, "Cc")
+        bcc = extract_field(email, "Bcc")
+        subject = extract_field(email, "Subject")
+        date_raw = extract_field(email, "Sent")
+        dt = parse_date_time(date_raw)
+        date_str = dt.date().isoformat() if dt else ""
+        time_str = dt.time().isoformat() if dt else ""
+        body = extract_body(email)
+        approval_statement, approval_type = find_matching_statement(body, APPROVER_KEYWORDS.keys())
+        request_statement, request_type = find_matching_statement(body, REQUESTER_KEYWORDS.keys())
+        
+        # Extract semantic patterns
+        semantic_patterns = extract_semantic_patterns(body)
+        
+        parsed.append({
+            "Email Sequence": i + 1,
+            "Sender": sender,
+            "Receiver": receiver,
+            "cc": cc,
+            "bcc": bcc,
+            "subject": subject,
+            "email body": body,
+            "approval statement": approval_statement,
+            "approval match type": approval_type,
+            "request statement": request_statement,
+            "request match type": request_type,
+            "semantic_patterns": str(semantic_patterns),  # Convert dict to string for CSV
+            "datetime": dt,
+            "date": date_str,
+            "time": time_str
+        })
+    
+    # Sort by datetime
+    parsed = sorted(parsed, key=lambda x: x["datetime"] if x["datetime"] else datetime.min)
+    for i, email in enumerate(parsed):
+        email["Email Sequence"] = i + 1
+    
+    return parsed
+
+def extract_all_participants(parsed_emails):
+    participants = set()
+    for email in parsed_emails:
+        sender = clean_participant_name(email["Sender"])
+        if sender: participants.add(sender)
+        receivers = [clean_participant_name(r) for r in email["Receiver"].split(',') if email["Receiver"]]
+        participants.update([r for r in receivers if r])
+        cc = [clean_participant_name(c) for c in email["cc"].split(',')] if email["cc"] else []
+        participants.update([c for c in cc if c])
+        bcc = [clean_participant_name(b) for b in email["bcc"].split(',')] if email["bcc"] else []
+        participants.update([b for b in bcc if b])
+    return sorted(participants)
+
+# -----------------------------
+# Enhanced Maker-Checker Identification with Restrictions
+# -----------------------------
+def identify_maker_checker_with_restrictions(parsed_emails):
+    if not parsed_emails: 
+        return "", "", {}, [], "Very Low", {}, {}, "", {}
+    
+    # Get participants with roles and restrictions
+    participants_with_roles = extract_participants_with_roles(parsed_emails)
+    restrictions = calculate_role_restrictions(participants_with_roles)
+    
+    # Use advanced scoring engine
+    scoring_engine = AdvancedScoringEngine()
+    scores = scoring_engine.calculate_comprehensive_scores(parsed_emails)
+    
+    # Apply restrictions and bonuses
+    for participant in scores.keys():
+        if participant in restrictions:
+            # Apply CC/BCC restrictions
+            if not restrictions[participant]["can_be_maker"]:
+                scores[participant]["maker"] = 0
+            if not restrictions[participant]["can_be_checker"]:
+                scores[participant]["checker"] = 0
+            
+            # Apply bonuses
+            if "maker_bonus" in restrictions[participant]:
+                scores[participant]["maker"] += restrictions[participant]["maker_bonus"]
+            if "checker_bonus" in restrictions[participant]:
+                scores[participant]["checker"] += restrictions[participant]["checker_bonus"]
+    
+    # Find maker (requester) - highest maker score
+    valid_maker_candidates = [(p, s["maker"]) for p, s in scores.items() 
+                             if s["maker"] > 0 and (p in restrictions and restrictions[p]["can_be_maker"])]
+    valid_checker_candidates = [(p, s["checker"]) for p, s in scores.items() 
+                               if s["checker"] > 0 and (p in restrictions and restrictions[p]["can_be_checker"])]
+    
+    valid_maker_candidates.sort(key=lambda x: x[1], reverse=True)
+    valid_checker_candidates.sort(key=lambda x: x[1], reverse=True)
+    
+    # Get initial identification
+    initial_maker = valid_maker_candidates[0][0] if valid_maker_candidates else ""
+    initial_checker = valid_checker_candidates[0][0] if valid_checker_candidates else ""
+    
+    # Apply fallback strategies if needed
+    maker, checker, method_used = apply_fallback_strategies(parsed_emails, initial_maker, initial_checker, scores)
+    
+    # Calculate confidence
+    confidence, confidence_factors = calculate_decision_confidence(maker, checker, scores, parsed_emails)
+    
+    # Get context analysis
+    context = analyze_email_context(parsed_emails)
+    
+    return maker, checker, scores, valid_maker_candidates, confidence, confidence_factors, context, method_used, restrictions
+
+# -----------------------------
+# Enhanced Dataiku Folder Save/Load
+# -----------------------------
+def save_enhanced_csv(parsed_emails, output_folder, filename):
+    output_path = os.path.join(tempfile.gettempdir(), filename)
+    
+    # Enhanced fieldnames to include participant role analysis
+    fieldnames = [
+        "Email Sequence", "Sender", "Receiver", "cc", "bcc", "subject", 
+        "email body", "approval statement", "approval match type", 
+        "request statement", "request match type", "semantic_patterns",
+        "datetime", "date", "time"
+    ]
+    
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in parsed_emails:
+            writer.writerow(row)
+    
+    with open(output_path, "rb") as f:
+        output_folder.upload_stream(filename, f)
+    os.remove(output_path)
+    log(f"✅ Saved {filename}")
+
+def save_participant_analysis_csv(parsed_emails, output_folder, filename):
+    """Create a separate CSV analyzing all participants and their roles"""
+    participants_analysis = analyze_participant_roles(parsed_emails)
+    
+    output_path = os.path.join(tempfile.gettempdir(), filename)
+    
+    fieldnames = [
+        "Participant", "Total_Emails", "As_Sender", "As_Receiver", 
+        "As_CC", "As_BCC", "First_Email_Sender", "First_Email_Receiver",
+        "Only_CC_BCC", "Role_Restriction", "Possible_Maker", "Possible_Checker"
+    ]
+    
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        for participant, data in participants_analysis.items():
+            only_cc_bcc = (data["As_Sender"] == 0 and data["As_Receiver"] == 0 and 
+                          (data["As_CC"] > 0 or data["As_BCC"] > 0))
+            
+            role_restriction = "CC/BCC Only - Cannot be Maker/Checker" if only_cc_bcc else "No Restrictions"
+            
+            writer.writerow({
+                "Participant": participant,
+                "Total_Emails": data["Total_Emails"],
+                "As_Sender": data["As_Sender"],
+                "As_Receiver": data["As_Receiver"],
+                "As_CC": data["As_CC"],
+                "As_BCC": data["As_BCC"],
+                "First_Email_Sender": data["First_Email_Sender"],
+                "First_Email_Receiver": data["First_Email_Receiver"],
+                "Only_CC_BCC": only_cc_bcc,
+                "Role_Restriction": role_restriction,
+                "Possible_Maker": not only_cc_bcc,
+                "Possible_Checker": not only_cc_bcc
+            })
+    
+    with open(output_path, "rb") as f:
+        output_folder.upload_stream(filename, f)
+    os.remove(output_path)
+    log(f"✅ Saved participant analysis: {filename}")
+
+def save_enhanced_summary(parsed_emails, scores, output_folder, filename, 
+                         maker, checker, confidence, confidence_factors, 
+                         context, method_used, restrictions):
+    """Save enhanced summary with all analysis details"""
+    output_path = os.path.join(tempfile.gettempdir(), filename)
+    
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("=== ENHANCED MAKER-CHECKER ANALYSIS ===\n\n")
+        f.write(f"Maker (Requester): {maker}\n")
+        f.write(f"Checker (Approver): {checker}\n")
+        f.write(f"Confidence Level: {confidence}\n")
+        f.write(f"Identification Method: {method_used}\n")
+        f.write(f"Total Emails Analyzed: {len(parsed_emails)}\n\n")
+        
+        f.write("=== CONFIDENCE ANALYSIS ===\n")
+        f.write(f"Score Differential: {confidence_factors.get('score_differential', 0):.2f}\n")
+        f.write(f"Clear Winner: {confidence_factors.get('clear_winner', False)}\n\n")
+        
+        f.write("=== CONTEXT ANALYSIS ===\n")
+        f.write(f"Urgency Indicators: {context.get('urgency_indicators', 0):.2f}\n")
+        f.write(f"Formality Level: {context.get('formality_level', 'medium')}\n")
+        f.write(f"Multi-party Negotiation: {context.get('multi_party_negotiation', False)}\n")
+        f.write(f"Total Participants: {context.get('total_participants', 0)}\n\n")
+        
+        f.write("=== PARTICIPANT RESTRICTIONS ===\n")
+        for participant, restriction_data in restrictions.items():
+            f.write(f"  {participant}: {restriction_data.get('restriction_reason', 'No restrictions')}\n")
+        f.write("\n")
+        
+        f.write("=== DETAILED SCORE BREAKDOWN ===\n")
+        for participant, score_data in scores.items():
+            f.write(f"\nParticipant: {participant}\n")
+            f.write(f"  Final Maker Score: {score_data['maker']:.2f}\n")
+            f.write(f"  Final Checker Score: {score_data['checker']:.2f}\n")
+            
+            # Breakdown details
+            breakdown = score_data.get('breakdown', {})
+            f.write("  Breakdown:\n")
+            for category, cat_scores in breakdown.items():
+                f.write(f"    {category.title()}: Maker={cat_scores.get('maker', 0):.1f}, Checker={cat_scores.get('checker', 0):.1f}\n")
+    
+    with open(output_path, "rb") as f:
+        output_folder.upload_stream(filename, f)
+    os.remove(output_path)
+    log(f"✅ Saved enhanced summary: {filename}")
+
+def save_enhanced_user_roles(parsed_emails, maker, checker, output_folder, filename):
+    """Save user roles with CC/BCC restrictions clearly marked"""
+    participants_analysis = analyze_participant_roles(parsed_emails)
+    
+    output_path = os.path.join(tempfile.gettempdir(), filename)
+    
+    fieldnames = [
+        "Name", "Role", "Total_Emails", "As_Sender", "As_Receiver", 
+        "As_CC", "As_BCC", "Only_CC_BCC", "Restriction_Applied",
+        "First_Email_Sender", "First_Email_Receiver"
+    ]
+    
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        for participant, data in participants_analysis.items():
+            only_cc_bcc = (data["As_Sender"] == 0 and data["As_Receiver"] == 0 and 
+                          (data["As_CC"] > 0 or data["As_BCC"] > 0))
+            
+            # Determine role with restrictions
+            if only_cc_bcc:
+                role = "CC/BCC Only Participant"
+                restriction_applied = "YES - Cannot be Maker/Checker"
+            elif participant == maker:
+                role = "Maker"
+                restriction_applied = "NO"
+            elif participant == checker:
+                role = "Checker"
+                restriction_applied = "NO"
+            else:
+                role = "Participant"
+                restriction_applied = "NO"
+            
+            writer.writerow({
+                "Name": participant,
+                "Role": role,
+                "Total_Emails": data["Total_Emails"],
+                "As_Sender": data["As_Sender"],
+                "As_Receiver": data["As_Receiver"],
+                "As_CC": data["As_CC"],
+                "As_BCC": data["As_BCC"],
+                "Only_CC_BCC": only_cc_bcc,
+                "Restriction_Applied": restriction_applied,
+                "First_Email_Sender": data["First_Email_Sender"],
+                "First_Email_Receiver": data["First_Email_Receiver"]
+            })
+    
+    with open(output_path, "rb") as f:
+        output_folder.upload_stream(filename, f)
+    os.remove(output_path)
+    log(f"✅ Saved enhanced user roles: {filename}")
+
+# -----------------------------
+# Enhanced Main Execution
+# -----------------------------
+def main():
+    INPUT_FOLDER_CODE = "YOUR_INPUT_FOLDER_ID"   # Replace with your Dataiku input folder code
+    OUTPUT_FOLDER_CODE = "YOUR_OUTPUT_FOLDER_ID" # Replace with your Dataiku output folder code
+
+    input_folder = dataiku.Folder(INPUT_FOLDER_CODE)
+    output_folder = dataiku.Folder(OUTPUT_FOLDER_CODE)
+
+    # List all .txt files
+    txt_files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith(".txt")]
+    if not txt_files:
+        log("❌ No .txt email files found in input folder.")
+        return
+
+    for txt_file in txt_files:
+        log(f"📄 Processing {txt_file}...")
+        
+        # Download to temp file
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp_file:
+            tmp_path = tmp_file.name
+            with input_folder.get_download_stream(txt_file) as stream:
+                shutil.copyfileobj(stream, tmp_file)
+
+        # Read file content
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            email_text = f.read()
+
+        parsed_emails = parse_email_chain(email_text)
+        if not parsed_emails:
+            log(f"⚠️ No emails parsed in {txt_file}. Skipping.")
+            os.remove(tmp_path)
+            continue
+
+        # Enhanced identification with all new features
+        maker, checker, scores, candidates, confidence, confidence_factors, context, method_used, restrictions = identify_maker_checker_with_restrictions(parsed_emails)
+        
+        base_name = os.path.splitext(os.path.basename(txt_file))[0]
+
+        # Save enhanced outputs
+        save_enhanced_csv(parsed_emails, output_folder, f"parsed_emails_{base_name}.csv")
+        save_participant_analysis_csv(parsed_emails, output_folder, f"participant_analysis_{base_name}.csv")
+        save_enhanced_summary(
+            parsed_emails, scores, output_folder, f"enhanced_summary_{base_name}.txt",
+            maker, checker, confidence, confidence_factors, context, method_used, restrictions
+        )
+        save_enhanced_user_roles(parsed_emails, maker, checker, output_folder, f"users_{base_name}.csv")
+
+        os.remove(tmp_path)
+        log(f"✅ Finished processing {txt_file}")
+        log(f"   Maker: {maker}, Checker: {checker}, Confidence: {confidence}")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python email_parse.py <input_email_text_file>")
-    else:
-        main(sys.argv[1])
+    main()
