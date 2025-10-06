@@ -635,29 +635,31 @@ def get_top_candidate(candidates_dict, min_threshold):
 def resolve_role_conflict(potential_makers, potential_checkers, conflicted_person):
     """
     Resolve when the same person is top candidate for both maker and checker
+    Uses HIGHEST single score for conflict resolution
     """
     maker_data = potential_makers.get(conflicted_person, {})
     checker_data = potential_checkers.get(conflicted_person, {})
     
-    maker_score = maker_data.get("average_score", 0)
-    checker_score = checker_data.get("average_score", 0)
+    # Use HIGHEST score (peak performance) for conflict resolution
+    maker_highest = maker_data.get("highest_score", 0)
+    checker_highest = checker_data.get("highest_score", 0)
     
-    # Assign the role where the person has the higher score
-    if maker_score >= checker_score:
+    # Assign the role where the person has the higher peak score
+    if maker_highest >= checker_highest:
         # Person becomes maker, find next best checker
         final_maker = conflicted_person
-        final_checker = get_second_best_candidate(potential_checkers, conflicted_person, 30)
-        resolution_method = f"conflict_resolution_maker_higher({maker_score:.1f} vs {checker_score:.1f})"
+        final_checker = get_second_best_candidate_by_highest(potential_checkers, conflicted_person, 30)
+        resolution_method = f"conflict_resolution_maker_highest_peak({maker_highest:.1f} vs {checker_highest:.1f})"
     else:
         # Person becomes checker, find next best maker
         final_checker = conflicted_person
-        final_maker = get_second_best_candidate(potential_makers, conflicted_person, 30)
-        resolution_method = f"conflict_resolution_checker_higher({checker_score:.1f} vs {maker_score:.1f})"
+        final_maker = get_second_best_candidate_by_highest(potential_makers, conflicted_person, 30)
+        resolution_method = f"conflict_resolution_checker_highest_peak({checker_highest:.1f} vs {maker_highest:.1f})"
     
     return final_maker, final_checker, resolution_method
 
-def get_second_best_candidate(candidates_dict, exclude_person, min_threshold):
-    """Get second best candidate excluding a specific person"""
+def get_second_best_candidate_by_highest(candidates_dict, exclude_person, min_threshold):
+    """Get second best candidate based on HIGHEST score excluding a specific person"""
     if not candidates_dict:
         return None
     
@@ -668,13 +670,12 @@ def get_second_best_candidate(candidates_dict, exclude_person, min_threshold):
         if participant == exclude_person:
             continue
             
-        avg_score = data["average_score"]
-        if avg_score > best_score and avg_score > min_threshold:
+        highest_score = data.get("highest_score", 0)
+        if highest_score > best_score and highest_score > min_threshold:
             best_candidate = participant
-            best_score = avg_score
+            best_score = highest_score
     
     return best_candidate
-
 # -----------------------------
 # Enhanced CSV Output Functions
 # -----------------------------
