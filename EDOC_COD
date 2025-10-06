@@ -705,3 +705,90 @@ def format_results_for_web(analysis, parsed_emails):
             for email_analysis in analysis["conversation_history"]
         ]
     }
+
+
+# -----------------------------
+# Dataiku Webapp Endpoints
+# -----------------------------
+
+def do(payload, config, plugin_config, inputs):
+    """Initial endpoint when page loads"""
+    return {"status": "ready"}
+
+def do_parse_file(payload, config, plugin_config, inputs):
+    """Preview uploaded file content"""
+    try:
+        file_data = payload.get("file_data", "")
+        file_name = payload.get("file_name", "uploaded_file.txt")
+
+        if not file_data:
+            return {"error": "No file uploaded"}
+
+        if "," in file_data:
+            file_data = file_data.split(",")[1]
+
+        file_content = base64.b64decode(file_data).decode("utf-8")
+        email_text = clean_email_addresses(file_content)
+        parsed_emails = parse_email_chain(email_text)
+
+        if not parsed_emails:
+            return {"error": "No emails parsed"}
+
+        participants = extract_all_participants(parsed_emails)
+
+        return {
+            "success": True,
+            "file_name": file_name,
+            "parsed_emails_count": len(parsed_emails),
+            "participants": list(participants),
+            "email_preview": [
+                {
+                    "sequence": e["Email Sequence"],
+                    "sender": e["Sender"],
+                    "receivers": e["Receiver"],
+                    "subject": e["subject"],
+                    "date": e["date"],
+                    "body_preview": (e["email body"][:100] + "...") if len(e["email body"]) > 100 else e["email body"]
+                }
+                for e in parsed_emails[:3]
+            ]
+        }
+
+    except Exception as e:
+        return {"error": f"File parsing failed: {str(e)}"}
+
+def do_analyze_emails(payload, config, plugin_config, inputs):
+    """Perform full analysis on uploaded file"""
+    try:
+        file_data = payload.get("file_data", "")
+        file_name = payload.get("file_name", "uploaded_file.txt")
+
+        if not file_data:
+            return {"error": "No file uploaded"}
+
+        if "," in file_data:
+            file_data = file_data.split(",")[1]
+
+        file_content = base64.b64decode(file_data).decode("utf-8")
+        email_text = clean_email_addresses(file_content)
+        parsed_emails = parse_email_chain(email_text)
+
+        if not parsed_emails:
+            return {"error": "No emails parsed"}
+
+        sequential_analysis = analyze_email_sequentially(parsed_emails)
+        results = format_results_for_web(sequential_analysis, parsed_emails)
+
+        # Optional: save parsed emails as CSV for download
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+        fieldnames = parsed_emails[0].keys()
+        with open(temp_file.name, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(parsed_emails)
+        results["csv_download_path"] = temp_file.name
+
+        return {"success": True, "results": results, "file_name": file_name}
+
+    except Exception as e:
+        return {"error": f"Analysis failed: {str(e)}"}
