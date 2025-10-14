@@ -1,83 +1,114 @@
 import dataiku
 import pandas as pd
 import zipfile
-from io import BytesIO
+import tempfile
+import shutil
 import os
+import sys
+from io import BytesIO
 
 # ------------------------------------------------------------
-# Helper: detect start and end of the actual table
+# Fixed folder handles using Dataiku folder IDs
+# ------------------------------------------------------------
+input_folder = dataiku.Folder("your_input_folder_id")     # 👈 Replace with your input folder ID
+output_folder = dataiku.Folder("your_output_folder_id")   # 👈 Replace with your output folder ID
+
+# ------------------------------------------------------------
+# Logging helper
+# ------------------------------------------------------------
+def log(message):
+    print(f"[LOG] {message}", file=sys.stderr, flush=True)
+
+# ------------------------------------------------------------
+# Detect start and end of the main data table
 # ------------------------------------------------------------
 def extract_table(df):
-    """
-    Automatically detect table start and end based on blank rows.
-    Keeps only the contiguous block of data (non-empty rows).
-    """
     non_empty_rows = df.dropna(how='all')
     if non_empty_rows.empty:
         return pd.DataFrame()
-
+    
     start_idx = non_empty_rows.index[0]
     end_idx = non_empty_rows.index[-1]
-    
     df_table = df.loc[start_idx:end_idx].copy()
 
-    # Use first row as header if it looks like one
     header_row = df_table.iloc[0]
     if header_row.notna().sum() >= 2:
         df_table.columns = header_row
         df_table = df_table[1:].reset_index(drop=True)
-
-    return df_table
-
-
-# ------------------------------------------------------------
-# Helper: read one ZIP and extract Excel table
-# ------------------------------------------------------------
-def read_excel_from_zip_bytes(zip_bytes, excel_tab_name):
-    with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
-        excel_files = [f for f in zf.namelist() if f.endswith('.xlsx')]
-        if not excel_files:
-            raise ValueError("No Excel (.xlsx) file found in ZIP archive.")
-        
-        excel_filename = excel_files[0]
-        with zf.open(excel_filename) as excel_file:
-            df_full = pd.read_excel(excel_file, sheet_name=excel_tab_name, header=None)
     
-    df_table = extract_table(df_full)
     return df_table
 
+# ------------------------------------------------------------
+# Extract Excel sheet from ZIP
+# ------------------------------------------------------------
+def process_zip(zip_path, sheet_name):
+    file_name = os.path.basename(zip_path)
+    log(f"📦 Processing ZIP: {file_name}")
+
+    # Download ZIP into temp file
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_zip:
+        tmp_zip_path = tmp_zip.name
+        with input_folder.get_download_stream(zip_path) as stream:
+            shutil.copyfileobj(stream, tmp_zip)
+
+    # Extract Excel and read table
+    try:
+        with zipfile.ZipFile(tmp_zip_path, "r") as zf:
+            excel_files = [f for f in zf.namelist() if f.endswith(".xlsx")]
+            if not excel_files:
+                raise Exception("No Excel file found inside ZIP.")
+            
+            excel_name = excel_files[0]
+            log(f"📊 Found Excel: {excel_name}")
+
+            with zf.open(excel_name) as excel_file:
+                df_full = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
+
+        df_table = extract_table(df_full)
+        log(f"✅ Extracted table with {len(df_table)} rows and {len(df_table.columns)} columns")
+
+        # Write output CSV to temp, then upload
+        output_filename = file_name.replace(".zip", "_table.csv")
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
+            df_table.to_csv(tmp_csv.name, index=False, encoding='utf-8-sig')
+            tmp_csv_path = tmp_csv.name
+
+        with open(tmp_csv_path, 'rb') as f:
+            output_folder.upload_stream(output_filename, f)
+
+        log(f"💾 Saved extracted table to {output_filename}")
+
+        # Cleanup
+        os.remove(tmp_csv_path)
+        os.remove(tmp_zip_path)
+
+    except Exception as e:
+        log(f"🔥 Error processing {file_name}: {str(e)}")
+        os.remove(tmp_zip_path)
 
 # ------------------------------------------------------------
-# MAIN EXECUTION
+# Main Function
 # ------------------------------------------------------------
 def main():
-    INPUT_FOLDER = dataiku.Folder("your_input_folder_id")   # 👈 Folder containing ZIPs
-    OUTPUT_FOLDER = dataiku.Folder("your_output_folder_id") # 👈 Folder to write CSV/XLSX
-    TAB_NAME = "Sheet1"                                     # 👈 Excel tab name to extract
+    try:
+        SHEET_NAME = "Sheet1"  # 👈 Change as needed
+        log("🔍 Scanning input folder for ZIP files...")
+        
+        zip_files = input_folder.list_paths_in_partition()
+        zip_files = [f for f in zip_files if f.lower().endswith(".zip")]
 
-    zip_files = [f for f in INPUT_FOLDER.list_paths_in_partition() if f.endswith('.zip')]
-    print(f"Found {len(zip_files)} ZIP files to process.")
+        if not zip_files:
+            raise Exception("❌ No ZIP files found in the input folder.")
 
-    for zip_path in zip_files:
-        with INPUT_FOLDER.get_download_stream(zip_path) as stream:
-            zip_bytes = stream.read()
+        log(f"📦 Found {len(zip_files)} ZIP files.")
+        for zip_path in zip_files:
+            process_zip(zip_path, SHEET_NAME)
 
-        try:
-            df_table = read_excel_from_zip_bytes(zip_bytes, TAB_NAME)
-            
-            # Build output file name (CSV format)
-            zip_name = os.path.basename(zip_path).replace('.zip', '_table.csv')
-            output_path = os.path.join(OUTPUT_FOLDER.get_path(), zip_name)
-            
-            # Save extracted table to output folder
-            df_table.to_csv(output_path, index=False, encoding='utf-8-sig')
+        log("🎯 All ZIPs processed successfully.")
 
-            print(f"✅ Extracted and saved table from {zip_name}")
-        except Exception as e:
-            print(f"⚠️ Skipped {zip_path}: {e}")
-
-    print("🎯 All ZIPs processed successfully.")
-
+    except Exception as e:
+        log(f"🔥 ERROR: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     main()
