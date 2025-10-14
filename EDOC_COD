@@ -1,73 +1,122 @@
 import dataiku
 import tempfile
 import os
+import logging
+from dataiku import pandasutils as pdu
 
-def main():
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger()
+
+def extract_zip_with_py7zr():
     try:
         import py7zr
     except ImportError:
-        print("ERROR: py7zr not installed. Please install it in your Dataiku environment.")
-        print("To install: pip install py7zr")
+        logger.error("py7zr not installed. Please install it in your Dataiku code environment.")
+        logger.info("To install: Go to Administration > Settings > Code Envs > Your Environment > Packages > Add 'py7zr'")
         return
     
-    input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_NAME")
-    output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_NAME")
+    # Configure your folders - UPDATE THESE NAMES
+    input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_NAME")  # Change this
+    output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_NAME")  # Change this
     
-    print("Starting py7zr extraction process...")
+    logger.info("Starting py7zr extraction process...")
     
-    # List all 7z files (or modify for zip files)
+    # Get all zip files from input folder
     all_files = input_folder.list_paths_in_partition()
-    archive_files = [f for f in all_files if f.lower().endswith(('.7z', '.zip'))]
+    zip_files = [f for f in all_files if f.lower().endswith('.zip')]
     
-    print(f"Found {len(archive_files)} archive files: {archive_files}")
+    logger.info(f"Found {len(zip_files)} zip files: {zip_files}")
     
-    processed_count = 0
+    if not zip_files:
+        logger.warning("No zip files found in input folder!")
+        return
     
-    for archive_path in archive_files:
+    processed_files = []
+    error_files = []
+    
+    for zip_path in zip_files:
         try:
-            print(f"\n--- Processing: {archive_path} ---")
+            logger.info(f"Processing: {zip_path}")
             
-            # Download archive file
-            with input_folder.get_download_stream(archive_path) as stream:
-                archive_content = stream.read()
+            # Download zip file content
+            with input_folder.get_download_stream(zip_path) as stream:
+                zip_content = stream.read()
             
-            # Create temporary directory
+            # Create temporary directory for extraction
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Save archive to temporary file
-                temp_archive_path = os.path.join(temp_dir, "temp_archive")
-                with open(temp_archive_path, 'wb') as f:
-                    f.write(archive_content)
+                # Save zip to temporary file
+                temp_zip_path = os.path.join(temp_dir, "temp_archive.zip")
+                with open(temp_zip_path, 'wb') as f:
+                    f.write(zip_content)
                 
                 # Extract using py7zr
-                with py7zr.SevenZipFile(temp_archive_path, mode='r') as z:
-                    z.extractall(temp_dir)
-                
-                print("Extraction successful")
-                
-                # Find extracted Excel files
-                for root, dirs, files in os.walk(temp_dir):
-                    for file in files:
-                        if file.lower().endswith(('.xlsx', '.xls', '.xlsm')):
-                            file_path = os.path.join(root, file)
+                with py7zr.SevenZipFile(temp_zip_path, mode='r') as archive:
+                    # Get list of files in archive
+                    file_list = archive.getnames()
+                    logger.info(f"Files in archive: {file_list}")
+                    
+                    # Extract all files to temp directory
+                    archive.extractall(temp_dir)
+                    
+                    # Find and process Excel files
+                    excel_files = [f for f in file_list if f.lower().endswith(('.xlsx', '.xls', '.xlsm'))]
+                    logger.info(f"Excel files found: {excel_files}")
+                    
+                    for excel_file in excel_files:
+                        try:
+                            # Construct full path to extracted file
+                            extracted_path = os.path.join(temp_dir, excel_file)
                             
-                            # Read extracted Excel file
-                            with open(file_path, 'rb') as f:
+                            # Read the extracted Excel file
+                            with open(extracted_path, 'rb') as f:
                                 excel_content = f.read()
                             
+                            # Get just the filename
+                            filename = os.path.basename(excel_file)
+                            
+                            # Handle duplicate filenames
+                            final_filename = filename
+                            counter = 1
+                            while final_filename in processed_files:
+                                name, ext = os.path.splitext(filename)
+                                final_filename = f"{name}_{counter}{ext}"
+                                counter += 1
+                            
                             # Save to output folder
-                            with output_folder.get_writer(file) as output_writer:
+                            with output_folder.get_writer(final_filename) as output_writer:
                                 output_writer.write(excel_content)
                             
-                            print(f"✓ Extracted: {file}")
-                            processed_count += 1
+                            logger.info(f"✓ Extracted: {final_filename}")
+                            processed_files.append(final_filename)
+                            
+                        except Exception as e:
+                            logger.error(f"✗ Error processing {excel_file}: {str(e)}")
+                            error_files.append(f"{zip_path}/{excel_file}")
             
-            print(f"✓ Completed: {archive_path}")
+            logger.info(f"✓ Completed: {zip_path}")
             
         except Exception as e:
-            print(f"✗ Error processing {archive_path}: {str(e)}")
+            logger.error(f"✗ Error processing zip file {zip_path}: {str(e)}")
+            error_files.append(zip_path)
     
-    print(f"\n=== PROCESSING COMPLETE ===")
-    print(f"Successfully extracted {processed_count} Excel files")
+    # Summary
+    logger.info("\n" + "="*50)
+    logger.info("EXTRACTION SUMMARY")
+    logger.info("="*50)
+    logger.info(f"Total zip files processed: {len(zip_files)}")
+    logger.info(f"Successfully extracted Excel files: {len(processed_files)}")
+    logger.info(f"Files with errors: {len(error_files)}")
+    
+    if processed_files:
+        logger.info("\nExtracted files:")
+        for file in processed_files:
+            logger.info(f"  ✓ {file}")
+    
+    if error_files:
+        logger.info("\nFiles with errors:")
+        for file in error_files:
+            logger.info(f"  ✗ {file}")
 
-if __name__ == "__main__":
-    main()
+# Run the function
+extract_zip_with_py7zr()
