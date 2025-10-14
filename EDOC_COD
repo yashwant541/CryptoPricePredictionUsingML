@@ -2,6 +2,7 @@ import dataiku
 import pandas as pd
 import zipfile
 from io import BytesIO
+import os
 
 # ------------------------------------------------------------
 # Helper: detect start and end of the actual table
@@ -11,7 +12,6 @@ def extract_table(df):
     Automatically detect table start and end based on blank rows.
     Keeps only the contiguous block of data (non-empty rows).
     """
-    # Drop completely empty rows and find first and last valid ones
     non_empty_rows = df.dropna(how='all')
     if non_empty_rows.empty:
         return pd.DataFrame()
@@ -19,12 +19,11 @@ def extract_table(df):
     start_idx = non_empty_rows.index[0]
     end_idx = non_empty_rows.index[-1]
     
-    # Extract only the table block
     df_table = df.loc[start_idx:end_idx].copy()
 
-    # Use first row as header if it's textual and next row is data
+    # Use first row as header if it looks like one
     header_row = df_table.iloc[0]
-    if header_row.notna().sum() >= 2:  # at least 2 columns have data
+    if header_row.notna().sum() >= 2:
         df_table.columns = header_row
         df_table = df_table[1:].reset_index(drop=True)
 
@@ -32,23 +31,18 @@ def extract_table(df):
 
 
 # ------------------------------------------------------------
-# Helper: read one ZIP and extract the Excel table
+# Helper: read one ZIP and extract Excel table
 # ------------------------------------------------------------
 def read_excel_from_zip_bytes(zip_bytes, excel_tab_name):
-    """
-    Given ZIP file bytes, read Excel inside and extract table.
-    """
     with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
-        # find Excel file(s)
         excel_files = [f for f in zf.namelist() if f.endswith('.xlsx')]
         if not excel_files:
-            raise ValueError("No Excel (.xlsx) file found in the ZIP archive.")
-
+            raise ValueError("No Excel (.xlsx) file found in ZIP archive.")
+        
         excel_filename = excel_files[0]
         with zf.open(excel_filename) as excel_file:
             df_full = pd.read_excel(excel_file, sheet_name=excel_tab_name, header=None)
     
-    # Extract the table dynamically
     df_table = extract_table(df_full)
     return df_table
 
@@ -57,37 +51,32 @@ def read_excel_from_zip_bytes(zip_bytes, excel_tab_name):
 # MAIN EXECUTION
 # ------------------------------------------------------------
 def main():
-    INPUT_FOLDER = dataiku.Folder("your_input_folder_id")   # 👈 Replace with folder ID containing ZIPs
-    OUTPUT_DATASET = "your_output_dataset_name"             # 👈 Replace with your output dataset name
-    TAB_NAME = "Sheet1"                                     # 👈 Replace with sheet/tab name
-    
-    folder_files = INPUT_FOLDER.list_paths_in_partition()
-    zip_files = [f for f in folder_files if f.endswith('.zip')]
+    INPUT_FOLDER = dataiku.Folder("your_input_folder_id")   # 👈 Folder containing ZIPs
+    OUTPUT_FOLDER = dataiku.Folder("your_output_folder_id") # 👈 Folder to write CSV/XLSX
+    TAB_NAME = "Sheet1"                                     # 👈 Excel tab name to extract
 
-    all_tables = []
-    
+    zip_files = [f for f in INPUT_FOLDER.list_paths_in_partition() if f.endswith('.zip')]
+    print(f"Found {len(zip_files)} ZIP files to process.")
+
     for zip_path in zip_files:
-        # Read each ZIP file’s raw bytes
         with INPUT_FOLDER.get_download_stream(zip_path) as stream:
             zip_bytes = stream.read()
-        
+
         try:
             df_table = read_excel_from_zip_bytes(zip_bytes, TAB_NAME)
-            df_table["Source_Zip"] = zip_path.split("/")[-1]   # track which ZIP it came from
-            all_tables.append(df_table)
-            print(f"✅ Extracted table from {zip_path}")
+            
+            # Build output file name (CSV format)
+            zip_name = os.path.basename(zip_path).replace('.zip', '_table.csv')
+            output_path = os.path.join(OUTPUT_FOLDER.get_path(), zip_name)
+            
+            # Save extracted table to output folder
+            df_table.to_csv(output_path, index=False, encoding='utf-8-sig')
+
+            print(f"✅ Extracted and saved table from {zip_name}")
         except Exception as e:
             print(f"⚠️ Skipped {zip_path}: {e}")
-    
-    # Combine all extracted tables
-    if all_tables:
-        final_df = pd.concat(all_tables, ignore_index=True)
-    else:
-        final_df = pd.DataFrame()
 
-    # Write to Dataiku dataset
-    output_dataset = dataiku.Dataset(OUTPUT_DATASET)
-    output_dataset.write_with_schema(final_df)
+    print("🎯 All ZIPs processed successfully.")
 
 
 if __name__ == "__main__":
