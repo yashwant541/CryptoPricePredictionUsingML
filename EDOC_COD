@@ -1,176 +1,66 @@
 import dataiku
-import pandas as pd
 import zipfile
-from io import BytesIO
-import tempfile
 import os
-import sys
+import tempfile
+from dataiku.core.dataset import Dataset
 
-# Fixed folder handles using Dataiku folder IDs
-input_folder = dataiku.Folder("your_input_folder_id")    # Replace with your input folder ID
-output_folder = dataiku.Folder("your_output_folder_id")  # Replace with your output folder ID
-
-def log(message):
-    """Logging with flush"""
-    print(f"[LOG] {message}", file=sys.stderr, flush=True)
-
-def validate_zip_file(file_path):
-    """Check if file is a valid ZIP file"""
-    try:
-        with zipfile.ZipFile(file_path, 'r') as zf:
-            # Test if ZIP file can be read
-            return zf.testzip() is None
-    except zipfile.BadZipFile:
-        return False
-    except Exception:
-        return False
-
-def process_excel_files_from_zip():
-    """
-    Process all Excel files from ZIP in input folder and save as CSV in output folder
-    """
-    tmp_zip_path = None
+def process_zip_files():
+    # Configure your folders
+    input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")
+    output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")
     
-    try:
-        log("🔍 Searching for ZIP files in the input folder...")
-        zip_files = input_folder.list_paths_in_partition()
-        zip_files = [f for f in zip_files if f.lower().endswith(".zip")]
-        
-        if not zip_files:
-            raise Exception("❌ No ZIP files found in the input folder.")
-        
-        # Process the first ZIP file found
-        zip_path = zip_files[0]
-        zip_name = os.path.basename(zip_path)
-        log(f"📦 Found file: {zip_name}")
-        
-        # Download file to temp file
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_zip:
-            tmp_zip_path = tmp_zip.name
+    # Get all zip files
+    zip_files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith('.zip')]
+    
+    processed_files = []
+    
+    for zip_path in zip_files:
+        try:
+            print(f"Processing {zip_path}...")
+            
+            # Download zip to temporary file
             with input_folder.get_download_stream(zip_path) as stream:
-                # Copy the entire stream to temporary file
-                shutil.copyfileobj(stream, tmp_zip)
-        
-        # Validate that it's actually a ZIP file
-        log("🔍 Validating ZIP file...")
-        if not validate_zip_file(tmp_zip_path):
-            # Check file size and content
-            file_size = os.path.getsize(tmp_zip_path)
-            log(f"📊 File size: {file_size} bytes")
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_file:
+                    tmp_file.write(stream.read())
+                    temp_zip_path = tmp_file.name
             
-            if file_size == 0:
-                raise Exception("❌ File is empty (0 bytes)")
+            # Extract zip
+            with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+                # Find Excel files
+                excel_files = [f for f in zip_ref.namelist() 
+                             if f.lower().endswith(('.xlsx', '.xls', '.xlsm'))]
+                
+                for excel_file in excel_files:
+                    # Extract and save Excel file
+                    with zip_ref.open(excel_file) as excel_stream:
+                        # Use original filename
+                        filename = os.path.basename(excel_file)
+                        output_path = filename
+                        
+                        # Handle duplicate filenames
+                        counter = 1
+                        while output_path in processed_files:
+                            name, ext = os.path.splitext(filename)
+                            output_path = f"{name}_{counter}{ext}"
+                            counter += 1
+                        
+                        with output_folder.get_writer(output_path) as output_writer:
+                            output_writer.write(excel_stream.read())
+                        
+                        processed_files.append(output_path)
+                        print(f"  Extracted: {output_path}")
             
-            # Try to read first few bytes to identify file type
-            with open(tmp_zip_path, 'rb') as f:
-                header = f.read(4)
-                log(f"📄 File header: {header.hex() if header else 'empty'}")
+            print(f"✓ Completed: {zip_path}")
             
-            raise Exception("❌ File is not a valid ZIP archive")
+        except Exception as e:
+            print(f"✗ Error processing {zip_path}: {str(e)}")
         
-        log("✅ ZIP file validation passed")
-        
-        processed_files = []
-        
-        # Process the ZIP file
-        with zipfile.ZipFile(tmp_zip_path, 'r') as zf:
-            # Get all Excel files from ZIP
-            excel_files = [f for f in zf.namelist() if f.lower().endswith(('.xlsx', '.xls'))]
-            
-            if not excel_files:
-                # List all files in ZIP for debugging
-                all_files = zf.namelist()
-                log(f"📁 Files in archive: {all_files}")
-                raise Exception("❌ No Excel files found in the ZIP archive.")
-            
-            log(f"📊 Found {len(excel_files)} Excel file(s) in ZIP")
-            
-            for excel_file in excel_files:
-                try:
-                    # Process each Excel file
-                    csv_filename = convert_excel_to_csv(zf, excel_file)
-                    processed_files.append(csv_filename)
-                    log(f"✅ Converted: {excel_file} → {csv_filename}")
-                    
-                except Exception as e:
-                    log(f"⚠️ Failed to process {excel_file}: {str(e)}")
-                    continue
-        
-        # Clean up temporary ZIP file
-        if tmp_zip_path and os.path.exists(tmp_zip_path):
-            os.remove(tmp_zip_path)
-        
-        log(f"🎉 Processing complete! Successfully converted {len(processed_files)} file(s)")
-        for file in processed_files:
-            log(f"   📄 {file}")
-            
-        return processed_files
-        
-    except Exception as e:
-        # Clean up temp file if it exists
-        if tmp_zip_path and os.path.exists(tmp_zip_path):
-            os.remove(tmp_zip_path)
-        log(f"🔥 ERROR: {str(e)}")
-        raise
-
-def convert_excel_to_csv(zf, excel_file_path):
-    """
-    Convert a single Excel file from ZIP to CSV and upload to output folder
-    """
-    try:
-        # Read Excel file into DataFrame
-        with zf.open(excel_file_path) as excel_file:
-            df = pd.read_excel(excel_file)
-        
-        log(f"📈 Read Excel: {excel_file_path} (shape: {df.shape})")
-        
-        # Generate CSV filename
-        csv_filename = generate_csv_filename(excel_file_path)
-        
-        # Create temporary CSV file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8') as tmp_csv:
-            tmp_csv_path = tmp_csv.name
-            df.to_csv(tmp_csv, index=False)
-        
-        # Upload CSV to output folder
-        with open(tmp_csv_path, 'rb') as csv_file:
-            output_folder.upload_stream(csv_filename, csv_file)
-        
-        # Clean up temporary CSV file
-        os.remove(tmp_csv_path)
-        
-        return csv_filename
-        
-    except Exception as e:
-        log(f"❌ Error converting {excel_file_path}: {str(e)}")
-        raise
-
-def generate_csv_filename(excel_file_path):
-    """
-    Generate clean CSV filename from Excel file path
-    """
-    # Get base name without extension
-    base_name = os.path.basename(excel_file_path)
-    name_without_ext = os.path.splitext(base_name)[0]
+        finally:
+            # Clean up
+            if 'temp_zip_path' in locals() and os.path.exists(temp_zip_path):
+                os.unlink(temp_zip_path)
     
-    # Clean the filename (remove special characters)
-    clean_name = "".join(c for c in name_without_ext if c.isalnum() or c in ('-', '_', ' '))
-    clean_name = clean_name.replace(' ', '_')
-    
-    csv_filename = f"{clean_name}.csv"
-    return csv_filename
+    print(f"\nProcessing complete. Extracted {len(processed_files)} Excel files.")
 
-def main():
-    """
-    Main execution function
-    """
-    log("🚀 Starting Excel to CSV conversion from ZIP...")
-    try:
-        processed_files = process_excel_files_from_zip()
-        log("✅ All files processed successfully!")
-    except Exception as e:
-        log(f"💥 Fatal error: {str(e)}")
-        # Don't re-raise to see the full error in logs
-
-if __name__ == "__main__":
-    main()
+# Run the function
+process_zip_files()
