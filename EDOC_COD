@@ -1,247 +1,282 @@
-import dataiku
+import pandas as pd
 import zipfile
 import os
 import tempfile
+import openpyxl
+import csv
+from datetime import datetime
+import dataiku
 
-def extract_excel_from_7zip_archives(input_folder_id, output_folder_id):
+def setup_dataiku_folders(input_folder_id, output_folder_id):
     """
-    Extract Excel files from ZIP archives created with 7zip software
-    Works with standard ZIP format but handles 7zip-specific cases
+    Set up Dataiku folder connections
+    Returns: input_folder, output_folder objects
     """
+    try:
+        client = dataiku.api_client()
+        project = dataiku.default_project()
+        
+        input_folder = project.get_folder(input_folder_id)
+        output_folder = project.get_folder(output_folder_id)
+        
+        print(f"Connected to input folder: {input_folder_id}")
+        print(f"Connected to output folder: {output_folder_id}")
+        
+        return input_folder, output_folder
+        
+    except Exception as e:
+        print(f"Error connecting to Dataiku folders: {e}")
+        raise
+
+def download_zip_files(input_folder, temp_dir):
+    """
+    Download ZIP files from Dataiku folder to temporary directory
+    """
+    downloaded_files = []
     
-    # Get Dataiku folder objects
-    input_folder = dataiku.Folder(input_folder_id)
-    output_folder = dataiku.Folder(output_folder_id)
+    try:
+        # List all files in the input folder
+        folder_contents = input_folder.list_paths_in_partition()
+        
+        for file_path in folder_contents:
+            if file_path.lower().endswith('.zip'):
+                # Get the file name
+                file_name = os.path.basename(file_path)
+                local_path = os.path.join(temp_dir, file_name)
+                
+                # Download the file
+                input_folder.download(file_path, local_path)
+                downloaded_files.append(local_path)
+                print(f"✓ Downloaded: {file_name}")
+                
+    except Exception as e:
+        print(f"Error downloading ZIP files: {e}")
+        
+    return downloaded_files
+
+def extract_zip_files(zip_files, extract_dir):
+    """
+    Extract ZIP files to temporary directory
+    """
+    extracted_files = []
     
-    # Get list of all files in input folder
-    input_paths = input_folder.list_paths_in_partition()
+    for zip_path in zip_files:
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+                extracted_files.extend([
+                    os.path.join(extract_dir, name) for name in zip_ref.namelist()
+                ])
+                print(f"✓ Extracted: {os.path.basename(zip_path)}")
+                
+        except Exception as e:
+            print(f"✗ Error extracting {zip_path}: {e}")
+            
+    return extracted_files
+
+def validate_excel(file_path, issues):
+    """
+    Validate Excel file using the same logic as original code
+    """
+    try:
+        wb = openpyxl.load_workbook(file_path, data_only=True)
+        
+        # Check if "COMPUTED DATA" sheet exists
+        if "COMPUTED DATA" not in wb.sheetnames:
+            issues.append([
+                os.path.basename(file_path), 
+                "N/A", 
+                "Missing 'COMPUTED DATA' sheet"
+            ])
+            return
+            
+        ws = wb["COMPUTED DATA"]
+        date = ws.cell(row=16, column=2).value if ws.cell(row=16, column=2).value else "N/A"
+
+        # Check last status (case-insensitive)
+        def get_last_status(ws):
+            status_rows = []
+            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=1):
+                if row[0].value and str(row[0].value).strip().lower() == "status":
+                    status_rows.append(row[0].row)
+            if status_rows:
+                last_status_row = status_rows[-1]
+                last_status_val = ws.cell(row=last_status_row, column=2).value
+                return last_status_val
+            return None
+
+        last_status_val = get_last_status(ws)
+        if not last_status_val or str(last_status_val).strip().lower() != "submitted":
+            issues.append([
+                os.path.basename(file_path), 
+                date, 
+                "Last status is not Submitted"
+            ])
+
+        df_labels = [
+            "DF1- Direct Relevant Transactions",
+            "DF2- Related Relevant Transactions",
+            "DF3- Market Transactions",
+            "DF4- Broker Quotes",
+            "DF5- Expert Judgement"
+        ]
+        
+        def find_row(ws, label):
+            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=1):
+                if row[0].value and label in str(row[0].value):
+                    return row[0].row
+            return None
+            
+        priority_rows = [find_row(ws, label) for label in df_labels]
+        chosen_rate_row = find_row(ws, "Chosen Rate")
+        final_rate_row = find_row(ws, "Final Rate")
+        rational_row = find_row(ws, "Rational for Proposing the Adjustment")
+
+        for col in range(2, ws.max_column + 1):
+            tenor = ws.cell(row=2, column=col).value
+            if not tenor:  # Skip empty columns
+                continue
+                
+            # Find the highest priority DF value
+            priority_val = None
+            priority_label = None
+            for idx, row in enumerate(priority_rows):
+                if row is not None:
+                    val = ws.cell(row=row, column=col).value
+                    if val != "N/A" and val is not None:
+                        priority_val = val
+                        priority_label = df_labels[idx]
+                        break
+                        
+            chosen_rate = ws.cell(row=chosen_rate_row, column=col).value if chosen_rate_row else None
+            final_rate = ws.cell(row=final_rate_row, column=col).value if final_rate_row else None
+            rational_val = ws.cell(row=rational_row, column=col).value if rational_row else None
+
+            # Step 1: Chosen Rate should match highest priority DF value
+            if priority_val is not None and chosen_rate != priority_val:
+                error_message = f"Chosen Rate ({chosen_rate}) does not match highest priority DF value ({priority_val}) from {priority_label} for tenor {tenor}"
+                if rational_val not in [None, "", "N/A"]:
+                    error_message += f". Rational provided: {rational_val}"
+                issues.append([
+                    os.path.basename(file_path), date, error_message
+                ])
+            # Step 2: Only if Chosen Rate matches DF value, check Final Rate
+            elif priority_val is not None and chosen_rate == priority_val and final_rate != chosen_rate:
+                issues.append([
+                    os.path.basename(file_path), date,
+                    f"Chosen Rate ({chosen_rate}) does not match Final Rate ({final_rate}) for tenor {tenor}"
+                ])
+            # Step 3: Rational should be empty only if there is a mismatch
+            elif priority_val is not None and chosen_rate != priority_val and rational_val not in [None, "", "N/A"]:
+                if not any("Rational for Proposing the Adjustment is not empty" in issue[2] for issue in issues):
+                    issues.append([
+                        os.path.basename(file_path), date,
+                        f"Rational for Proposing the Adjustment is not empty for tenor {tenor}"
+                    ])
+                    
+    except Exception as e:
+        issues.append([
+            os.path.basename(file_path),
+            "N/A",
+            f"Error processing file: {str(e)}"
+        ])
+
+def process_extracted_excels(extracted_files, output_folder):
+    """
+    Process all extracted Excel files and generate error reports
+    """
+    issues = []
     
-    # Filter for zip files
-    zip_files = [path for path in input_paths if path.lower().endswith('.zip')]
+    # Filter for Excel files
+    excel_files = [f for f in extracted_files if f.lower().endswith(('.xlsx', '.xls', '.xlsm'))]
     
-    print(f"Found {len(zip_files)} ZIP files to process")
+    print(f"\n--- Processing {len(excel_files)} Excel files ---")
     
-    # Create a temporary directory for extraction
+    for excel_file in excel_files:
+        try:
+            validate_excel(excel_file, issues)
+        except Exception as e:
+            print(f"Error processing {excel_file}: {e}")
+
+    # Generate error reports
+    if issues:
+        print(f"Found {len(issues)} issues across all files")
+        
+        # Create error report files in memory/temp
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8') as csv_temp:
+            csv_path = csv_temp.name
+            writer = csv.writer(csv_temp)
+            writer.writerow(["File Name", "Date", "Reason"])
+            for row in issues:
+                writer.writerow(row)
+        
+        with tempfile.NamedTemporaryFile(mode='wb', suffix='.xlsx', delete=False) as excel_temp:
+            excel_path = excel_temp.name
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Error Report"
+            ws.append(["File Name", "Date", "Reason"])
+            for row in issues:
+                ws.append(row)
+            wb.save(excel_path)
+        
+        # Upload reports to Dataiku
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        try:
+            output_folder.upload(excel_path, f"error_report_{timestamp}.xlsx")
+            output_folder.upload(csv_path, f"error_report_{timestamp}.csv")
+            print(f"✓ Uploaded error reports to Dataiku folder")
+        except Exception as e:
+            print(f"✗ Error uploading reports: {e}")
+        
+        # Clean up temp files
+        os.unlink(csv_path)
+        os.unlink(excel_path)
+    else:
+        print("✓ No issues found in any Excel files")
+
+def main():
+    """
+    Main function to process ZIP files from Dataiku folder
+    """
+    # Configuration - Update these with your actual Dataiku folder IDs
+    INPUT_FOLDER_ID = "input_zip_files"  # Folder containing ZIP files
+    OUTPUT_FOLDER_ID = "output_reports"  # Folder for error reports
+    
+    # Create temporary directories for processing
     with tempfile.TemporaryDirectory() as temp_dir:
-        for zip_path in zip_files:
-            try:
-                print(f"Processing: {zip_path}")
-                
-                # Download zip file to temporary location
-                local_zip_path = os.path.join(temp_dir, os.path.basename(zip_path))
-                with open(local_zip_path, 'wb') as f:
-                    for chunk in input_folder.get_download_stream(zip_path):
-                        f.write(chunk)
-                
-                # Try to open as standard ZIP file
-                try:
-                    with zipfile.ZipFile(local_zip_path, 'r') as zip_ref:
-                        # Get list of all files in archive
-                        file_list = zip_ref.namelist()
-                        
-                        # Filter for Excel files
-                        excel_files = [f for f in file_list 
-                                     if f.lower().endswith(('.xlsx', '.xls', '.xlsm'))]
-                        
-                        print(f"Found {len(excel_files)} Excel files in {os.path.basename(zip_path)}: {excel_files}")
-                        
-                        # Extract and save Excel files
-                        for excel_file in excel_files:
-                            try:
-                                # Extract to temporary directory
-                                zip_ref.extract(excel_file, temp_dir)
-                                extracted_path = os.path.join(temp_dir, excel_file)
-                                
-                                if os.path.exists(extracted_path):
-                                    # Create output filename
-                                    output_filename = os.path.basename(excel_file)
-                                    
-                                    # Upload to Dataiku output folder
-                                    with open(extracted_path, 'rb') as f:
-                                        output_folder.upload_stream(output_filename, f)
-                                    
-                                    print(f"✓ Successfully extracted: {output_filename}")
-                                    
-                                    # Clean up extracted file
-                                    os.remove(extracted_path)
-                                else:
-                                    print(f"✗ Extracted file not found: {extracted_path}")
-                                    
-                            except Exception as e:
-                                print(f"❌ Error extracting {excel_file}: {str(e)}")
-                                continue
-                
-                except zipfile.BadZipFile as e:
-                    print(f"❌ Bad ZIP file {zip_path}: {str(e)}")
-                    continue
-                except Exception as e:
-                    print(f"❌ Error reading ZIP file {zip_path}: {str(e)}")
-                    continue
-                    
-            except Exception as e:
-                print(f"❌ Error processing {zip_path}: {str(e)}")
-                continue
-    
-    print("ZIP file processing completed!")
+        extract_dir = os.path.join(temp_dir, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
+        
+        try:
+            # Set up Dataiku folder connections
+            input_folder, output_folder = setup_dataiku_folders(INPUT_FOLDER_ID, OUTPUT_FOLDER_ID)
+            
+            # Download ZIP files from Dataiku
+            print("\n--- Downloading ZIP files from Dataiku ---")
+            zip_files = download_zip_files(input_folder, temp_dir)
+            
+            if not zip_files:
+                print("No ZIP files found in input folder")
+                return
+            
+            # Extract ZIP files
+            print("\n--- Extracting ZIP files ---")
+            extracted_files = extract_zip_files(zip_files, extract_dir)
+            
+            if not extracted_files:
+                print("No files extracted from ZIP archives")
+                return
+            
+            # Process Excel files and generate reports
+            process_extracted_excels(extracted_files, output_folder)
+            
+            print(f"\n--- Process Complete. Processed {len(zip_files)} ZIP files ---")
+            
+        except Exception as e:
+            print(f"Error in main process: {e}")
+            raise
 
-# Alternative version that expects exactly one Excel file per archive
-def extract_single_excel_from_7zip_archives(input_folder_id, output_folder_id):
-    """
-    Extract the one and only Excel file from each ZIP archive
-    Raises error if multiple Excel files found
-    """
-    
-    input_folder = dataiku.Folder(input_folder_id)
-    output_folder = dataiku.Folder(output_folder_id)
-    
-    zip_files = [path for path in input_folder.list_paths_in_partition() 
-                if path.lower().endswith('.zip')]
-    
-    print(f"Found {len(zip_files)} ZIP files to process")
-    
-    with tempfile.TemporaryDirectory() as temp_dir:
-        for zip_path in zip_files:
-            try:
-                print(f"Processing: {zip_path}")
-                
-                # Download zip file
-                local_zip_path = os.path.join(temp_dir, os.path.basename(zip_path))
-                with open(local_zip_path, 'wb') as f:
-                    for chunk in input_folder.get_download_stream(zip_path):
-                        f.write(chunk)
-                
-                with zipfile.ZipFile(local_zip_path, 'r') as zip_ref:
-                    file_list = zip_ref.namelist()
-                    excel_files = [f for f in file_list 
-                                 if f.lower().endswith(('.xlsx', '.xls', '.xlsm'))]
-                    
-                    if len(excel_files) == 1:
-                        # Extract the single Excel file
-                        excel_file = excel_files[0]
-                        zip_ref.extract(excel_file, temp_dir)
-                        extracted_path = os.path.join(temp_dir, excel_file)
-                        
-                        if os.path.exists(extracted_path):
-                            output_filename = os.path.basename(excel_file)
-                            
-                            # Upload to output folder
-                            with open(extracted_path, 'rb') as f:
-                                output_folder.upload_stream(output_filename, f)
-                            
-                            print(f"✓ Extracted single Excel file: {output_filename}")
-                            
-                            # Clean up
-                            os.remove(extracted_path)
-                        else:
-                            print(f"✗ Extracted file not found: {extracted_path}")
-                    
-                    elif len(excel_files) == 0:
-                        print(f"⚠ No Excel files found in: {zip_path}")
-                    else:
-                        print(f"⚠ Multiple Excel files found in {zip_path}: {excel_files}")
-                        print("Skipping this archive as expecting only one Excel file")
-                
-            except zipfile.BadZipFile as e:
-                print(f"❌ Bad ZIP file {zip_path}: {str(e)}")
-                continue
-            except Exception as e:
-                print(f"❌ Error processing {zip_path}: {str(e)}")
-                continue
-    
-    print("Single Excel extraction completed!")
-
-# Enhanced version with better 7zip compatibility
-def extract_excel_robust_7zip(input_folder_id, output_folder_id):
-    """
-    Robust extraction that handles various 7zip created ZIP files
-    """
-    
-    input_folder = dataiku.Folder(input_folder_id)
-    output_folder = dataiku.Folder(output_folder_id)
-    
-    zip_files = [path for path in input_folder.list_paths_in_partition() 
-                if path.lower().endswith('.zip')]
-    
-    print(f"Found {len(zip_files)} ZIP files to process")
-    
-    with tempfile.TemporaryDirectory() as temp_dir:
-        for zip_path in zip_files:
-            try:
-                print(f"Processing: {zip_path}")
-                
-                # Download zip file
-                local_zip_path = os.path.join(temp_dir, os.path.basename(zip_path))
-                with open(local_zip_path, 'wb') as f:
-                    for chunk in input_folder.get_download_stream(zip_path):
-                        f.write(chunk)
-                
-                # Try different approaches for 7zip compatibility
-                try:
-                    with zipfile.ZipFile(local_zip_path, 'r') as zip_ref:
-                        # Test if ZIP is readable
-                        test_result = zip_ref.testzip()
-                        if test_result is not None:
-                            print(f"⚠ ZIP file errors detected in {zip_path}, but continuing...")
-                        
-                        file_list = zip_ref.namelist()
-                        excel_files = [f for f in file_list 
-                                     if f.lower().endswith(('.xlsx', '.xls', '.xlsm'))]
-                        
-                        print(f"Found {len(excel_files)} Excel files: {excel_files}")
-                        
-                        for excel_file in excel_files:
-                            try:
-                                # Extract with path safety
-                                zip_ref.extract(excel_file, temp_dir)
-                                extracted_path = os.path.join(temp_dir, excel_file)
-                                
-                                if os.path.exists(extracted_path):
-                                    # Use original filename but ensure uniqueness if needed
-                                    output_filename = os.path.basename(excel_file)
-                                    
-                                    # Check if file already exists in output
-                                    existing_files = output_folder.list_paths_in_partition()
-                                    if output_filename in existing_files:
-                                        # Add prefix to avoid overwriting
-                                        base, ext = os.path.splitext(output_filename)
-                                        output_filename = f"{base}_{os.path.basename(zip_path)}{ext}"
-                                    
-                                    # Upload to Dataiku
-                                    with open(extracted_path, 'rb') as f:
-                                        output_folder.upload_stream(output_filename, f)
-                                    
-                                    print(f"✓ Extracted: {output_filename}")
-                                    os.remove(extracted_path)
-                                else:
-                                    print(f"✗ File not found after extraction: {extracted_path}")
-                                    
-                            except Exception as e:
-                                print(f"❌ Error extracting {excel_file}: {str(e)}")
-                                continue
-                
-                except zipfile.BadZipFile as e:
-                    print(f"❌ Corrupted ZIP file {zip_path}: {str(e)}")
-                    continue
-                    
-            except Exception as e:
-                print(f"❌ General error processing {zip_path}: {str(e)}")
-                continue
-    
-    print("Robust 7zip processing completed!")
-
-# Example usage
 if __name__ == "__main__":
-    # Replace these with your actual Dataiku folder IDs
-    INPUT_FOLDER_ID = "your_input_folder_id"  # e.g., "input_zip_files"
-    OUTPUT_FOLDER_ID = "your_output_folder_id"  # e.g., "extracted_excel_files"
-    
-    # Choose the function that fits your needs:
-    
-    # Option 1: Extract all Excel files from each ZIP
-    extract_excel_from_7zip_archives(INPUT_FOLDER_ID, OUTPUT_FOLDER_ID)
-    
-    # Option 2: Extract only if exactly one Excel file exists
-    # extract_single_excel_from_7zip_archives(INPUT_FOLDER_ID, OUTPUT_FOLDER_ID)
-    
-    # Option 3: Robust extraction with better error handling
-    # extract_excel_robust_7zip(INPUT_FOLDER_ID, OUTPUT_FOLDER_ID)
+    main()
