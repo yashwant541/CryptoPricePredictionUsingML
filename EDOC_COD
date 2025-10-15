@@ -1,122 +1,73 @@
 import dataiku
-import tempfile
 import os
-import logging
-from dataiku import pandasutils as pdu
+import tempfile
+import shutil
+import py7zr
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger()
+# ---------------------------
+# Configure Dataiku Folders
+# ---------------------------
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # e.g. "Tw4EvbUb"
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID") # e.g. "pwBGEpop"
 
-def extract_zip_with_py7zr():
-    try:
-        import py7zr
-    except ImportError:
-        logger.error("py7zr not installed. Please install it in your Dataiku code environment.")
-        logger.info("To install: Go to Administration > Settings > Code Envs > Your Environment > Packages > Add 'py7zr'")
-        return
-    
-    # Configure your folders - UPDATE THESE NAMES
-    input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_NAME")  # Change this
-    output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_NAME")  # Change this
-    
-    logger.info("Starting py7zr extraction process...")
-    
-    # Get all zip files from input folder
-    all_files = input_folder.list_paths_in_partition()
-    zip_files = [f for f in all_files if f.lower().endswith('.zip')]
-    
-    logger.info(f"Found {len(zip_files)} zip files: {zip_files}")
-    
-    if not zip_files:
-        logger.warning("No zip files found in input folder!")
-        return
-    
-    processed_files = []
-    error_files = []
-    
-    for zip_path in zip_files:
-        try:
-            logger.info(f"Processing: {zip_path}")
-            
-            # Download zip file content
-            with input_folder.get_download_stream(zip_path) as stream:
-                zip_content = stream.read()
-            
-            # Create temporary directory for extraction
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Save zip to temporary file
-                temp_zip_path = os.path.join(temp_dir, "temp_archive.zip")
-                with open(temp_zip_path, 'wb') as f:
-                    f.write(zip_content)
-                
-                # Extract using py7zr
-                with py7zr.SevenZipFile(temp_zip_path, mode='r') as archive:
-                    # Get list of files in archive
-                    file_list = archive.getnames()
-                    logger.info(f"Files in archive: {file_list}")
-                    
-                    # Extract all files to temp directory
-                    archive.extractall(temp_dir)
-                    
-                    # Find and process Excel files
-                    excel_files = [f for f in file_list if f.lower().endswith(('.xlsx', '.xls', '.xlsm'))]
-                    logger.info(f"Excel files found: {excel_files}")
-                    
-                    for excel_file in excel_files:
-                        try:
-                            # Construct full path to extracted file
-                            extracted_path = os.path.join(temp_dir, excel_file)
-                            
-                            # Read the extracted Excel file
-                            with open(extracted_path, 'rb') as f:
-                                excel_content = f.read()
-                            
-                            # Get just the filename
-                            filename = os.path.basename(excel_file)
-                            
-                            # Handle duplicate filenames
-                            final_filename = filename
-                            counter = 1
-                            while final_filename in processed_files:
-                                name, ext = os.path.splitext(filename)
-                                final_filename = f"{name}_{counter}{ext}"
-                                counter += 1
-                            
-                            # Save to output folder
-                            with output_folder.get_writer(final_filename) as output_writer:
-                                output_writer.write(excel_content)
-                            
-                            logger.info(f"✓ Extracted: {final_filename}")
-                            processed_files.append(final_filename)
-                            
-                        except Exception as e:
-                            logger.error(f"✗ Error processing {excel_file}: {str(e)}")
-                            error_files.append(f"{zip_path}/{excel_file}")
-            
-            logger.info(f"✓ Completed: {zip_path}")
-            
-        except Exception as e:
-            logger.error(f"✗ Error processing zip file {zip_path}: {str(e)}")
-            error_files.append(zip_path)
-    
-    # Summary
-    logger.info("\n" + "="*50)
-    logger.info("EXTRACTION SUMMARY")
-    logger.info("="*50)
-    logger.info(f"Total zip files processed: {len(zip_files)}")
-    logger.info(f"Successfully extracted Excel files: {len(processed_files)}")
-    logger.info(f"Files with errors: {len(error_files)}")
-    
-    if processed_files:
-        logger.info("\nExtracted files:")
-        for file in processed_files:
-            logger.info(f"  ✓ {file}")
-    
-    if error_files:
-        logger.info("\nFiles with errors:")
-        for file in error_files:
-            logger.info(f"  ✗ {file}")
+# ---------------------------
+# Temporary Working Directory
+# ---------------------------
+temp_dir = tempfile.mkdtemp()
 
-# Run the function
-extract_zip_with_py7zr()
+try:
+    input_files = input_folder.list_paths_in_partition()
+    archive_files = [f for f in input_files if f.lower().endswith(('.zip', '.7z'))]
+
+    if not archive_files:
+        print("No ZIP or 7z files found in input folder.")
+    else:
+        for archive_path in archive_files:
+            archive_name = os.path.basename(archive_path)
+            print(f"Processing: {archive_name}")
+
+            # Download archive locally
+            local_archive_path = os.path.join(temp_dir, archive_name)
+            with open(local_archive_path, 'wb') as f:
+                f.write(input_folder.get_download_stream(archive_path).read())
+
+            # Extract using py7zr (works even for .zip made by 7-Zip)
+            extract_path = os.path.join(temp_dir, os.path.splitext(archive_name)[0])
+            os.makedirs(extract_path, exist_ok=True)
+
+            try:
+                with py7zr.SevenZipFile(local_archive_path, mode='r') as archive:
+                    archive.extractall(path=extract_path)
+            except Exception as e:
+                print(f"⚠️ Could not extract {archive_name}: {e}")
+                continue
+
+            # Find Excel files inside
+            excel_files = []
+            for root, _, files in os.walk(extract_path):
+                for file in files:
+                    if file.lower().endswith(('.xlsx', '.xls')):
+                        excel_files.append(os.path.join(root, file))
+
+            if not excel_files:
+                print(f"No Excel file found in {archive_name}. Skipping.")
+                continue
+
+            if len(excel_files) > 1:
+                print(f"Multiple Excel files found in {archive_name}. Taking the first one.")
+
+            excel_file_path = excel_files[0]
+
+            # Rename output to match archive name (optional but neat)
+            archive_base = os.path.splitext(archive_name)[0]
+            ext = os.path.splitext(excel_file_path)[1]
+            out_filename = f"{archive_base}{ext}"
+
+            # Upload to output folder
+            with open(excel_file_path, 'rb') as f:
+                output_folder.upload_stream(out_filename, f)
+
+            print(f"✅ Saved: {out_filename} to output folder")
+
+finally:
+    shutil.rmtree(temp_dir, ignore_errors=True)
