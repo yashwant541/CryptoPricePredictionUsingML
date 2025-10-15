@@ -5,16 +5,13 @@ import openpyxl
 import csv
 import zipfile
 import datetime
-import py7zr  # Ensure py7zr is installed in your Dataiku code environment
+import py7zr
+import shutil   # <--- needed for stream copy
 
-# ---------------- Configuration ----------------
-INPUT_FOLDER_ID = "input_zip_files"     # Replace with your actual Dataiku input folder ID
-OUTPUT_FOLDER_ID = "output_reports"     # Replace with your actual Dataiku output folder ID
+INPUT_FOLDER_ID = "input_zip_files"
+OUTPUT_FOLDER_ID = "output_reports"
 
-
-# ---------------- Helper Functions ----------------
 def extract_with_7zip_or_zip(zip_path, extract_path):
-    """Extracts using zipfile, fallback to py7zr for 7zip compression."""
     try:
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(extract_path)
@@ -28,95 +25,6 @@ def extract_with_7zip_or_zip(zip_path, extract_path):
             print(f"✗ Extraction failed for {zip_path}: {e}")
 
 
-def validate_excel(file_path, issues):
-    """Business logic validation for Excel files."""
-    try:
-        wb = openpyxl.load_workbook(file_path, data_only=True)
-        if "COMPUTED DATA" not in wb.sheetnames:
-            issues.append([os.path.basename(file_path), "N/A", "Missing 'COMPUTED DATA' sheet"])
-            return
-
-        ws = wb["COMPUTED DATA"]
-        date = ws.cell(row=16, column=2).value
-
-        # --- Get last status ---
-        def get_last_status(ws):
-            status_rows = []
-            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=1):
-                if row[0].value and str(row[0].value).strip().lower() == "status":
-                    status_rows.append(row[0].row)
-            if status_rows:
-                last_status_row = status_rows[-1]
-                return ws.cell(row=last_status_row, column=2).value
-            return None
-
-        last_status_val = get_last_status(ws)
-        if not last_status_val or str(last_status_val).strip().lower() != "submitted":
-            issues.append([os.path.basename(file_path), date, "Last status is not Submitted"])
-
-        # --- Priority logic ---
-        df_labels = [
-            "DF1- Direct Relevant Transactions",
-            "DF2- Related Relevant Transactions",
-            "DF3- Market Transactions",
-            "DF4- Broker Quotes",
-            "DF5- Expert Judgement"
-        ]
-
-        def find_row(ws, label):
-            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=1):
-                if row[0].value and label in str(row[0].value):
-                    return row[0].row
-            return None
-
-        priority_rows = [find_row(ws, label) for label in df_labels]
-        chosen_rate_row = find_row(ws, "Chosen Rate")
-        final_rate_row = find_row(ws, "Final Rate")
-        rational_row = find_row(ws, "Rational for Proposing the Adjustment")
-
-        for col in range(2, ws.max_column + 1):
-            tenor = ws.cell(row=2, column=col).value
-            if not tenor:
-                continue
-
-            # Find highest priority DF value
-            priority_val = None
-            priority_label = None
-            for idx, row in enumerate(priority_rows):
-                if row is not None:
-                    val = ws.cell(row=row, column=col).value
-                    if val not in [None, "N/A"]:
-                        priority_val = val
-                        priority_label = df_labels[idx]
-                        break
-
-            chosen_rate = ws.cell(row=chosen_rate_row, column=col).value if chosen_rate_row else None
-            final_rate = ws.cell(row=final_rate_row, column=col).value if final_rate_row else None
-            rational_val = ws.cell(row=rational_row, column=col).value if rational_row else None
-
-            if priority_val is not None and chosen_rate != priority_val:
-                msg = f"Chosen Rate ({chosen_rate}) does not match highest priority DF value ({priority_val}) from {priority_label} for tenor {tenor}"
-                if rational_val not in [None, "", "N/A"]:
-                    msg += f". Rational provided: {rational_val}"
-                issues.append([os.path.basename(file_path), date, msg])
-
-            elif priority_val is not None and chosen_rate == priority_val and final_rate != chosen_rate:
-                issues.append([
-                    os.path.basename(file_path), date,
-                    f"Chosen Rate ({chosen_rate}) does not match Final Rate ({final_rate}) for tenor {tenor}"
-                ])
-
-            elif priority_val is not None and chosen_rate != priority_val and rational_val not in [None, "", "N/A"]:
-                if not any("Rational for Proposing the Adjustment is not empty" in issue[2] for issue in issues):
-                    issues.append([
-                        os.path.basename(file_path), date,
-                        f"Rational for Proposing the Adjustment is not empty for tenor {tenor}"
-                    ])
-    except Exception as e:
-        issues.append([os.path.basename(file_path), "N/A", f"Error processing file: {e}"])
-
-
-# ---------------- Main Process ----------------
 def main():
     input_folder = dataiku.Folder(INPUT_FOLDER_ID)
     output_folder = dataiku.Folder(OUTPUT_FOLDER_ID)
@@ -130,7 +38,9 @@ def main():
         for path in input_folder.list_paths_in_partition():
             if path.lower().endswith(".zip"):
                 local_path = os.path.join(temp_dir, os.path.basename(path))
-                input_folder.download(path, local_path)
+                # <-- Corrected download using stream
+                with input_folder.get_download_stream(path) as in_stream, open(local_path, "wb") as out_f:
+                    shutil.copyfileobj(in_stream, out_f)
                 zip_files.append(local_path)
                 print(f"✓ Downloaded: {os.path.basename(path)}")
 
@@ -153,7 +63,7 @@ def main():
         for excel_file in excel_files:
             validate_excel(excel_file, issues)
 
-        # --- Save Reports ---
+        # --- Save Reports locally in temp_dir ---
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         csv_path = os.path.join(temp_dir, f"error_report_{timestamp}.csv")
         xlsx_path = os.path.join(temp_dir, f"error_report_{timestamp}.xlsx")
@@ -172,13 +82,12 @@ def main():
 
         wb.save(xlsx_path)
 
-        output_folder.upload(csv_path, os.path.basename(csv_path))
-        output_folder.upload(xlsx_path, os.path.basename(xlsx_path))
+        # <-- Corrected upload using get_writer stream
+        with open(csv_path, "rb") as f_in, output_folder.get_writer(os.path.basename(csv_path)) as out_stream:
+            shutil.copyfileobj(f_in, out_stream)
+
+        with open(xlsx_path, "rb") as f_in, output_folder.get_writer(os.path.basename(xlsx_path)) as out_stream:
+            shutil.copyfileobj(f_in, out_stream)
 
         print(f"\n✓ Uploaded reports to Dataiku folder: {OUTPUT_FOLDER_ID}")
         print(f"Total issues found: {len(issues)}")
-
-
-# ---------------- Run ----------------
-if __name__ == "__main__":
-    main()
