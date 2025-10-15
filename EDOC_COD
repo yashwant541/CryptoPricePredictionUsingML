@@ -1,73 +1,247 @@
 import dataiku
+import zipfile
 import os
 import tempfile
-import shutil
-import py7zr
 
-# ---------------------------
-# Configure Dataiku Folders
-# ---------------------------
-input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # e.g. "Tw4EvbUb"
-output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID") # e.g. "pwBGEpop"
-
-# ---------------------------
-# Temporary Working Directory
-# ---------------------------
-temp_dir = tempfile.mkdtemp()
-
-try:
-    input_files = input_folder.list_paths_in_partition()
-    archive_files = [f for f in input_files if f.lower().endswith(('.zip', '.7z'))]
-
-    if not archive_files:
-        print("No ZIP or 7z files found in input folder.")
-    else:
-        for archive_path in archive_files:
-            archive_name = os.path.basename(archive_path)
-            print(f"Processing: {archive_name}")
-
-            # Download archive locally
-            local_archive_path = os.path.join(temp_dir, archive_name)
-            with open(local_archive_path, 'wb') as f:
-                f.write(input_folder.get_download_stream(archive_path).read())
-
-            # Extract using py7zr (works even for .zip made by 7-Zip)
-            extract_path = os.path.join(temp_dir, os.path.splitext(archive_name)[0])
-            os.makedirs(extract_path, exist_ok=True)
-
+def extract_excel_from_7zip_archives(input_folder_id, output_folder_id):
+    """
+    Extract Excel files from ZIP archives created with 7zip software
+    Works with standard ZIP format but handles 7zip-specific cases
+    """
+    
+    # Get Dataiku folder objects
+    input_folder = dataiku.Folder(input_folder_id)
+    output_folder = dataiku.Folder(output_folder_id)
+    
+    # Get list of all files in input folder
+    input_paths = input_folder.list_paths_in_partition()
+    
+    # Filter for zip files
+    zip_files = [path for path in input_paths if path.lower().endswith('.zip')]
+    
+    print(f"Found {len(zip_files)} ZIP files to process")
+    
+    # Create a temporary directory for extraction
+    with tempfile.TemporaryDirectory() as temp_dir:
+        for zip_path in zip_files:
             try:
-                with py7zr.SevenZipFile(local_archive_path, mode='r') as archive:
-                    archive.extractall(path=extract_path)
+                print(f"Processing: {zip_path}")
+                
+                # Download zip file to temporary location
+                local_zip_path = os.path.join(temp_dir, os.path.basename(zip_path))
+                with open(local_zip_path, 'wb') as f:
+                    for chunk in input_folder.get_download_stream(zip_path):
+                        f.write(chunk)
+                
+                # Try to open as standard ZIP file
+                try:
+                    with zipfile.ZipFile(local_zip_path, 'r') as zip_ref:
+                        # Get list of all files in archive
+                        file_list = zip_ref.namelist()
+                        
+                        # Filter for Excel files
+                        excel_files = [f for f in file_list 
+                                     if f.lower().endswith(('.xlsx', '.xls', '.xlsm'))]
+                        
+                        print(f"Found {len(excel_files)} Excel files in {os.path.basename(zip_path)}: {excel_files}")
+                        
+                        # Extract and save Excel files
+                        for excel_file in excel_files:
+                            try:
+                                # Extract to temporary directory
+                                zip_ref.extract(excel_file, temp_dir)
+                                extracted_path = os.path.join(temp_dir, excel_file)
+                                
+                                if os.path.exists(extracted_path):
+                                    # Create output filename
+                                    output_filename = os.path.basename(excel_file)
+                                    
+                                    # Upload to Dataiku output folder
+                                    with open(extracted_path, 'rb') as f:
+                                        output_folder.upload_stream(output_filename, f)
+                                    
+                                    print(f"✓ Successfully extracted: {output_filename}")
+                                    
+                                    # Clean up extracted file
+                                    os.remove(extracted_path)
+                                else:
+                                    print(f"✗ Extracted file not found: {extracted_path}")
+                                    
+                            except Exception as e:
+                                print(f"❌ Error extracting {excel_file}: {str(e)}")
+                                continue
+                
+                except zipfile.BadZipFile as e:
+                    print(f"❌ Bad ZIP file {zip_path}: {str(e)}")
+                    continue
+                except Exception as e:
+                    print(f"❌ Error reading ZIP file {zip_path}: {str(e)}")
+                    continue
+                    
             except Exception as e:
-                print(f"⚠️ Could not extract {archive_name}: {e}")
+                print(f"❌ Error processing {zip_path}: {str(e)}")
                 continue
+    
+    print("ZIP file processing completed!")
 
-            # Find Excel files inside
-            excel_files = []
-            for root, _, files in os.walk(extract_path):
-                for file in files:
-                    if file.lower().endswith(('.xlsx', '.xls')):
-                        excel_files.append(os.path.join(root, file))
-
-            if not excel_files:
-                print(f"No Excel file found in {archive_name}. Skipping.")
+# Alternative version that expects exactly one Excel file per archive
+def extract_single_excel_from_7zip_archives(input_folder_id, output_folder_id):
+    """
+    Extract the one and only Excel file from each ZIP archive
+    Raises error if multiple Excel files found
+    """
+    
+    input_folder = dataiku.Folder(input_folder_id)
+    output_folder = dataiku.Folder(output_folder_id)
+    
+    zip_files = [path for path in input_folder.list_paths_in_partition() 
+                if path.lower().endswith('.zip')]
+    
+    print(f"Found {len(zip_files)} ZIP files to process")
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        for zip_path in zip_files:
+            try:
+                print(f"Processing: {zip_path}")
+                
+                # Download zip file
+                local_zip_path = os.path.join(temp_dir, os.path.basename(zip_path))
+                with open(local_zip_path, 'wb') as f:
+                    for chunk in input_folder.get_download_stream(zip_path):
+                        f.write(chunk)
+                
+                with zipfile.ZipFile(local_zip_path, 'r') as zip_ref:
+                    file_list = zip_ref.namelist()
+                    excel_files = [f for f in file_list 
+                                 if f.lower().endswith(('.xlsx', '.xls', '.xlsm'))]
+                    
+                    if len(excel_files) == 1:
+                        # Extract the single Excel file
+                        excel_file = excel_files[0]
+                        zip_ref.extract(excel_file, temp_dir)
+                        extracted_path = os.path.join(temp_dir, excel_file)
+                        
+                        if os.path.exists(extracted_path):
+                            output_filename = os.path.basename(excel_file)
+                            
+                            # Upload to output folder
+                            with open(extracted_path, 'rb') as f:
+                                output_folder.upload_stream(output_filename, f)
+                            
+                            print(f"✓ Extracted single Excel file: {output_filename}")
+                            
+                            # Clean up
+                            os.remove(extracted_path)
+                        else:
+                            print(f"✗ Extracted file not found: {extracted_path}")
+                    
+                    elif len(excel_files) == 0:
+                        print(f"⚠ No Excel files found in: {zip_path}")
+                    else:
+                        print(f"⚠ Multiple Excel files found in {zip_path}: {excel_files}")
+                        print("Skipping this archive as expecting only one Excel file")
+                
+            except zipfile.BadZipFile as e:
+                print(f"❌ Bad ZIP file {zip_path}: {str(e)}")
                 continue
+            except Exception as e:
+                print(f"❌ Error processing {zip_path}: {str(e)}")
+                continue
+    
+    print("Single Excel extraction completed!")
 
-            if len(excel_files) > 1:
-                print(f"Multiple Excel files found in {archive_name}. Taking the first one.")
+# Enhanced version with better 7zip compatibility
+def extract_excel_robust_7zip(input_folder_id, output_folder_id):
+    """
+    Robust extraction that handles various 7zip created ZIP files
+    """
+    
+    input_folder = dataiku.Folder(input_folder_id)
+    output_folder = dataiku.Folder(output_folder_id)
+    
+    zip_files = [path for path in input_folder.list_paths_in_partition() 
+                if path.lower().endswith('.zip')]
+    
+    print(f"Found {len(zip_files)} ZIP files to process")
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        for zip_path in zip_files:
+            try:
+                print(f"Processing: {zip_path}")
+                
+                # Download zip file
+                local_zip_path = os.path.join(temp_dir, os.path.basename(zip_path))
+                with open(local_zip_path, 'wb') as f:
+                    for chunk in input_folder.get_download_stream(zip_path):
+                        f.write(chunk)
+                
+                # Try different approaches for 7zip compatibility
+                try:
+                    with zipfile.ZipFile(local_zip_path, 'r') as zip_ref:
+                        # Test if ZIP is readable
+                        test_result = zip_ref.testzip()
+                        if test_result is not None:
+                            print(f"⚠ ZIP file errors detected in {zip_path}, but continuing...")
+                        
+                        file_list = zip_ref.namelist()
+                        excel_files = [f for f in file_list 
+                                     if f.lower().endswith(('.xlsx', '.xls', '.xlsm'))]
+                        
+                        print(f"Found {len(excel_files)} Excel files: {excel_files}")
+                        
+                        for excel_file in excel_files:
+                            try:
+                                # Extract with path safety
+                                zip_ref.extract(excel_file, temp_dir)
+                                extracted_path = os.path.join(temp_dir, excel_file)
+                                
+                                if os.path.exists(extracted_path):
+                                    # Use original filename but ensure uniqueness if needed
+                                    output_filename = os.path.basename(excel_file)
+                                    
+                                    # Check if file already exists in output
+                                    existing_files = output_folder.list_paths_in_partition()
+                                    if output_filename in existing_files:
+                                        # Add prefix to avoid overwriting
+                                        base, ext = os.path.splitext(output_filename)
+                                        output_filename = f"{base}_{os.path.basename(zip_path)}{ext}"
+                                    
+                                    # Upload to Dataiku
+                                    with open(extracted_path, 'rb') as f:
+                                        output_folder.upload_stream(output_filename, f)
+                                    
+                                    print(f"✓ Extracted: {output_filename}")
+                                    os.remove(extracted_path)
+                                else:
+                                    print(f"✗ File not found after extraction: {extracted_path}")
+                                    
+                            except Exception as e:
+                                print(f"❌ Error extracting {excel_file}: {str(e)}")
+                                continue
+                
+                except zipfile.BadZipFile as e:
+                    print(f"❌ Corrupted ZIP file {zip_path}: {str(e)}")
+                    continue
+                    
+            except Exception as e:
+                print(f"❌ General error processing {zip_path}: {str(e)}")
+                continue
+    
+    print("Robust 7zip processing completed!")
 
-            excel_file_path = excel_files[0]
-
-            # Rename output to match archive name (optional but neat)
-            archive_base = os.path.splitext(archive_name)[0]
-            ext = os.path.splitext(excel_file_path)[1]
-            out_filename = f"{archive_base}{ext}"
-
-            # Upload to output folder
-            with open(excel_file_path, 'rb') as f:
-                output_folder.upload_stream(out_filename, f)
-
-            print(f"✅ Saved: {out_filename} to output folder")
-
-finally:
-    shutil.rmtree(temp_dir, ignore_errors=True)
+# Example usage
+if __name__ == "__main__":
+    # Replace these with your actual Dataiku folder IDs
+    INPUT_FOLDER_ID = "your_input_folder_id"  # e.g., "input_zip_files"
+    OUTPUT_FOLDER_ID = "your_output_folder_id"  # e.g., "extracted_excel_files"
+    
+    # Choose the function that fits your needs:
+    
+    # Option 1: Extract all Excel files from each ZIP
+    extract_excel_from_7zip_archives(INPUT_FOLDER_ID, OUTPUT_FOLDER_ID)
+    
+    # Option 2: Extract only if exactly one Excel file exists
+    # extract_single_excel_from_7zip_archives(INPUT_FOLDER_ID, OUTPUT_FOLDER_ID)
+    
+    # Option 3: Robust extraction with better error handling
+    # extract_excel_robust_7zip(INPUT_FOLDER_ID, OUTPUT_FOLDER_ID)
