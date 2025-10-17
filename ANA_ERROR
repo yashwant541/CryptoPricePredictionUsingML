@@ -1,78 +1,126 @@
 def read_excel_tab(filepath):
-    """Read Origami table and hardcode column renames"""
+    """Read Origami 'COMPUTED DATA' sheet (multi-row header)
+       Hardcode renames:
+         - DF-1: between Tenor/Rating and DF-3
+         - DF-4: between DF-3 and DF-5
+         - Final: after DF-5 (8 columns)
+    """
     wb = load_workbook(filepath, data_only=True)
     sheet_name = None
 
-    # Find the sheet
     for name in wb.sheetnames:
         if re.search(SHEET_NAME_PATTERN, name, re.IGNORECASE):
             sheet_name = name
             break
-
     if not sheet_name:
-        log("⚠️ 'COMPUTED DATA' sheet not found in workbook.")
+        log("⚠️ 'COMPUTED DATA' sheet not found.")
         return None, None
 
     ws = wb[sheet_name]
     all_rows = [list(r) for r in ws.iter_rows(values_only=True) if any(r)]
+    if len(all_rows) < 3:
+        log("⚠️ Not enough rows for table.")
+        return None, None
 
-    # Header rows (row 2 and 3)
-    header_row_1 = [str(x).strip() if x else "" for x in all_rows[1]]
-    header_row_2 = [str(x).strip() if x else "" for x in all_rows[2]]
+    # Detect header row
+    start_row_idx = None
+    for i, row in enumerate(all_rows):
+        row_str = " ".join([str(c) for c in row if c]).strip().lower()
+        if "category" in row_str and "tenor" in row_str:
+            start_row_idx = i
+            break
+    if start_row_idx is None:
+        log("⚠️ Table header not found.")
+        return None, None
 
-    # Flatten header
+    header_row_1 = [str(x).strip() if x else "" for x in all_rows[start_row_idx]]
+    header_row_2 = [str(x).strip() if x else "" for x in all_rows[start_row_idx + 1]]
+
+    # Combine headers
     combined_headers = []
     for h1, h2 in zip(header_row_1, header_row_2):
-        if h1 and h2:
-            combined_headers.append(f"{h1} {h2}".strip())
-        elif h1:
-            combined_headers.append(h1.strip())
-        elif h2:
-            combined_headers.append(h2.strip())
-        else:
-            combined_headers.append("")
+        clean_h1 = re.sub(r'\s+', ' ', re.sub(r'[\(\)]', '', h1)).strip()
+        clean_h2 = re.sub(r'\s+', ' ', re.sub(r'[\(\)]', '', h2)).strip()
+        combined_headers.append(f"{clean_h1} {clean_h2}".strip() if clean_h1 and clean_h2 else (clean_h1 or clean_h2))
 
-    # Create dataframe from row 4 onward
-    df_table = pd.DataFrame(all_rows[3:], columns=combined_headers)
+    # Data rows
+    start_idx = start_row_idx + 2
+    end_idx = len(all_rows)
+    for i, row in enumerate(all_rows[start_idx:], start=start_idx):
+        text = " ".join([str(c) for c in row if c]).strip()
+        if any(x in text for x in ["USER:", "Benchmark:", "Status", "Date:"]):
+            end_idx = i
+            break
+    table_rows = all_rows[start_idx:end_idx]
+    if not table_rows:
+        log("⚠️ No data rows found.")
+        return None, None
 
-    # -------------------------------
-    # HARD-CODED RENAMES
-    # -------------------------------
+    df_table = pd.DataFrame(table_rows, columns=combined_headers)
+
+    # -------------------------------------------------------
+    # Robust column renaming
+    # -------------------------------------------------------
+    def find_col_index(keywords):
+        key_lower = [k.lower() for k in keywords]
+        for idx, ch in enumerate(combined_headers):
+            if any(k in str(ch).lower() for k in key_lower):
+                return idx
+        return None
+
+    tenor_idx = find_col_index(["tenor", "tenor/rating"])
+    df3_idx = find_col_index(["DF-3", "DF3"])
+    df5_idx = find_col_index(["DF-5", "DF5"])
+
     rename_map = {}
 
-    # 3rd to 6th column -> DF-1 section
-    df1_names = ["DF-1 AAA", "DF-1 AA+", "DF-1 AA", "DF-1 AA-"]
-    for idx, name in zip(range(2, 6), df1_names):
-        rename_map[df_table.columns[idx]] = name
+    # DF-1: between Tenor/Rating and DF-3
+    if tenor_idx is not None and df3_idx is not None:
+        df1_cols = list(range(tenor_idx + 1, df3_idx))
+        df1_names = ["DF-1 AAA", "DF-1 AA+", "DF-1 AA", "DF-1 AA-"]
+        for i, name in zip(df1_cols, df1_names):
+            if i < len(df_table.columns):
+                rename_map[df_table.columns[i]] = name
 
-    # Columns after DF-5 -> Final section (next 8 columns)
-    final_names = [
-        "Final AAA", "Final AAA Source",
-        "Final AA+", "Final AA+ Source",
-        "Final AA", "Final AA Source",
-        "Final AA-", "Final AA- Source"
-    ]
-    # Assuming DF-5 is the 12th column (index 11)
-    for idx, name in zip(range(12, 20), final_names):
-        if idx < len(df_table.columns):
-            rename_map[df_table.columns[idx]] = name
+    # DF-4: between DF-3 and DF-5
+    if df3_idx is not None and df5_idx is not None:
+        df4_cols = list(range(df3_idx + 1, df5_idx))
+        df4_names = ["DF-4 AAA", "DF-4 AA+", "DF-4 AA", "DF-4 AA-"]
+        for i, name in zip(df4_cols, df4_names):
+            if i < len(df_table.columns):
+                rename_map[df_table.columns[i]] = name
 
-    df_table.rename(columns=rename_map, inplace=True)
+    # Final: 8 columns after DF-5
+    if df5_idx is not None:
+        final_cols = list(range(df5_idx + 1, df5_idx + 9))
+        final_names = [
+            "Final AAA", "Final AAA Source",
+            "Final AA+", "Final AA+ Source",
+            "Final AA", "Final AA Source",
+            "Final AA-", "Final AA- Source"
+        ]
+        for i, name in zip(final_cols, final_names):
+            if i < len(df_table.columns):
+                rename_map[df_table.columns[i]] = name
 
-    # -------------------------------
-    # Extract summary rows (maker-checker metadata)
-    # -------------------------------
-    summary_rows = all_rows[3+len(df_table):]  # rows after the table
+    # Apply renames
+    if rename_map:
+        df_table.rename(columns=rename_map, inplace=True)
+        log(f"ℹ️ Applied hardcoded rename map: {rename_map}")
+    else:
+        log("ℹ️ No renames applied (rename_map empty).")
+
+    # -------------------------------------------------------
+    # Parse summary section
+    # -------------------------------------------------------
+    summary_rows = all_rows[end_idx:]
     summary_texts = [" ".join([str(c) for c in row if c]).strip() for row in summary_rows if any(row)]
     metadata = []
     current = {}
-
     for line in summary_texts:
         line = line.strip()
         if re.search(r'\bUSER\b', line):
-            if current:
-                metadata.append(current)
-                current = {}
+            if current: metadata.append(current); current = {}
             match = re.search(r'USER[:\s]*(.*)', line)
             current["USER"] = match.group(1).strip() if match else ""
         elif re.search(r'\bBenchmark\b', line):
@@ -87,8 +135,6 @@ def read_excel_tab(filepath):
         elif re.search(r'\bStatus Time\b', line):
             match = re.search(r'Status Time[:\s]*(.*)', line)
             current["Status Time"] = match.group(1).strip() if match else ""
-
-    if current:
-        metadata.append(current)
+    if current: metadata.append(current)
 
     return df_table, metadata
