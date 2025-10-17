@@ -1,4 +1,3 @@
-
 import pandas as pd
 import dataiku
 import tempfile
@@ -7,86 +6,80 @@ import os
 # ------------------------------------------------------
 # 🔧 Configuration (replace with your Dataiku folder IDs)
 # ------------------------------------------------------
-input_folder = dataiku.Folder("h4i1EGKn")       # Folder containing maker_checker_summary.csv
-output_folder = dataiku.Folder("O9zgmRQh")      # Folder to save success/fail results
+input_folder = dataiku.Folder("pwBGEpop")      # Folder containing MakerChecker_Success.csv
+output_folder = dataiku.Folder("pwBGEpop")     # Folder to save consolidated output
 
 # ------------------------------------------------------
 # 🧠 Helper Function
 # ------------------------------------------------------
-def evaluate_maker_checker(df):
+def consolidate_maker_checker(df):
     """
-    Evaluate maker-checker logic per file for each Benchmark + Date combination:
-    1. Ensure each file has exactly 4 rows
-    2. Ensure maker ≠ checker
+    Consolidate maker-checker info:
+    - Maker = user with Calculated/Proposed status
+    - Checker = user with Approved/Submitted status
+    - Each row per FileName + Benchmark + Date combination
+    - Status times separated into columns
     """
-    success_records = []
-    fail_records = []
+    pivot_df = df.pivot_table(
+        index=["FileName", "FileDate", "Benchmark", "Date (in file)"],
+        columns="Status",
+        values=["USER", "Status Time"],
+        aggfunc='first'
+    )
 
-    # Drop fully blank rows
-    df = df.dropna(how='all')
+    pivot_df.columns = [f"{col[0]} {col[1]}".strip() for col in pivot_df.columns.values]
+    pivot_df = pivot_df.reset_index()
 
-    # Clean column names
-    df.columns = [c.strip() for c in df.columns]
+    pivot_df['Maker'] = pivot_df['USER Calculated'].combine_first(pivot_df['USER Proposed'])
+    pivot_df['Checker'] = pivot_df['USER Approved'].combine_first(pivot_df['USER Submitted'])
 
-    # Group by Benchmark + Date
-    for (benchmark, date_in_file), group in df.groupby(["Benchmark", "Date (in file)"]):
-        # Iterate over files within this combination
-        for file_name, file_grp in group.groupby("FileName"):
-            file_grp = file_grp.copy()  # Avoid SettingWithCopyWarning
+    pivot_df = pivot_df.rename(columns={
+        'Status Time Calculated': 'Calculated Status Time',
+        'Status Time Proposed': 'Proposed Status Time',
+        'Status Time Approved': 'Approved Status Time',
+        'Status Time Submitted': 'Submitted Status Time'
+    })
 
-            # Rule 1: exactly 4 rows
-            if len(file_grp) != 4:
-                file_grp["FailReason"] = "Row count != 4"
-                fail_records.append(file_grp)
-                continue
+    pivot_df['USER'] = ""  # Blank as in your example
 
-            # Identify maker and checker users
-            maker_users = set(file_grp[file_grp["Status"].isin(["Calculated", "Proposed"])]["USER"].dropna())
-            checker_users = set(file_grp[file_grp["Status"].isin(["Approved", "Submitted"])]["USER"].dropna())
+    # Drop individual USER columns
+    pivot_df = pivot_df.drop(columns=['USER Calculated', 'USER Proposed', 'USER Approved', 'USER Submitted'])
 
-            # Rule 2: maker ≠ checker
-            if maker_users and checker_users and not maker_users.intersection(checker_users):
-                success_records.append(file_grp)
-            else:
-                file_grp["FailReason"] = "Maker and checker overlap or missing users"
-                fail_records.append(file_grp)
+    # Reorder columns
+    cols = [
+        'FileName', 'FileDate', 'USER', 'Benchmark', 'Date (in file)',
+        'Maker', 'Checker',
+        'Calculated Status Time', 'Proposed Status Time', 'Approved Status Time', 'Submitted Status Time'
+    ]
+    pivot_df = pivot_df[cols]
 
-    df_success = pd.concat(success_records, ignore_index=True) if success_records else pd.DataFrame(columns=df.columns)
-    df_fail = pd.concat(fail_records, ignore_index=True) if fail_records else pd.DataFrame(columns=df.columns)
-
-    return df_success, df_fail
+    return pivot_df
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
 def main():
-    print("🔍 Reading maker_checker_summary.csv from Dataiku input folder...")
+    print("🔍 Reading MakerChecker_Success.csv from Dataiku input folder...")
 
-    # Locate the summary file
-    files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith(".csv")]
+    files = [f for f in input_folder.list_paths_in_partition() if "MakerChecker_Success" in f]
     if not files:
-        raise Exception("❌ No CSV found in MakerChecker summary input folder.")
-    summary_path = files[0]
+        raise Exception("❌ MakerChecker_Success.csv not found in input folder.")
+    success_path = files[0]
 
-    # Read file
-    with input_folder.get_download_stream(summary_path) as stream:
-        df_summary = pd.read_csv(stream)
+    with input_folder.get_download_stream(success_path) as stream:
+        df_success = pd.read_csv(stream)
 
-    # Evaluate
-    df_success, df_fail = evaluate_maker_checker(df_summary)
+    df_consolidated = consolidate_maker_checker(df_success)
 
-    # Save results to Dataiku output folder
-    for df, filename in [(df_success, "MakerChecker_Success.csv"), (df_fail, "MakerChecker_Fails.csv")]:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-            df.to_csv(tmp_file.name, index=False)
-            with open(tmp_file.name, "rb") as f:
-                output_folder.upload_stream(filename, f)
-            os.remove(tmp_file.name)  # Clean up temp file
+    # Save consolidated output
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+        df_consolidated.to_csv(tmp_file.name, index=False)
+        with open(tmp_file.name, "rb") as f:
+            output_folder.upload_stream("MakerChecker_Success_Consolidated.csv", f)
+        os.remove(tmp_file.name)
 
-    print(f"✅ Evaluation complete: {len(df_success)} success rows, {len(df_fail)} fail rows.")
+    print(f"✅ Consolidation complete: {len(df_consolidated)} rows created.")
 
-# ------------------------------------------------------
-# Entry point
 # ------------------------------------------------------
 if __name__ == "__main__":
     main()
