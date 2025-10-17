@@ -1,5 +1,9 @@
 def read_excel_tab(filepath):
-    """Read Origami 'COMPUTED DATA' sheet (multi-row header starting around row 2)"""
+    """Read Origami 'COMPUTED DATA' sheet (multi-row header starting around row 2)
+       Hardcode renames:
+         - columns between Tenor/Rating and DF-2 -> DF-1 AAA, DF-1 AA+, DF-1 AA, DF-1 AA-
+         - 8 columns after DF-5 -> Final AAA, Final AAA Source, Final AA+, Final AA+ Source, Final AA, Final AA Source, Final AA-, Final AA- Source
+    """
     wb = load_workbook(filepath, data_only=True)
     sheet_name = None
 
@@ -15,14 +19,15 @@ def read_excel_tab(filepath):
 
     ws = wb[sheet_name]
     all_rows = list(ws.iter_rows(values_only=True))
-    all_rows = [list(r) for r in all_rows if any(r)]  # remove completely empty rows
+    # remove completely empty rows
+    all_rows = [list(r) for r in all_rows if any(r)]
 
     if len(all_rows) < 3:
         log("⚠️ Not enough rows to form Origami table.")
         return None, None
 
     # -------------------------------------------------------
-    # 🔍 Auto-detect start of table by finding 'Category' row
+    # Auto-detect start of table by finding 'Category'/'Tenor' row
     # -------------------------------------------------------
     start_row_idx = None
     for i, row in enumerate(all_rows):
@@ -35,9 +40,7 @@ def read_excel_tab(filepath):
         log("⚠️ Could not find table header (Category/Tenor).")
         return None, None
 
-    # -------------------------------------------------------
-    # Build header rows (two levels)
-    # -------------------------------------------------------
+    # ensure there's a second header row
     if start_row_idx + 1 >= len(all_rows):
         log("⚠️ Incomplete header rows.")
         return None, None
@@ -46,7 +49,7 @@ def read_excel_tab(filepath):
     header_row_2 = [str(x).strip() if x else "" for x in all_rows[start_row_idx + 1]]
 
     # -------------------------------------------------------
-    # 🧹 Clean + Combine headers like 'DF-1 AAA'
+    # Clean + Combine headers like 'DF-1 AAA'
     # -------------------------------------------------------
     combined_headers = []
     for h1, h2 in zip(header_row_1, header_row_2):
@@ -84,6 +87,78 @@ def read_excel_tab(filepath):
     # Create main DataFrame
     # -------------------------------------------------------
     df_table = pd.DataFrame(table_rows, columns=combined_headers)
+
+    # -------------------------------------------------------
+    # Hard-coded renaming by positions (robust to missing columns)
+    # -------------------------------------------------------
+    # Helper: find index in either header row where a token appears
+    def find_header_index(tokens):
+        token_lower = [t.lower() for t in tokens]
+        for idx, (h1, h2) in enumerate(zip(header_row_1, header_row_2)):
+            a = (str(h1).lower() if h1 else "")
+            b = (str(h2).lower() if h2 else "")
+            for t in token_lower:
+                if t in a or t in b:
+                    return idx
+        return None
+
+    # find Tenor/Rating index
+    tenor_idx = find_header_index(["tenor", "tenor/rating", "tenor rating"])
+    if tenor_idx is None:
+        log("⚠️ Could not locate Tenor/Rating column index for hardcoded rename.")
+    else:
+        # find DF-2 index
+        df2_idx = find_header_index(["df-2", "df2", "df 2"])
+        if df2_idx is None:
+            log("⚠️ Could not locate DF-2 column index; DF-1 renaming will be based on next 4 columns after Tenor/Rating.")
+            df2_idx = tenor_idx + 5  # fallback: assume next 4 are DF-1
+        # Columns between tenor_idx and df2_idx (exclusive)
+        df1_indices = list(range(tenor_idx + 1, df2_idx))
+        # desired DF-1 names
+        df1_target = ["DF-1 AAA", "DF-1 AA+", "DF-1 AA", "DF-1 AA-"]
+        # map available columns left-to-right into target names
+        rename_map = {}
+        for i, target in zip(df1_indices, df1_target):
+            if i < len(df_table.columns):
+                rename_map[df_table.columns[i]] = target
+            else:
+                log(f"⚠️ Expected DF-1 column index {i} out of range (total cols {len(df_table.columns)}).")
+
+    # Find DF-5 (or DF5 / Final) index for final section
+    df5_idx = find_header_index(["df-5", "df5", "final"])
+    if df5_idx is None:
+        log("⚠️ Could not locate DF-5 / Final index; final renaming will attempt to find 'Final' in combined headers.")
+        # fallback: try to find 'final' in combined headers
+        df5_idx = None
+        for idx, ch in enumerate(combined_headers):
+            if "final" in ch.lower():
+                df5_idx = idx
+                break
+
+    # final rename targets (8 columns)
+    final_targets = [
+        "Final AAA", "Final AAA Source",
+        "Final AA+", "Final AA+ Source",
+        "Final AA", "Final AA Source",
+        "Final AA-", "Final AA- Source"
+    ]
+
+    if df5_idx is not None:
+        start_final = df5_idx + 1
+        for i, target in zip(range(start_final, start_final + len(final_targets)), final_targets):
+            if i < len(df_table.columns):
+                rename_map[df_table.columns[i]] = target
+            else:
+                log(f"⚠️ Expected Final column index {i} out of range (total cols {len(df_table.columns)}).")
+    else:
+        log("⚠️ DF-5/Final index not found — skipped hardcoded final renaming.")
+
+    # apply renaming if any
+    if 'rename_map' in locals() and rename_map:
+        df_table.rename(columns=rename_map, inplace=True)
+        log(f"ℹ️ Applied hardcoded rename map: {rename_map}")
+    else:
+        log("ℹ️ No hardcoded renames applied (rename_map empty).")
 
     # -------------------------------------------------------
     # Parse summary section (maker-checker metadata)
