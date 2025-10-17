@@ -1,9 +1,9 @@
 def read_excel_tab(filepath):
-    """Read 'COMPUTED DATA' sheet (Origami Table) with multi-row header from row 2"""
+    """Read Origami 'COMPUTED DATA' sheet (multi-row header starting around row 2)"""
     wb = load_workbook(filepath, data_only=True)
     sheet_name = None
 
-    # Find target sheet
+    # Find relevant sheet
     for name in wb.sheetnames:
         if re.search(SHEET_NAME_PATTERN, name, re.IGNORECASE):
             sheet_name = name
@@ -15,30 +15,57 @@ def read_excel_tab(filepath):
 
     ws = wb[sheet_name]
     all_rows = list(ws.iter_rows(values_only=True))
-    all_rows = [list(r) for r in all_rows if any(r)]  # remove empty rows
+    all_rows = [list(r) for r in all_rows if any(r)]  # remove completely empty rows
 
     if len(all_rows) < 3:
         log("⚠️ Not enough rows to form Origami table.")
         return None, None
 
-    # ---- Identify the start of the table (row 2 in Excel = index 1 here)
-    header_row_1 = [str(x).strip() if x else "" for x in all_rows[1]]  # Row 2
-    header_row_2 = [str(x).strip() if x else "" for x in all_rows[2]]  # Row 3
+    # -------------------------------------------------------
+    # 🔍 Auto-detect start of table by finding 'Category' row
+    # -------------------------------------------------------
+    start_row_idx = None
+    for i, row in enumerate(all_rows):
+        row_str = " ".join([str(c) for c in row if c]).strip().lower()
+        if "category" in row_str and "tenor" in row_str:
+            start_row_idx = i
+            break
 
-    # ---- Flatten the two header rows
+    if start_row_idx is None:
+        log("⚠️ Could not find table header (Category/Tenor).")
+        return None, None
+
+    # -------------------------------------------------------
+    # Build header rows (two levels)
+    # -------------------------------------------------------
+    if start_row_idx + 1 >= len(all_rows):
+        log("⚠️ Incomplete header rows.")
+        return None, None
+
+    header_row_1 = [str(x).strip() if x else "" for x in all_rows[start_row_idx]]
+    header_row_2 = [str(x).strip() if x else "" for x in all_rows[start_row_idx + 1]]
+
+    # -------------------------------------------------------
+    # 🧹 Clean + Combine headers like 'DF-1 AAA'
+    # -------------------------------------------------------
     combined_headers = []
     for h1, h2 in zip(header_row_1, header_row_2):
-        if h1 and h2:
-            combined_headers.append(f"{h1}_{h2}")
-        elif h1:
-            combined_headers.append(h1)
-        elif h2:
-            combined_headers.append(h2)
+        clean_h1 = re.sub(r'\s+', ' ', re.sub(r'[\(\)]', '', h1)).strip()
+        clean_h2 = re.sub(r'\s+', ' ', re.sub(r'[\(\)]', '', h2)).strip()
+
+        if clean_h1 and clean_h2:
+            combined_headers.append(f"{clean_h1} {clean_h2}".strip())
+        elif clean_h1:
+            combined_headers.append(clean_h1)
+        elif clean_h2:
+            combined_headers.append(clean_h2)
         else:
             combined_headers.append("")
 
-    # ---- Find where the summary (maker-checker) section begins
-    start_idx = 3  # data starts after two header rows
+    # -------------------------------------------------------
+    # Identify data rows (stop when 'USER:' or 'Benchmark:' appears)
+    # -------------------------------------------------------
+    start_idx = start_row_idx + 2  # after the two header rows
     end_idx = len(all_rows)
     for i, row in enumerate(all_rows[start_idx:], start=start_idx):
         text = " ".join([str(c) for c in row if c]).strip()
@@ -53,10 +80,14 @@ def read_excel_tab(filepath):
         log("⚠️ No Origami data rows found.")
         return None, None
 
-    # ---- Build DataFrame
+    # -------------------------------------------------------
+    # Create main DataFrame
+    # -------------------------------------------------------
     df_table = pd.DataFrame(table_rows, columns=combined_headers)
 
-    # ---- Parse metadata summary
+    # -------------------------------------------------------
+    # Parse summary section (maker-checker metadata)
+    # -------------------------------------------------------
     summary_texts = [" ".join([str(c) for c in row if c]).strip() for row in summary_rows if any(row)]
     metadata = []
     current = {}
