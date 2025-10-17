@@ -108,7 +108,7 @@ def read_excel_tab(filepath):
         log("⚠️ Could not locate Tenor/Rating column index for hardcoded rename.")
     else:
         # find DF-2 index
-        df2_idx = find_header_index(["df-2", "df2", "df 2"])
+        df2_idx = find_header_index(["DF-2", "DF2", "DF 2"])
         if df2_idx is None:
             log("⚠️ Could not locate DF-2 column index; DF-1 renaming will be based on next 4 columns after Tenor/Rating.")
             df2_idx = tenor_idx + 5  # fallback: assume next 4 are DF-1
@@ -125,7 +125,7 @@ def read_excel_tab(filepath):
                 log(f"⚠️ Expected DF-1 column index {i} out of range (total cols {len(df_table.columns)}).")
 
     # Find DF-5 (or DF5 / Final) index for final section
-    df5_idx = find_header_index(["df-5", "df5", "final"])
+    df5_idx = find_header_index(["DF-5", "DF5", "final"])
     if df5_idx is None:
         log("⚠️ Could not locate DF-5 / Final index; final renaming will attempt to find 'Final' in combined headers.")
         # fallback: try to find 'final' in combined headers
