@@ -12,9 +12,9 @@ SHEET_NAME_PATTERN = r'COMPUTED[_ ]?DATA'
 # -----------------------------
 # Fixed Dataiku Folder Handles
 # -----------------------------
-input_folder = dataiku.Folder("i9jBJOin")      # 📂 Replace with your input folder ID
-output_folder_tables = dataiku.Folder("NQ0ebwIJ")  # 📂 Replace with your output folder ID for tables
-output_folder_summary = dataiku.Folder("2mfo7Gz6") # 📂 Replace with your output folder ID for summary CSV
+input_folder = dataiku.Folder("XXXXXXXXX")      # 📂 Replace with your input folder ID
+output_folder_tables = dataiku.Folder("XXXXXXXXX")  # 📂 Replace with your output folder ID for tables
+output_folder_summary = dataiku.Folder("XXXXXXXXX") # 📂 Replace with your output folder ID for summary CSV
 # -----------------------------
 # Logging Helper
 # -----------------------------
