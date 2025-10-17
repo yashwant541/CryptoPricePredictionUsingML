@@ -1,232 +1,48 @@
-import win32com.client
+import pandas as pd
+import dataiku
+import tempfile
 import os
-import zipfile
-import datetime
-import subprocess
-import openpyxl
-import csv
- 
-# --- Configuration ---
-# Set your working directory where files will be downloaded and extracted
-# IMPORTANT: Ensure this path exists on your computer.
-WORKING_DIR = r"C:\Users\2030650\origami"
- 
-# Name of the Outlook folder to scan (e.g., 'Inbox', 'Junk Email', or a custom folder name)
-OUTLOOK_FOLDER_NAME = 'Inbox'
- 
-# --- Setup and Initialization ---
-def setup_working_directory():
-    """Creates the main working directory and the Downloads folder."""
-    if not os.path.exists(WORKING_DIR):
-        os.makedirs(WORKING_DIR)
-        print(f"Created working directory: {WORKING_DIR}")
-   
-    download_dir = os.path.join(WORKING_DIR, "Downloads")
-    if not os.path.exists(download_dir):
-        os.makedirs(download_dir)
-        print(f"Created downloads folder: {download_dir}")
-       
-    return download_dir
- 
-def get_outlook_folder(folder_name):
-    """Connects to Outlook and returns the specified folder object."""
-    try:
-        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-        # ID 6 corresponds to olFolderInbox. We start here and then check subfolders.
-        inbox = outlook.GetDefaultFolder(6)
-       
-        if folder_name.lower() == 'inbox':
-            return inbox
-       
-        # Search through all folders in the primary store
-        for folder in outlook.Folders:
-            # Check the main folder and its subfolders
-            if folder.Name == folder_name:
-                return folder
-            # If you need to check subfolders of the Inbox:
-            for subfolder in inbox.Folders:
-                if subfolder.Name == folder_name:
-                    return subfolder
-       
-        print(f"Error: Outlook folder '{folder_name}' not found.")
-        return None
-       
-    except Exception as e:
-        print(f"Error connecting to Outlook: {e}")
-        return None
- 
-def extract_with_7zip(zip_path, extract_path):
-    """Extracts ZIP file using 7-Zip for better error tolerance."""
-    try:
-        result = subprocess.run([
-            r"C:\Program Files\7-Zip\7z.exe", "x", zip_path, f"-o{extract_path}", "-y"],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            print(f"   ✓ Extracted contents to: {extract_path} using 7-Zip")
-        else:
-            print(f"   ✗ 7-Zip extraction error: {result.stderr}")
-    except Exception as e:
-        print(f"   ✗ ERROR running 7-Zip: {e}")
- 
-def validate_excel(file_path, issues):
-    wb = openpyxl.load_workbook(file_path, data_only=True)
-    ws = wb["COMPUTED DATA"]
-    date = ws.cell(row=16, column=2).value  # Adjust if needed
- 
-    # Check last status (case-insensitive)
-    def get_last_status(ws):
-        status_rows = []
-        for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=1):
-            if row[0].value and str(row[0].value).strip().lower() == "status":
-                status_rows.append(row[0].row)
-        if status_rows:
-            last_status_row = status_rows[-1]
-            last_status_val = ws.cell(row=last_status_row, column=2).value
-            return last_status_val
-        return None
- 
-    last_status_val = get_last_status(ws)
-    if not last_status_val or str(last_status_val).strip().lower() != "submitted":
-        issues.append([os.path.basename(file_path), date, "Last status is not Submitted"])
- 
-    df_labels = [
-        "DF1- Direct Relevant Transactions",
-        "DF2- Related Relevant Transactions",
-        "DF3- Market Transactions",
-        "DF4- Broker Quotes",
-        "DF5- Expert Judgement"
-    ]
-    def find_row(ws, label):
-        for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=1):
-            if row[0].value and label in str(row[0].value):
-                return row[0].row
-        return None
-    priority_rows = [find_row(ws, label) for label in df_labels]
-    chosen_rate_row = find_row(ws, "Chosen Rate")
-    final_rate_row = find_row(ws, "Final Rate")
-    rational_row = find_row(ws, "Rational for Proposing the Adjustment")
- 
-    for col in range(2, ws.max_column + 1):
-        tenor = ws.cell(row=2, column=col).value
-        # Find the highest priority DF value
-        priority_val = None
-        priority_label = None
-        for idx, row in enumerate(priority_rows):
-            if row is not None:
-                val = ws.cell(row=row, column=col).value
-                if val != "N/A" and val is not None:
-                    priority_val = val
-                    priority_label = df_labels[idx]
-                    break
-        chosen_rate = ws.cell(row=chosen_rate_row, column=col).value if chosen_rate_row else None
-        final_rate = ws.cell(row=final_rate_row, column=col).value if final_rate_row else None
-        rational_val = ws.cell(row=rational_row, column=col).value if rational_row else None
- 
-        # Step 1: Chosen Rate should match highest priority DF value
-        if priority_val is not None and chosen_rate != priority_val:
-            error_message = f"Chosen Rate ({chosen_rate}) does not match highest priority DF value ({priority_val}) from {priority_label} for tenor {tenor}"
-            if rational_val not in [None, "", "N/A"]:
-                error_message += f". Rational provided: {rational_val}"
-            issues.append([
-                os.path.basename(file_path), date, error_message
-            ])
-        # Step 2: Only if Chosen Rate matches DF value, check Final Rate
-        elif priority_val is not None and chosen_rate == priority_val and final_rate != chosen_rate:
-            issues.append([
-                os.path.basename(file_path), date,
-                f"Chosen Rate ({chosen_rate}) does not match Final Rate ({final_rate}) for tenor {tenor}"
-            ])
-        # Step 3: Rational should be empty only if there is a mismatch
-        elif priority_val is not None and chosen_rate != priority_val and rational_val not in [None, "", "N/A"]:
-            if not any("Rational for Proposing the Adjustment is not empty" in issue[2] for issue in issues):
-                issues.append([
-                    os.path.basename(file_path), date,
-                    f"Rational for Proposing the Adjustment is not empty for tenor {tenor}"
-                ])
- 
-def process_extracted_excels():
-    issues = []
-    extracted_folder = r"C:\Users\2030650\origami\Extracted"
-    for root, dirs, files in os.walk(extracted_folder):
-        for file in files:
-            if file.lower().endswith(('.xlsx', '.xls', '.xlsm')):
-                file_path = os.path.join(root, file)
-                try:
-                    validate_excel(file_path, issues)
-                except Exception as e:
-                    print(f"Error processing {file_path}: {e}")
-    # Write a single sheet error report
-    excel_path = r"C:\Users\2030650\origami\error_report.xlsx"
-    csv_path = r"C:\Users\2030650\origami\error_report.csv"
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Error Report"
-    ws.append(["File Name", "Date", "Reason"])
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["File Name", "Date", "Reason"])
-        for row in issues:
-            ws.append(row)
-            writer.writerow(row)
-    wb.save(excel_path)
- 
-def process_attachments():
-    """Main function to scan emails, download ZIPs, and extract them."""
-    download_dir = setup_working_directory()
-    outlook_folder = get_outlook_folder(OUTLOOK_FOLDER_NAME)
-   
-    if outlook_folder is None:
-        return
- 
-    print(f"\n--- Scanning emails in '{OUTLOOK_FOLDER_NAME}' ---")
-   
-    messages = outlook_folder.Items
-    zip_count = 0
-   
-    # Iterate through emails (reverse order is often safer/faster)
-    for message in reversed(messages):
-        # We only check emails with attachments
-        if message.Attachments.Count > 0:
-           
-            # Use a time stamp to create a unique folder for extraction
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-           
-            for attachment in message.Attachments:
-                try:
-                    file_name = attachment.FileName
-                except Exception:
-                    continue  # Skip attachments without a valid FileName
- 
-                # Only process if file_name exists and ends with .zip
-                if file_name and file_name.lower().endswith('.zip'):
-                    zip_path = os.path.join(download_dir, file_name)
-                   
-                    try:
-                        # 1. Save the ZIP file
-                        attachment.SaveAsFile(zip_path)
-                        print(f"   ✓ Downloaded: {file_name} from '{message.Subject}'")
-                        zip_count += 1
-                       
-                        # 2. Create extraction folder based on email subject and timestamp
-                        # Sanitize subject to be a valid folder name
-                        folder_safe_name = "".join([c for c in message.Subject if c.isalnum() or c in (' ', '_')]).rstrip()[:50]
-                        extract_folder_name = f"{timestamp}_{folder_safe_name}"
-                        extract_path = os.path.join(WORKING_DIR, "Extracted", extract_folder_name)
-                       
-                        os.makedirs(extract_path, exist_ok=True)
-                       
-                        # 3. Unzip all files
-                        extract_with_7zip(zip_path, extract_path)
-                       
-                        # Optional: Mark email as read after successful processing
-                        message.UnRead = False
-                       
-                    except Exception as e:
-                        print(f"   ✗ ERROR processing {file_name}: {e}")
-                       
-    print(f"\n--- Process Complete. Total ZIP files processed: {zip_count} ---")
-   
-if __name__=="__main__":
-    process_attachments()
-    process_extracted_excels()
+
+# -----------------------------
+# 🔧 Configuration
+# -----------------------------
+input_folder = dataiku.Folder("INPUT_FOLDER_ID")       # Folder containing the file
+output_dataset_name = "OUTPUT_DATASET_NAME"           # Dataset name in Dataiku
+
+# -----------------------------
+# 🚀 Main Execution
+# -----------------------------
+def main():
+    # List all files in the folder
+    files_in_folder = input_folder.list_paths_in_partition()
+    if not files_in_folder:
+        raise Exception("❌ No files found in input folder.")
+
+    # Pick the first file (or you can filter by name if needed)
+    file_path = files_in_folder[0]
+    file_name = os.path.basename(file_path)
+
+    # Download file from folder
+    with input_folder.get_download_stream(file_path) as stream:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp_file:
+            tmp_file.write(stream.read())
+            tmp_file_path = tmp_file.name
+
+    # Read file into Pandas
+    if tmp_file_path.endswith(".csv"):
+        df = pd.read_csv(tmp_file_path)
+    else:
+        df = pd.read_excel(tmp_file_path, engine="openpyxl")
+
+    # Remove temporary file
+    os.remove(tmp_file_path)
+
+    # Save as a Dataiku dataset
+    output_dataset = dataiku.Dataset(output_dataset_name)
+    output_dataset.write_with_schema(df)
+
+    print(f"✅ File '{file_name}' saved as dataset '{output_dataset_name}' with {len(df)} rows.")
+
+# -----------------------------
+if __name__ == "__main__":
+    main()
