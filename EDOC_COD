@@ -10,9 +10,9 @@ from openpyxl import load_workbook
 # -----------------------------
 # Fixed Dataiku Folder Handles
 # -----------------------------
-input_folder = dataiku.Folder("Tw4EvbUb")      # 📂 Replace with your input folder ID
-output_folder_tables = dataiku.Folder("pwBGEpop")  # 📂 Replace with your output folder ID for tables
-output_folder_summary = dataiku.Folder("PwHZQ7jA") # 📂 Replace with your output folder ID for summary CSV
+input_folder = dataiku.Folder("Tw4EvbUb")        # 📂 Replace with your input folder ID
+output_folder_tables = dataiku.Folder("pwBGEpop")   # 📂 Replace with your output folder ID for tables
+output_folder_summary = dataiku.Folder("PwHZQ7jA")  # 📂 Replace with your output folder ID for summary CSV
 
 # -----------------------------
 # Logging Helper
@@ -29,7 +29,7 @@ def extract_date_from_filename(filename):
     return match.group(0) if match else ""
 
 def read_excel_tab(filepath):
-    """Read 'Excel Tab' sheet and split into main table + metadata"""
+    """Read 'Excel Tab' sheet and split into main table + maker-checker summary"""
     wb = load_workbook(filepath, data_only=True)
     sheet_name = None
 
@@ -45,34 +45,54 @@ def read_excel_tab(filepath):
 
     ws = wb[sheet_name]
     data_rows = []
-    metadata_rows = []
-    found_metadata = False
+    summary_rows = []
+    found_summary = False
 
+    # Split main table and summary area
     for row in ws.iter_rows(values_only=True):
-        if not found_metadata:
-            if isinstance(row[0], str) and row[0].startswith("Col1"):
-                found_metadata = True
-                metadata_rows.append(row)
+        if not found_summary:
+            # Detect start of summary by presence of "USER:" or "Benchmark:" text
+            row_text = " ".join([str(c) for c in row if c]).strip()
+            if any(x in row_text for x in ["USER:", "Benchmark:", "Status", "Date:"]):
+                found_summary = True
+                summary_rows.append(row)
             else:
                 data_rows.append(row)
         else:
-            metadata_rows.append(row)
+            summary_rows.append(row)
 
-    # Filter empty rows
+    # Filter out empty rows from table
     data_rows = [r for r in data_rows if any(r)]
     if not data_rows:
         return None, None
 
     df_table = pd.DataFrame(data_rows[1:], columns=data_rows[0])
 
+    # Parse maker-checker summary
+    summary_texts = [" ".join([str(c) for c in row if c]).strip() for row in summary_rows if any(row)]
     metadata = []
     current = {}
-    for r in metadata_rows:
-        if r[0] and isinstance(r[0], str) and r[0].startswith("Col"):
-            current[r[0]] = r[1] if len(r) > 1 else None
-            if len(current) == 5:
+
+    for line in summary_texts:
+        if "USER:" in line:
+            if current:
                 metadata.append(current)
                 current = {}
+            current["USER"] = line.split("USER:")[1].strip()
+
+        elif "Benchmark:" in line:
+            current["Benchmark"] = line.split("Benchmark:")[1].strip()
+
+        elif re.search(r"\bDate[:\s]", line):
+            date_val = line.split("Date:")[1].strip() if "Date:" in line else ""
+            current["Date (in file)"] = date_val
+
+        elif line.startswith("Status "):
+            current["Status"] = line.replace("Status", "").strip()
+
+        elif "Status Time" in line:
+            current["Status Time"] = line.replace("Status Time", "").strip()
+
     if current:
         metadata.append(current)
 
@@ -85,7 +105,6 @@ def main():
     try:
         log("🔍 Scanning top-level of input folder for ORIGAMI Excel files...")
 
-        # Only list top-level files (no subfolders)
         all_files = input_folder.list_paths_in_partition()
         excel_files = [
             f for f in all_files
@@ -134,18 +153,19 @@ def main():
                 for meta in metadata_list:
                     summary_records.append({
                         "FileName": file_name,
-                        "Date": file_date,
-                        "Col1": meta.get("Col1", ""),
-                        "Col2": meta.get("Col2", ""),
-                        "Col3": meta.get("Col3", ""),
-                        "Col4": meta.get("Col4", ""),
-                        "Col5": meta.get("Col5", "")
+                        "FileDate": file_date,
+                        "USER": meta.get("USER", ""),
+                        "Benchmark": meta.get("Benchmark", ""),
+                        "Date (in file)": meta.get("Date (in file)", ""),
+                        "Status": meta.get("Status", ""),
+                        "Status Time": meta.get("Status Time", "")
                     })
             else:
                 summary_records.append({
                     "FileName": file_name,
-                    "Date": file_date,
-                    "Col1": "", "Col2": "", "Col3": "", "Col4": "", "Col5": ""
+                    "FileDate": file_date,
+                    "USER": "", "Benchmark": "", "Date (in file)": "",
+                    "Status": "", "Status Time": ""
                 })
 
         # Save summary CSV
@@ -153,7 +173,7 @@ def main():
             df_summary = pd.DataFrame(summary_records)
             with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
                 df_summary.to_csv(tmp_csv.name, index=False)
-                csv_name = "origami_summary.csv"
+                csv_name = "maker_checker_summary.csv"
                 with open(tmp_csv.name, 'rb') as f:
                     output_folder_summary.upload_stream(csv_name, f)
                 os.remove(tmp_csv.name)
