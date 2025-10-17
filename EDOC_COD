@@ -50,9 +50,8 @@ def read_excel_tab(filepath):
 
     # Split main table and summary area
     for row in ws.iter_rows(values_only=True):
+        row_text = " ".join([str(c) for c in row if c]).strip()
         if not found_summary:
-            # Detect start of summary by presence of "USER:" or "Benchmark:" text
-            row_text = " ".join([str(c) for c in row if c]).strip()
             if any(x in row_text for x in ["USER:", "Benchmark:", "Status", "Date:"]):
                 found_summary = True
                 summary_rows.append(row)
@@ -74,24 +73,35 @@ def read_excel_tab(filepath):
     current = {}
 
     for line in summary_texts:
-        if "USER:" in line:
+        line = line.strip()  # remove leading/trailing spaces
+
+        # USER
+        if re.search(r'\bUSER\b', line):
             if current:
                 metadata.append(current)
                 current = {}
-            current["USER"] = line.split("USER:")[1].strip()
+            match = re.search(r'USER[:\s]*(.*)', line)
+            current["USER"] = match.group(1).strip() if match else ""
 
-        elif "Benchmark:" in line:
-            current["Benchmark"] = line.split("Benchmark:")[1].strip()
+        # Benchmark
+        elif re.search(r'\bBenchmark\b', line):
+            match = re.search(r'Benchmark[:\s]*(.*)', line)
+            current["Benchmark"] = match.group(1).strip() if match else ""
 
-        elif re.search(r"\bDate[:\s]", line):
-            date_val = line.split("Date:")[1].strip() if "Date:" in line else ""
-            current["Date (in file)"] = date_val
+        # Date
+        elif re.search(r'\bDate\b', line):
+            match = re.search(r'Date[:\s]*(.*)', line)
+            current["Date (in file)"] = match.group(1).strip() if match else ""
 
-        elif line.startswith("Status "):
-            current["Status"] = line.replace("Status", "").strip()
+        # Status
+        elif re.search(r'\bStatus\b', line) and "Status Time" not in line:
+            match = re.search(r'Status[:\s]*(.*)', line)
+            current["Status"] = match.group(1).strip() if match else ""
 
-        elif "Status Time" in line:
-            current["Status Time"] = line.replace("Status Time", "").strip()
+        # Status Time
+        elif re.search(r'\bStatus Time\b', line):
+            match = re.search(r'Status Time[:\s]*(.*)', line)
+            current["Status Time"] = match.group(1).strip() if match else ""
 
     if current:
         metadata.append(current)
