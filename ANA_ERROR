@@ -1,83 +1,69 @@
-import re
-import os
-import sys
-import shutil
-import tempfile
-import pandas as pd
-import dataiku
-from openpyxl import load_workbook
-
-SHEET_NAME_PATTERN = r'COMPUTED[_ ]?DATA'
-
-# -----------------------------
-# Fixed Dataiku Folder Handles
-# -----------------------------
-input_folder = dataiku.Folder("XXXXXXXXX")      # 📂 Replace with your input folder ID
-output_folder_tables = dataiku.Folder("XXXXXXXXX")  # 📂 Replace with your output folder ID for tables
-output_folder_summary = dataiku.Folder("XXXXXXXXX") # 📂 Replace with your output folder ID for summary CSV
-# -----------------------------
-# Logging Helper
-# -----------------------------
-def log(message):
-    print(f"[LOG] {message}", file=sys.stderr, flush=True)
-
-# -----------------------------
-# Utility Functions
-# -----------------------------
-def extract_date_from_filename(filename):
-    """Extract date pattern like 01-Aug-25"""
-    match = re.search(r'\d{2}-[A-Za-z]{3}-\d{2}', filename)
-    return match.group(0) if match else ""
-
-
 def read_excel_tab(filepath):
-    """Read 'Excel Tab' sheet and split into main table + maker-checker summary"""
+    """Read 'COMPUTED DATA' sheet (Origami Table) with multi-row header from row 2"""
     wb = load_workbook(filepath, data_only=True)
     sheet_name = None
 
-    # Try to find sheet named similar to "Excel Tab"
+    # Find target sheet
     for name in wb.sheetnames:
         if re.search(SHEET_NAME_PATTERN, name, re.IGNORECASE):
             sheet_name = name
             break
 
     if not sheet_name:
-        log("⚠️ 'Excel Tab' not found in workbook.")
+        log("⚠️ 'COMPUTED DATA' sheet not found in workbook.")
         return None, None
 
     ws = wb[sheet_name]
-    data_rows = []
-    summary_rows = []
-    found_summary = False
+    all_rows = list(ws.iter_rows(values_only=True))
+    all_rows = [list(r) for r in all_rows if any(r)]  # remove empty rows
 
-    # Split main table and summary area
-    for row in ws.iter_rows(values_only=True):
-        row_text = " ".join([str(c) for c in row if c]).strip()
-        if not found_summary:
-            if any(x in row_text for x in ["USER:", "Benchmark:", "Status", "Date:"]):
-                found_summary = True
-                summary_rows.append(row)
-            else:
-                data_rows.append(row)
-        else:
-            summary_rows.append(row)
-
-    # Filter out empty rows from table
-    data_rows = [r for r in data_rows if any(r)]
-    if not data_rows:
+    if len(all_rows) < 3:
+        log("⚠️ Not enough rows to form Origami table.")
         return None, None
 
-    df_table = pd.DataFrame(data_rows[1:], columns=data_rows[0])
+    # ---- Identify the start of the table (row 2 in Excel = index 1 here)
+    header_row_1 = [str(x).strip() if x else "" for x in all_rows[1]]  # Row 2
+    header_row_2 = [str(x).strip() if x else "" for x in all_rows[2]]  # Row 3
 
-    # Parse maker-checker summary
+    # ---- Flatten the two header rows
+    combined_headers = []
+    for h1, h2 in zip(header_row_1, header_row_2):
+        if h1 and h2:
+            combined_headers.append(f"{h1}_{h2}")
+        elif h1:
+            combined_headers.append(h1)
+        elif h2:
+            combined_headers.append(h2)
+        else:
+            combined_headers.append("")
+
+    # ---- Find where the summary (maker-checker) section begins
+    start_idx = 3  # data starts after two header rows
+    end_idx = len(all_rows)
+    for i, row in enumerate(all_rows[start_idx:], start=start_idx):
+        text = " ".join([str(c) for c in row if c]).strip()
+        if any(x in text for x in ["USER:", "Benchmark:", "Status", "Date:"]):
+            end_idx = i
+            break
+
+    table_rows = all_rows[start_idx:end_idx]
+    summary_rows = all_rows[end_idx:]
+
+    if not table_rows:
+        log("⚠️ No Origami data rows found.")
+        return None, None
+
+    # ---- Build DataFrame
+    df_table = pd.DataFrame(table_rows, columns=combined_headers)
+
+    # ---- Parse metadata summary
     summary_texts = [" ".join([str(c) for c in row if c]).strip() for row in summary_rows if any(row)]
     metadata = []
     current = {}
 
     for line in summary_texts:
-        line = line.strip()  # remove leading/trailing spaces
+        line = line.strip()
 
-        # USER
         if re.search(r'\bUSER\b', line):
             if current:
                 metadata.append(current)
@@ -85,22 +71,18 @@ def read_excel_tab(filepath):
             match = re.search(r'USER[:\s]*(.*)', line)
             current["USER"] = match.group(1).strip() if match else ""
 
-        # Benchmark
         elif re.search(r'\bBenchmark\b', line):
             match = re.search(r'Benchmark[:\s]*(.*)', line)
             current["Benchmark"] = match.group(1).strip() if match else ""
 
-        # Date
         elif re.search(r'\bDate\b', line):
             match = re.search(r'Date[:\s]*(.*)', line)
             current["Date (in file)"] = match.group(1).strip() if match else ""
 
-        # Status
         elif re.search(r'\bStatus\b', line) and "Status Time" not in line:
             match = re.search(r'Status[:\s]*(.*)', line)
             current["Status"] = match.group(1).strip() if match else ""
 
-        # Status Time
         elif re.search(r'\bStatus Time\b', line):
             match = re.search(r'Status Time[:\s]*(.*)', line)
             current["Status Time"] = match.group(1).strip() if match else ""
@@ -109,95 +91,3 @@ def read_excel_tab(filepath):
         metadata.append(current)
 
     return df_table, metadata
-# -----------------------------
-# Main Processing
-# -----------------------------
-def main():
-    try:
-        log("🔍 Scanning top-level of input folder for ORIGAMI Excel files...")
-
-        all_files = input_folder.list_paths_in_partition()
-        excel_files = [
-            f for f in all_files
-            if "/" not in f.strip("/")  # ensures top-level only
-            and os.path.basename(f).startswith("ORIGAMI")
-            and f.lower().endswith((".xlsx", ".xls"))
-        ]
-
-        if not excel_files:
-            raise Exception("❌ No ORIGAMI Excel files found in the top level of the input folder.")
-
-        summary_records = []
-
-        for path in excel_files:
-            file_name = os.path.basename(path)
-            log(f"📄 Processing: {file_name}")
-
-            # Download to temporary file
-            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_file:
-                tmp_file_path = tmp_file.name
-                with input_folder.get_download_stream(path) as stream:
-                    shutil.copyfileobj(stream, tmp_file)
-
-            # Extract date from filename
-            file_date = extract_date_from_filename(file_name)
-
-            # Parse Excel
-            df_table, metadata_list = read_excel_tab(tmp_file_path)
-            os.remove(tmp_file_path)
-
-            if df_table is None:
-                log(f"⚠️ Skipped {file_name}: No valid 'Excel Tab' or table found.")
-                continue
-
-            # Save main table to output folder
-            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_out:
-                df_table.to_excel(tmp_out.name, index=False)
-                out_name = file_name.replace(".xlsx", "_table.xlsx")
-                with open(tmp_out.name, "rb") as f_out:
-                    output_folder_tables.upload_stream(out_name, f_out)
-                os.remove(tmp_out.name)
-                log(f"✅ Saved table: {out_name}")
-
-            # Add metadata info to summary
-            if metadata_list:
-                for meta in metadata_list:
-                    summary_records.append({
-                        "FileName": file_name,
-                        "FileDate": file_date,
-                        "USER": meta.get("USER", ""),
-                        "Benchmark": meta.get("Benchmark", ""),
-                        "Date (in file)": meta.get("Date (in file)", ""),
-                        "Status": meta.get("Status", ""),
-                        "Status Time": meta.get("Status Time", "")
-                    })
-            else:
-                summary_records.append({
-                    "FileName": file_name,
-                    "FileDate": file_date,
-                    "USER": "", "Benchmark": "", "Date (in file)": "",
-                    "Status": "", "Status Time": ""
-                })
-
-        # Save summary CSV
-        if summary_records:
-            df_summary = pd.DataFrame(summary_records)
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
-                df_summary.to_csv(tmp_csv.name, index=False)
-                csv_name = "maker_checker_summary.csv"
-                with open(tmp_csv.name, 'rb') as f:
-                    output_folder_summary.upload_stream(csv_name, f)
-                os.remove(tmp_csv.name)
-            log(f"✅ Summary written to {csv_name} ({len(summary_records)} rows)")
-        else:
-            log("⚠️ No metadata found to include in summary.")
-
-    except Exception as e:
-        log(f"🔥 ERROR: {str(e)}")
-        raise
-
-# -----------------------------
-# Entrypoint
-# -----------------------------
-if __name__ == "__main__":
-    main()
