@@ -1,1 +1,94 @@
-Category	Tenor/Rating	DF-1 AAA	Final AA+	Final AA	Final AA-	DF-2	DF-3	DF-4 AAA	Final AA+	Final AA	Final AA-	DF-5	Final AAA	Final AA- Source	Final AA+	Final AA- Source	Final AA	Final AA- Source	Final AA-	Final AA- Source
+def read_excel_tab(filepath):
+    """Read Origami table and hardcode column renames"""
+    wb = load_workbook(filepath, data_only=True)
+    sheet_name = None
+
+    # Find the sheet
+    for name in wb.sheetnames:
+        if re.search(SHEET_NAME_PATTERN, name, re.IGNORECASE):
+            sheet_name = name
+            break
+
+    if not sheet_name:
+        log("⚠️ 'COMPUTED DATA' sheet not found in workbook.")
+        return None, None
+
+    ws = wb[sheet_name]
+    all_rows = [list(r) for r in ws.iter_rows(values_only=True) if any(r)]
+
+    # Header rows (row 2 and 3)
+    header_row_1 = [str(x).strip() if x else "" for x in all_rows[1]]
+    header_row_2 = [str(x).strip() if x else "" for x in all_rows[2]]
+
+    # Flatten header
+    combined_headers = []
+    for h1, h2 in zip(header_row_1, header_row_2):
+        if h1 and h2:
+            combined_headers.append(f"{h1} {h2}".strip())
+        elif h1:
+            combined_headers.append(h1.strip())
+        elif h2:
+            combined_headers.append(h2.strip())
+        else:
+            combined_headers.append("")
+
+    # Create dataframe from row 4 onward
+    df_table = pd.DataFrame(all_rows[3:], columns=combined_headers)
+
+    # -------------------------------
+    # HARD-CODED RENAMES
+    # -------------------------------
+    rename_map = {}
+
+    # 3rd to 6th column -> DF-1 section
+    df1_names = ["DF-1 AAA", "DF-1 AA+", "DF-1 AA", "DF-1 AA-"]
+    for idx, name in zip(range(2, 6), df1_names):
+        rename_map[df_table.columns[idx]] = name
+
+    # Columns after DF-5 -> Final section (next 8 columns)
+    final_names = [
+        "Final AAA", "Final AAA Source",
+        "Final AA+", "Final AA+ Source",
+        "Final AA", "Final AA Source",
+        "Final AA-", "Final AA- Source"
+    ]
+    # Assuming DF-5 is the 12th column (index 11)
+    for idx, name in zip(range(12, 20), final_names):
+        if idx < len(df_table.columns):
+            rename_map[df_table.columns[idx]] = name
+
+    df_table.rename(columns=rename_map, inplace=True)
+
+    # -------------------------------
+    # Extract summary rows (maker-checker metadata)
+    # -------------------------------
+    summary_rows = all_rows[3+len(df_table):]  # rows after the table
+    summary_texts = [" ".join([str(c) for c in row if c]).strip() for row in summary_rows if any(row)]
+    metadata = []
+    current = {}
+
+    for line in summary_texts:
+        line = line.strip()
+        if re.search(r'\bUSER\b', line):
+            if current:
+                metadata.append(current)
+                current = {}
+            match = re.search(r'USER[:\s]*(.*)', line)
+            current["USER"] = match.group(1).strip() if match else ""
+        elif re.search(r'\bBenchmark\b', line):
+            match = re.search(r'Benchmark[:\s]*(.*)', line)
+            current["Benchmark"] = match.group(1).strip() if match else ""
+        elif re.search(r'\bDate\b', line):
+            match = re.search(r'Date[:\s]*(.*)', line)
+            current["Date (in file)"] = match.group(1).strip() if match else ""
+        elif re.search(r'\bStatus\b', line) and "Status Time" not in line:
+            match = re.search(r'Status[:\s]*(.*)', line)
+            current["Status"] = match.group(1).strip() if match else ""
+        elif re.search(r'\bStatus Time\b', line):
+            match = re.search(r'Status Time[:\s]*(.*)', line)
+            current["Status Time"] = match.group(1).strip() if match else ""
+
+    if current:
+        metadata.append(current)
+
+    return df_table, metadata
