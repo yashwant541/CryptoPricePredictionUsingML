@@ -2,7 +2,6 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
-import glob
 
 # ------------------------------------------------------
 # 🔧 Configuration (replace with your Dataiku folder IDs)
@@ -23,16 +22,30 @@ def extract_country_date(filename):
     file_date = parts[4] if len(parts) > 4 else ""
     return country, file_date
 
+def read_excel_safe(file_path):
+    """
+    Read an Excel file safely:
+    - Tries openpyxl for .xlsx
+    - Uses pyxlsb for .xlsb or binary Excel
+    """
+    try:
+        if file_path.endswith('.xlsb'):
+            return pd.read_excel(file_path, engine='pyxlsb')
+        else:
+            return pd.read_excel(file_path, engine='openpyxl')
+    except Exception:
+        # fallback for mis-labeled binary xlsx
+        try:
+            return pd.read_excel(file_path, engine='pyxlsb')
+        except Exception as e2:
+            raise Exception(f"Failed to read Excel file '{file_path}': {e2}")
+
 def process_file(file_path, file_name):
     """
     Transform Excel table to long format:
     FileName | Country | FileDate | Tenure | Rate | Factor | Rationale | Final Rate
     """
-    if file_path.endswith('.xlsb'):
-        df = pd.read_excel(file_path, engine='pyxlsb')
-    else:
-        df = pd.read_excel(file_path)
-
+    df = read_excel_safe(file_path)
     country, file_date = extract_country_date(file_name)
     tenures = df.columns[1:]  # All columns after 'Determining Factor'
 
