@@ -1,8 +1,7 @@
 import pandas as pd
 import dataiku
-import os
-import io
 import tempfile
+import os
 
 # ------------------------------------------------------
 # 🔧 Configuration (replace with your Dataiku folder IDs)
@@ -15,10 +14,11 @@ output_folder = dataiku.Folder("pwBGEpop")      # Folder to save success/fail re
 # ------------------------------------------------------
 def evaluate_maker_checker(df):
     """
-    Evaluate maker-checker logic:
+    Evaluate maker-checker logic per (Benchmark + Date) combination:
     1. For each (Benchmark, Date (in file)) combination
-    2. Ensure 4 rows exist for same FileName
+    2. Ensure at least 4 rows exist
     3. Ensure maker (Calculated/Proposed) ≠ checker (Approved/Submitted)
+    4. Handles multiple filenames within the same combination
     """
     success_records = []
     fail_records = []
@@ -29,26 +29,33 @@ def evaluate_maker_checker(df):
     # Clean column names
     df.columns = [c.strip() for c in df.columns]
 
-    # Group by benchmark and date (in file)
+    # Group by Benchmark + Date
     for (benchmark, date_in_file), group in df.groupby(["Benchmark", "Date (in file)"]):
+        # Check each file within the combination
         for file_name, file_grp in group.groupby("FileName"):
+            file_grp = file_grp.copy()  # Avoid SettingWithCopyWarning
+
+            # Rule 1: at least 4 rows
             if len(file_grp) < 4:
+                file_grp["FailReason"] = "Insufficient rows (<4)"
                 fail_records.append(file_grp)
                 continue
 
+            # Identify maker and checker users
             maker_users = set(file_grp[file_grp["Status"].isin(["Calculated", "Proposed"])]["USER"].dropna())
             checker_users = set(file_grp[file_grp["Status"].isin(["Approved", "Submitted"])]["USER"].dropna())
 
+            # Rule 2: maker ≠ checker
             if maker_users and checker_users and not maker_users.intersection(checker_users):
                 success_records.append(file_grp)
             else:
+                file_grp["FailReason"] = "Maker and checker overlap or missing users"
                 fail_records.append(file_grp)
 
     df_success = pd.concat(success_records, ignore_index=True) if success_records else pd.DataFrame(columns=df.columns)
     df_fail = pd.concat(fail_records, ignore_index=True) if fail_records else pd.DataFrame(columns=df.columns)
 
     return df_success, df_fail
-
 
 # ------------------------------------------------------
 # 🚀 Main Execution
@@ -69,19 +76,15 @@ def main():
     # Evaluate
     df_success, df_fail = evaluate_maker_checker(df_summary)
 
-    # Save results
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as success_tmp:
-        df_success.to_csv(success_tmp.name, index=False)
-        with open(success_tmp.name, "rb") as f:
-            output_folder.upload_stream("MakerChecker_Success.csv", f)
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as fail_tmp:
-        df_fail.to_csv(fail_tmp.name, index=False)
-        with open(fail_tmp.name, "rb") as f:
-            output_folder.upload_stream("MakerChecker_Fails.csv", f)
+    # Save results to Dataiku output folder
+    for df, filename in [(df_success, "MakerChecker_Success.csv"), (df_fail, "MakerChecker_Fails.csv")]:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+            df.to_csv(tmp_file.name, index=False)
+            with open(tmp_file.name, "rb") as f:
+                output_folder.upload_stream(filename, f)
+            os.remove(tmp_file.name)  # Clean up temp file
 
     print(f"✅ Evaluation complete: {len(df_success)} success rows, {len(df_fail)} fail rows.")
-
 
 # ------------------------------------------------------
 # Entry point
