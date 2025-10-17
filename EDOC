@@ -14,11 +14,9 @@ output_folder = dataiku.Folder("pwBGEpop")      # Folder to save success/fail re
 # ------------------------------------------------------
 def evaluate_maker_checker(df):
     """
-    Evaluate maker-checker logic per (Benchmark + Date) combination:
-    1. For each (Benchmark, Date (in file)) combination
-    2. Ensure at least 4 rows exist
-    3. Ensure maker (Calculated/Proposed) ≠ checker (Approved/Submitted)
-    4. Handles multiple filenames within the same combination
+    Evaluate maker-checker logic per file for each Benchmark + Date combination:
+    1. Ensure each file has exactly 4 rows
+    2. Ensure maker ≠ checker
     """
     success_records = []
     fail_records = []
@@ -31,13 +29,13 @@ def evaluate_maker_checker(df):
 
     # Group by Benchmark + Date
     for (benchmark, date_in_file), group in df.groupby(["Benchmark", "Date (in file)"]):
-        # Check each file within the combination
+        # Iterate over files within this combination
         for file_name, file_grp in group.groupby("FileName"):
             file_grp = file_grp.copy()  # Avoid SettingWithCopyWarning
 
-            # Rule 1: at least 4 rows
-            if len(file_grp) < 4:
-                file_grp["FailReason"] = "Insufficient rows (<4)"
+            # Rule 1: exactly 4 rows
+            if len(file_grp) != 4:
+                file_grp["FailReason"] = "Row count != 4"
                 fail_records.append(file_grp)
                 continue
 
