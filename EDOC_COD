@@ -1,52 +1,166 @@
-import dataiku
-import zipfile
-import pandas as pd
-import io
+import re
 import os
+import sys
+import shutil
+import tempfile
+import pandas as pd
+import dataiku
+from openpyxl import load_workbook
 
-# --- Input / Output Folder Handles ---
-input_folder = dataiku.Folder("Tw4EvbUb")     # 🔹 Replace with your input folder ID
-output_folder = dataiku.Folder("pwBGEpop")    # 🔹 Replace with your output folder ID
+# -----------------------------
+# Fixed Dataiku Folder Handles
+# -----------------------------
+input_folder = dataiku.Folder("Tw4EvbUb")      # 📂 Replace with your input folder ID
+output_folder_tables = dataiku.Folder("pwBGEpop")  # 📂 Replace with your output folder ID for tables
+output_folder_summary = dataiku.Folder("PwHZQ7jA") # 📂 Replace with your output folder ID for summary CSV
 
-# --- Get list of ZIP files in the input folder ---
-input_files = input_folder.list_paths_in_partition()
+# -----------------------------
+# Logging Helper
+# -----------------------------
+def log(message):
+    print(f"[LOG] {message}", file=sys.stderr, flush=True)
 
-for file_path in input_files:
-    if not file_path.lower().endswith(".zip"):
-        continue  # skip non-zip files
+# -----------------------------
+# Utility Functions
+# -----------------------------
+def extract_date_from_filename(filename):
+    """Extract date pattern like 01-Aug-25"""
+    match = re.search(r'\d{2}-[A-Za-z]{3}-\d{2}', filename)
+    return match.group(0) if match else ""
 
-    print(f"Processing ZIP file: {file_path}")
-    zip_bytes = io.BytesIO(input_folder.get_download_stream(file_path).read())
+def read_excel_tab(filepath):
+    """Read 'Excel Tab' and split into main table + metadata"""
+    wb = load_workbook(filepath, data_only=True)
+    sheet_name = None
 
+    # Fuzzy match sheet named "Excel Tab"
+    for name in wb.sheetnames:
+        if re.search(r'excel[_ ]?tab', name, re.IGNORECASE):
+            sheet_name = name
+            break
+
+    if not sheet_name:
+        log("⚠️ 'Excel Tab' not found in workbook.")
+        return None, None
+
+    ws = wb[sheet_name]
+    data_rows = []
+    metadata_rows = []
+    found_metadata = False
+
+    for row in ws.iter_rows(values_only=True):
+        if not found_metadata:
+            if isinstance(row[0], str) and row[0].startswith("Col1"):
+                found_metadata = True
+                metadata_rows.append(row)
+            else:
+                data_rows.append(row)
+        else:
+            metadata_rows.append(row)
+
+    # Filter empty rows
+    data_rows = [r for r in data_rows if any(r)]
+    if not data_rows:
+        return None, None
+
+    df_table = pd.DataFrame(data_rows[1:], columns=data_rows[0])
+
+    metadata = []
+    current = {}
+    for r in metadata_rows:
+        if r[0] and isinstance(r[0], str) and r[0].startswith("Col"):
+            current[r[0]] = r[1] if len(r) > 1 else None
+            if len(current) == 5:
+                metadata.append(current)
+                current = {}
+    if current:
+        metadata.append(current)
+
+    return df_table, metadata
+
+# -----------------------------
+# Main Processing
+# -----------------------------
+def main():
     try:
-        with zipfile.ZipFile(zip_bytes, 'r') as z:
-            # List files inside the ZIP
-            excel_files = [name for name in z.namelist() if name.endswith(('.xlsx', '.xls'))]
+        log("🔍 Scanning input folder for ORIGAMI Excel files...")
 
-            if len(excel_files) == 0:
-                print(f"No Excel file found inside {file_path}. Skipping.")
+        all_files = input_folder.list_paths_in_partition()
+        excel_files = [f for f in all_files if os.path.basename(f).startswith("ORIGAMI") and f.lower().endswith((".xlsx", ".xls"))]
+
+        if not excel_files:
+            raise Exception("❌ No ORIGAMI Excel files found in the input folder.")
+
+        summary_records = []
+
+        for path in excel_files:
+            file_name = os.path.basename(path)
+            log(f"📄 Processing: {file_name}")
+
+            # Download to temp file
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_file:
+                tmp_file_path = tmp_file.name
+                with input_folder.get_download_stream(path) as stream:
+                    shutil.copyfileobj(stream, tmp_file)
+
+            # Extract date
+            file_date = extract_date_from_filename(file_name)
+
+            # Parse Excel content
+            df_table, metadata_list = read_excel_tab(tmp_file_path)
+            os.remove(tmp_file_path)
+
+            if df_table is None:
+                log(f"⚠️ Skipped {file_name}: No valid table or 'Excel Tab' not found.")
                 continue
-            elif len(excel_files) > 1:
-                print(f"Multiple Excel files found in {file_path}. Taking the first one.")
 
-            excel_name = excel_files[0]
+            # Save table to output folder
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_out:
+                df_table.to_excel(tmp_out.name, index=False)
+                out_name = file_name.replace(".xlsx", "_table.xlsx")
+                with open(tmp_out.name, "rb") as f_out:
+                    output_folder_tables.upload_stream(out_name, f_out)
+                os.remove(tmp_out.name)
+                log(f"✅ Saved table: {out_name}")
 
-            # Read the Excel file directly from the ZIP (in memory)
-            with z.open(excel_name) as excel_file:
-                df = pd.read_excel(excel_file, engine='openpyxl')
+            # Add metadata rows to summary
+            if metadata_list:
+                for meta in metadata_list:
+                    summary_records.append({
+                        "FileName": file_name,
+                        "Date": file_date,
+                        "Col1": meta.get("Col1", ""),
+                        "Col2": meta.get("Col2", ""),
+                        "Col3": meta.get("Col3", ""),
+                        "Col4": meta.get("Col4", ""),
+                        "Col5": meta.get("Col5", "")
+                    })
+            else:
+                summary_records.append({
+                    "FileName": file_name,
+                    "Date": file_date,
+                    "Col1": "", "Col2": "", "Col3": "", "Col4": "", "Col5": ""
+                })
 
-            # Prepare output file name (same as Excel file name)
-            base_name = os.path.basename(excel_name)
-            output_path = os.path.join(output_folder.get_path(), base_name)
+        # Save summary CSV
+        if summary_records:
+            df_summary = pd.DataFrame(summary_records)
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
+                df_summary.to_csv(tmp_csv.name, index=False)
+                csv_name = "origami_summary.csv"
+                with open(tmp_csv.name, 'rb') as f:
+                    output_folder_summary.upload_stream(csv_name, f)
+                os.remove(tmp_csv.name)
+            log(f"✅ Summary written to {csv_name} ({len(summary_records)} rows)")
+        else:
+            log("⚠️ No metadata found to write summary.")
 
-            # Save to output folder
-            output_stream = output_folder.get_writer(base_name)
-            with output_stream as f:
-                df.to_excel(f, index=False, engine='openpyxl')
-
-            print(f"✅ Saved extracted Excel: {base_name}")
-
-    except zipfile.BadZipFile:
-        print(f"❌ Error: {file_path} is not a valid ZIP file.")
     except Exception as e:
-        print(f"⚠️ Failed to process {file_path}: {e}")
+        log(f"🔥 ERROR: {str(e)}")
+        raise
+
+# -----------------------------
+# Entrypoint
+# -----------------------------
+if __name__ == "__main__":
+    main()
