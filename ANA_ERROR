@@ -1,16 +1,16 @@
 import re
 import pandas as pd
 from extract_msg import Message
-from datetime import datetime
-import dataiku
 import io
+import os
+import dataiku
+from datetime import datetime
 
 # -------------------------------
 # 📂 Dataiku folders
 # -------------------------------
-# Replace these with your actual Dataiku folder names
-INPUT_FOLDER_NAME = "msg_input_folder"
-OUTPUT_FOLDER_NAME = "table_output_folder"
+INPUT_FOLDER_NAME = "msg_input_folder"     # Replace with your input folder name
+OUTPUT_FOLDER_NAME = "table_output_folder" # Replace with your output folder name
 
 input_folder = dataiku.Folder(INPUT_FOLDER_NAME)
 output_folder = dataiku.Folder(OUTPUT_FOLDER_NAME)
@@ -24,7 +24,7 @@ def extract_date_from_filename(filename):
     Extract date from filename (handles formats like 04-Apr-2025, 16th June 2025, 2nd July 2024)
     """
     import dateparser
-    name_without_ext = filename.split(".")[0]
+    name_without_ext = os.path.splitext(filename)[0]
     date = dateparser.parse(name_without_ext, settings={'DATE_ORDER': 'DMY'})
     if date:
         return date.strftime('%Y-%m-%d')
@@ -100,17 +100,22 @@ def process_msg_file(msg_bytes, filename):
 # -------------------------------
 # 🔄 Process all MSG files
 # -------------------------------
-
 def process_all_msg_files():
     # List all files in input folder
-    input_files = input_folder.list_paths_in_partition()
-    msg_files = [f for f in input_files if f.lower().endswith('.msg')]
-
-    if not msg_files:
-        print("No MSG files found in Dataiku input folder.")
+    all_files = input_folder.list_paths_in_partition()
+    if not all_files:
+        print("No files found in input folder.")
         return
 
-    print(f"Found {len(msg_files)} MSG files")
+    # Detect MSG files (handles uppercase, whitespace)
+    msg_files = [f.strip() for f in all_files if f.strip().lower().endswith('.msg')]
+
+    if not msg_files:
+        print("No MSG files found in the input folder.")
+        print("Files present:", all_files)
+        return
+
+    print(f"Found {len(msg_files)} MSG files: {msg_files}")
     successful = 0
 
     for i, path in enumerate(msg_files, 1):
