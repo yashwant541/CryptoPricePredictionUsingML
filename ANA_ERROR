@@ -15,6 +15,7 @@ SHEET_NAME_PATTERN = r'COMPUTED[_ ]?DATA'
 input_folder = dataiku.Folder("XXXXXXXX")      # 📂 Replace with your input folder ID
 output_folder_tables = dataiku.Folder("XXXXXXXX")  # 📂 Replace with your output folder ID for tables
 output_folder_summary = dataiku.Folder("XXXXXXXX") # 📂 Replace with your output folder ID for summary CSV
+
 # -----------------------------
 # Logging Helper
 # -----------------------------
@@ -31,18 +32,18 @@ def extract_date_from_filename(filename):
 
 
 def read_excel_tab(filepath):
-    """Read 'Excel Tab' sheet and split into main table + maker-checker summary"""
+    """Read 'COMPUTED DATA' (or similar) sheet and split into main table + maker-checker summary"""
     wb = load_workbook(filepath, data_only=True)
     sheet_name = None
 
-    # Try to find sheet named similar to "Excel Tab"
+    # Try to find sheet named similar to "COMPUTED DATA"
     for name in wb.sheetnames:
         if re.search(SHEET_NAME_PATTERN, name, re.IGNORECASE):
             sheet_name = name
             break
 
     if not sheet_name:
-        log("⚠️ 'Excel Tab' not found in workbook.")
+        log("⚠️ 'COMPUTED DATA' not found in workbook.")
         return None, None
 
     ws = wb[sheet_name]
@@ -109,6 +110,8 @@ def read_excel_tab(filepath):
         metadata.append(current)
 
     return df_table, metadata
+
+
 # -----------------------------
 # Main Processing
 # -----------------------------
@@ -147,19 +150,58 @@ def main():
             os.remove(tmp_file_path)
 
             if df_table is None:
-                log(f"⚠️ Skipped {file_name}: No valid 'Excel Tab' or table found.")
+                log(f"⚠️ Skipped {file_name}: No valid 'COMPUTED DATA' or table found.")
                 continue
 
-            # Save main table to output folder
+            # ------------------------------------------------------
+            # 🧹 Step 1: Drop first two header rows
+            # ------------------------------------------------------
+            if len(df_table) >= 2:
+                df_table = df_table.iloc[2:].reset_index(drop=True)
+            else:
+                log(f"⚠️ {file_name}: Less than 2 rows to drop — skipped cleanup.")
+                continue
+
+            # ------------------------------------------------------
+            # 🏷️ Step 2: Add new header row
+            # ------------------------------------------------------
+            new_headers = [
+                "Category", "Tenor/Rating",
+                "DF-1 AAA", "DF-1 AA+", "DF-1 AA", "DF-1 AA-",
+                "DF2", "DF3",
+                "DF-4 AAA", "DF-4 AA+", "DF-4 AA", "DF-4 AA-", "DF5",
+                "Final AAA", "Final AAA Source",
+                "Final AA+", "Final AA+ Source",
+                "Final AA", "Final AA Source",
+                "Final AA-", "Final AA Source"
+            ]
+
+            # Ensure number of columns match
+            if len(df_table.columns) != len(new_headers):
+                log(f"⚠️ {file_name}: Column count mismatch "
+                    f"({len(df_table.columns)} vs {len(new_headers)}) — trimming or padding.")
+                if len(df_table.columns) > len(new_headers):
+                    df_table = df_table.iloc[:, :len(new_headers)]
+                else:
+                    for i in range(len(new_headers) - len(df_table.columns)):
+                        df_table[f"Extra_{i+1}"] = ""
+
+            df_table.columns = new_headers
+
+            # ------------------------------------------------------
+            # 💾 Step 3: Save cleaned table
+            # ------------------------------------------------------
             with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_out:
                 df_table.to_excel(tmp_out.name, index=False)
                 out_name = file_name.replace(".xlsx", "_table.xlsx")
                 with open(tmp_out.name, "rb") as f_out:
                     output_folder_tables.upload_stream(out_name, f_out)
                 os.remove(tmp_out.name)
-                log(f"✅ Saved table: {out_name}")
+                log(f"✅ Saved cleaned table: {out_name}")
 
-            # Add metadata info to summary
+            # ------------------------------------------------------
+            # 🧾 Step 4: Add metadata info to summary
+            # ------------------------------------------------------
             if metadata_list:
                 for meta in metadata_list:
                     summary_records.append({
@@ -195,6 +237,7 @@ def main():
     except Exception as e:
         log(f"🔥 ERROR: {str(e)}")
         raise
+
 
 # -----------------------------
 # Entrypoint
