@@ -1,37 +1,16 @@
-import pandas as pd
 import dataiku
 import tempfile
 import os
-from datetime import datetime
+import extract_msg
 
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")      # 📥 Input folder
-output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")    # 📤 Output folder
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")      # 📥 Input folder containing .msg files
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")    # 📤 Output folder for attachments
 
-# List of sheet names to skip
-EXCEPTION_SHEETS = ["Summary", "Notes", "Metadata"]  # add any sheet names you want to ignore
-
-# ------------------------------------------------------
-# 🧠 Helper Functions
-# ------------------------------------------------------
-def looks_like_date(val):
-    """Check if a value looks like a date"""
-    if isinstance(val, (pd.Timestamp, datetime)):
-        return True
-    if isinstance(val, str):
-        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
-            try:
-                datetime.strptime(val.strip(), fmt)
-                return True
-            except:
-                continue
-    return False
-
-def read_excel_safe(file_path):
-    """Read Excel using openpyxl engine for .xlsx"""
-    return pd.ExcelFile(file_path, engine="openpyxl")
+# Allowed tabular attachment types
+TABULAR_EXTENSIONS = ('.xls', '.xlsx', '.xlsm', '.xlsb', '.csv', '.txt')
 
 # ------------------------------------------------------
 # 🚀 Main Execution
@@ -39,82 +18,46 @@ def read_excel_safe(file_path):
 def main():
     input_files = input_folder.list_paths_in_partition()
     if not input_files:
-        raise FileNotFoundError("❌ No files found in input folder!")
+        raise FileNotFoundError("❌ No .msg files found in input folder!")
 
-    for excel_file_info in input_files:
-        file_name = os.path.basename(excel_file_info)
+    for msg_file_info in input_files:
+        file_name = os.path.basename(msg_file_info)
 
-        # Download file to temporary location
-        with input_folder.get_download_stream(excel_file_info) as stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-                tmp.write(stream.read())
-                tmp_path = tmp.name
+        # Download .msg file to temporary location
+        with input_folder.get_download_stream(msg_file_info) as stream:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".msg") as tmp_msg:
+                tmp_msg.write(stream.read())
+                tmp_msg_path = tmp_msg.name
 
-        xls = read_excel_safe(tmp_path)
+        # Load the .msg file
+        msg = extract_msg.Message(tmp_msg_path)
 
-        for sheet_name in xls.sheet_names:
+        # Loop through all attachments
+        for attachment in msg.attachments:
+            attach_name = attachment.longFilename
 
-            # Skip sheets in the exception list
-            if sheet_name in EXCEPTION_SHEETS:
-                print(f"⏩ Skipping sheet '{sheet_name}' as it is in the exception list")
-                continue
+            # Only process tabular attachments
+            if attach_name.lower().endswith(TABULAR_EXTENSIONS):
+                attach_bytes = attachment.data
 
-            df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
+                # Save attachment to a temporary file
+                with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                    tmp_file.write(attach_bytes)
+                    tmp_file_path = tmp_file.name
 
-            # Row 7 (index 6) contains labels
-            label_row_index = 6
-            labels_row = df_raw.iloc[label_row_index]
+                # Upload to Dataiku output folder
+                output_file_name = f"{os.path.splitext(file_name)[0]}_{attach_name}"
+                with open(tmp_file_path, "rb") as f:
+                    output_folder.upload_stream(output_file_name, f)
 
-            tidy_data_list = []
+                os.remove(tmp_file_path)
+                print(f"✅ Saved tabular attachment: {output_file_name}")
+            else:
+                print(f"⏩ Skipping non-tabular attachment: {attach_name}")
 
-            # Loop through all columns to find labels
-            for col in range(df_raw.shape[1]):
-                label = labels_row[col]
-
-                # Only process columns that have a label
-                if pd.notna(label):
-                    if col + 1 < df_raw.shape[1]:
-                        dates = df_raw.iloc[label_row_index + 1:, col]
-                        values = df_raw.iloc[label_row_index + 1:, col + 1]
-
-                        # Remove rows where dates or values are missing
-                        mask = dates.notna() & values.notna()
-                        dates = dates[mask]
-                        values = values[mask]
-
-                        temp_df = pd.DataFrame({
-                            "Date": dates,
-                            "Label": label,
-                            "Value": values
-                        })
-                        tidy_data_list.append(temp_df)
-
-            if not tidy_data_list:
-                print(f"⚠️ No valid data found in sheet '{sheet_name}'")
-                continue
-
-            # Concatenate all label blocks into one tidy DataFrame
-            final_df = pd.concat(tidy_data_list, ignore_index=True)
-
-            # Convert Date column to datetime
-            final_df["Date"] = pd.to_datetime(final_df["Date"], errors='coerce')
-
-            # Optional: sort by Date
-            final_df = final_df.sort_values("Date").reset_index(drop=True)
-
-            # Save to CSV in Dataiku output folder using the sheet name
-            safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-                final_df.to_csv(tmp_file.name, index=False)
-                with open(tmp_file.name, "rb") as f:
-                    output_folder.upload_stream(f"{safe_sheet_name}.csv", f)
-                os.remove(tmp_file.name)
-
-            print(f"✅ Sheet '{sheet_name}' saved as CSV: {safe_sheet_name}.csv")
-
-        # Cleanup temporary Excel
-        os.remove(tmp_path)
-        print(f"✅ Processing complete for file: {file_name}")
+        # Cleanup temporary .msg
+        os.remove(tmp_msg_path)
+        print(f"✅ Processed .msg file: {file_name}")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
