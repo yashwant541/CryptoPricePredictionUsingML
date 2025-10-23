@@ -12,9 +12,9 @@ SHEET_NAME_PATTERN = r'COMPUTED[_ ]?DATA'
 # -----------------------------
 # Fixed Dataiku Folder Handles
 # -----------------------------
-input_folder = dataiku.Folder("DCfYhFp0")      # 📂 Replace with your input folder ID
-output_folder_tables = dataiku.Folder("GwwHsyzO")  # 📂 Replace with your output folder ID for tables
-output_folder_summary = dataiku.Folder("k3NfXo0Q") # 📂 Replace with your output folder ID for summary CSV
+input_folder = dataiku.Folder("XXXXXXXX")      # 📂 Replace with your input folder ID
+output_folder_tables = dataiku.Folder("XXXXXXXX")  # 📂 Replace with your output folder ID for tables
+output_folder_summary = dataiku.Folder("XXXXXXXX") # 📂 Replace with your output folder ID for summary CSV
 # -----------------------------
 # Logging Helper
 # -----------------------------
@@ -31,91 +31,76 @@ def extract_date_from_filename(filename):
 
 
 def read_excel_tab(filepath):
-    """Read Origami table and hardcode column renames"""
+    """Read 'Excel Tab' sheet and split into main table + maker-checker summary"""
     wb = load_workbook(filepath, data_only=True)
     sheet_name = None
 
-    # Find the sheet
+    # Try to find sheet named similar to "Excel Tab"
     for name in wb.sheetnames:
         if re.search(SHEET_NAME_PATTERN, name, re.IGNORECASE):
             sheet_name = name
             break
 
     if not sheet_name:
-        log("⚠️ 'COMPUTED DATA' sheet not found in workbook.")
+        log("⚠️ 'Excel Tab' not found in workbook.")
         return None, None
 
     ws = wb[sheet_name]
-    all_rows = [list(r) for r in ws.iter_rows(values_only=True) if any(r)]
+    data_rows = []
+    summary_rows = []
+    found_summary = False
 
-    # Header rows (row 2 and 3)
-    header_row_1 = [str(x).strip() if x else "" for x in all_rows[1]]
-    header_row_2 = [str(x).strip() if x else "" for x in all_rows[2]]
-
-    # Flatten header
-    combined_headers = []
-    for h1, h2 in zip(header_row_1, header_row_2):
-        if h1 and h2:
-            combined_headers.append(f"{h1} {h2}".strip())
-        elif h1:
-            combined_headers.append(h1.strip())
-        elif h2:
-            combined_headers.append(h2.strip())
+    # Split main table and summary area
+    for row in ws.iter_rows(values_only=True):
+        row_text = " ".join([str(c) for c in row if c]).strip()
+        if not found_summary:
+            if any(x in row_text for x in ["USER:", "Benchmark:", "Status", "Date:"]):
+                found_summary = True
+                summary_rows.append(row)
+            else:
+                data_rows.append(row)
         else:
-            combined_headers.append("")
+            summary_rows.append(row)
 
-    # Create dataframe from row 4 onward
-    df_table = pd.DataFrame(all_rows[3:], columns=combined_headers)
+    # Filter out empty rows from table
+    data_rows = [r for r in data_rows if any(r)]
+    if not data_rows:
+        return None, None
 
-    # -------------------------------
-    # HARD-CODED RENAMES
-    # -------------------------------
-    rename_map = {}
+    df_table = pd.DataFrame(data_rows[1:], columns=data_rows[0])
 
-    # 3rd to 6th column -> DF-1 section
-    df1_names = ["DF-1 AAA", "DF-1 AA+", "DF-1 AA", "DF-1 AA-"]
-    for idx, name in zip(range(2, 6), df1_names):
-        rename_map[df_table.columns[idx]] = name
-
-    # Columns after DF-5 -> Final section (next 8 columns)
-    final_names = [
-        "Final AAA", "Final AAA Source",
-        "Final AA+", "Final AA+ Source",
-        "Final AA", "Final AA Source",
-        "Final AA-", "Final AA- Source"
-    ]
-    # Assuming DF-5 is the 12th column (index 11)
-    for idx, name in zip(range(12, 20), final_names):
-        if idx < len(df_table.columns):
-            rename_map[df_table.columns[idx]] = name
-
-    df_table.rename(columns=rename_map, inplace=True)
-
-    # -------------------------------
-    # Extract summary rows (maker-checker metadata)
-    # -------------------------------
-    summary_rows = all_rows[3+len(df_table):]  # rows after the table
+    # Parse maker-checker summary
     summary_texts = [" ".join([str(c) for c in row if c]).strip() for row in summary_rows if any(row)]
     metadata = []
     current = {}
 
     for line in summary_texts:
-        line = line.strip()
+        line = line.strip()  # remove leading/trailing spaces
+
+        # USER
         if re.search(r'\bUSER\b', line):
             if current:
                 metadata.append(current)
                 current = {}
             match = re.search(r'USER[:\s]*(.*)', line)
             current["USER"] = match.group(1).strip() if match else ""
+
+        # Benchmark
         elif re.search(r'\bBenchmark\b', line):
             match = re.search(r'Benchmark[:\s]*(.*)', line)
             current["Benchmark"] = match.group(1).strip() if match else ""
+
+        # Date
         elif re.search(r'\bDate\b', line):
             match = re.search(r'Date[:\s]*(.*)', line)
             current["Date (in file)"] = match.group(1).strip() if match else ""
+
+        # Status
         elif re.search(r'\bStatus\b', line) and "Status Time" not in line:
             match = re.search(r'Status[:\s]*(.*)', line)
             current["Status"] = match.group(1).strip() if match else ""
+
+        # Status Time
         elif re.search(r'\bStatus Time\b', line):
             match = re.search(r'Status Time[:\s]*(.*)', line)
             current["Status Time"] = match.group(1).strip() if match else ""
@@ -124,7 +109,6 @@ def read_excel_tab(filepath):
         metadata.append(current)
 
     return df_table, metadata
-
 # -----------------------------
 # Main Processing
 # -----------------------------
