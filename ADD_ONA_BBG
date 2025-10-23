@@ -18,8 +18,8 @@ except Exception:
 # -------------------------------
 # 🔧 Configuration: Dataiku folders
 # -------------------------------
-input_folder = dataiku.Folder("BzSiDypz")   # Replace with your input folder ID
-output_folder = dataiku.Folder("Gmdh2vh3") # Replace with your output folder ID
+input_folder = dataiku.Folder("XXXXXXX")   # Replace with your input folder ID
+output_folder = dataiku.Folder("XXXXXXX") # Replace with your output folder ID
 
 # Regex to match dates:
 # 1) Optional ordinal dates: 16th June 2025, 2nd July 2024, 23-Sep-2024
