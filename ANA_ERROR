@@ -3,77 +3,261 @@ import tempfile
 import os
 from msg_parser import MsOxMessage
 import re
+from datetime import datetime
+import logging
+import traceback
 
 # ------------------------------------------------------
-# 🔧 Configuration — Replace with your Dataiku folder IDs
+# 🔧 Configuration
 # ------------------------------------------------------
 input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")
 output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")
 
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
+
 # ------------------------------------------------------
-# 🚀 Helper Function to extract date from filename
+# 🚀 Helper Functions
 # ------------------------------------------------------
 def extract_date_from_filename(filename):
     """
     Extract first date in format DD-MMM-YYYY (like 23-Sep-2024) from filename.
-    Returns date string if found, else 'unknown_date'.
+    Returns date string if found, else uses current date.
     """
     pattern = r'(\d{1,2}-[A-Za-z]{3}-\d{4})'
     match = re.search(pattern, filename)
     if match:
         return match.group(1)
-    return "unknown_date"
+    # Fallback to current date if no date in filename
+    return datetime.now().strftime("%d-%b-%Y")
+
+def sanitize_filename(filename):
+    """
+    Remove or replace characters that might be problematic in filenames.
+    """
+    # Remove invalid characters for filenames
+    invalid_chars = '<>:"/\\|?*'
+    for char in invalid_chars:
+        filename = filename.replace(char, '_')
+    return filename
+
+def get_attachment_name(attachment, index):
+    """
+    Safely extract attachment name with fallbacks.
+    """
+    attach_name = (getattr(attachment, "long_fname", None) or 
+                   getattr(attachment, "filename", None) or 
+                   f"attachment_{index}")
+    return sanitize_filename(attach_name)
+
+def diagnose_issues():
+    """
+    Run comprehensive diagnostics to identify problems.
+    """
+    print("🔍 RUNNING DIAGNOSTICS 🔍")
+    
+    # 1. Check folder access
+    print("\n1. 📁 Checking folder access...")
+    try:
+        input_files = input_folder.list_paths_in_partition()
+        print(f"   ✅ Input folder accessible")
+        print(f"   📊 Files found: {len(input_files)}")
+        for i, file_path in enumerate(input_files[:5]):  # Show first 5 files
+            print(f"      {i+1}. {file_path}")
+        if len(input_files) > 5:
+            print(f"      ... and {len(input_files) - 5} more files")
+    except Exception as e:
+        print(f"   ❌ Input folder error: {e}")
+        return False
+    
+    # 2. Check for .msg files
+    print("\n2. 📧 Checking for .msg files...")
+    msg_files = [f for f in input_files if f.lower().endswith('.msg')]
+    print(f"   📧 .msg files found: {len(msg_files)}")
+    
+    if not msg_files:
+        print("   ❌ No .msg files found!")
+        # Show all file extensions for debugging
+        all_extensions = set(os.path.splitext(f)[1].lower() for f in input_files if os.path.splitext(f)[1])
+        print(f"   📊 All file extensions in folder: {all_extensions}")
+        return False
+    
+    # Show .msg files
+    for i, msg_file in enumerate(msg_files):
+        print(f"      {i+1}. {msg_file}")
+    
+    # 3. Test first .msg file
+    print("\n3. 🔮 Testing first .msg file...")
+    first_file = msg_files[0]
+    try:
+        # Test download
+        with input_folder.get_download_stream(first_file) as stream:
+            content = stream.read()
+            print(f"   ✅ File downloaded: {len(content)} bytes")
+            
+        if len(content) == 0:
+            print("   ❌ File is empty!")
+            return False
+            
+        # Test parsing
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".msg") as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        
+        try:
+            msg = MsOxMessage(tmp_path)
+            attachments = list(msg.attachments)
+            print(f"   ✅ Parsing successful: {len(attachments)} attachments found")
+            
+            # Show attachment details
+            for i, attach in enumerate(attachments[:3]):  # Show first 3 attachments
+                attach_name = get_attachment_name(attach, i+1)
+                attach_size = len(getattr(attach, "payload", b""))
+                print(f"      📎 Attachment {i+1}: {attach_name} ({attach_size} bytes)")
+            
+            if len(attachments) > 3:
+                print(f"      ... and {len(attachments) - 3} more attachments")
+                
+        except Exception as parse_error:
+            print(f"   ❌ MSG parsing failed: {parse_error}")
+            return False
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        
+        return True
+        
+    except Exception as e:
+        print(f"   ❌ File test failed: {e}")
+        traceback.print_exc()
+        return False
 
 # ------------------------------------------------------
-# 🚀 Main Execution
+# 🚀 Main Processing Function
 # ------------------------------------------------------
-def main():
-    input_files = input_folder.list_paths_in_partition()
-    if not input_files:
-        raise FileNotFoundError("❌ No .msg files found in input folder!")
+def process_msg_files():
+    """
+    Main function to process all .msg files and extract attachments.
+    """
+    try:
+        # Get all files from input folder
+        input_files = input_folder.list_paths_in_partition()
+        if not input_files:
+            logger.warning("⚠️ No files found in input folder!")
+            return 0
 
-    for msg_file_info in input_files:
-        msg_filename = os.path.basename(msg_file_info)
-        email_date = extract_date_from_filename(msg_filename)
+        # Filter for .msg files (case insensitive)
+        msg_files = [f for f in input_files if f.lower().endswith('.msg')]
+        
+        if not msg_files:
+            logger.warning("⚠️ No .msg files found in input folder!")
+            return 0
 
-        # Download .msg file
-        with input_folder.get_download_stream(msg_file_info) as stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".msg") as tmp_msg:
-                tmp_msg.write(stream.read())
-                tmp_msg_path = tmp_msg.name
+        logger.info(f"📧 Found {len(msg_files)} .msg files to process")
+        processed_count = 0
 
-        # Parse .msg file
-        msg = MsOxMessage(tmp_msg_path)
+        for msg_file_path in msg_files:
+            msg_filename = os.path.basename(msg_file_path)
+            email_date = extract_date_from_filename(msg_filename)
+            
+            logger.info(f"🔍 Processing: {msg_filename}")
 
-        for i, attach in enumerate(msg.attachments, start=1):
-            attach_bytes = getattr(attach, "payload", None)
-            attach_name = getattr(attach, "long_fname", getattr(attach, "filename", f"attachment_{i}"))
+            # Download .msg file to temporary location
+            with input_folder.get_download_stream(msg_file_path) as stream:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".msg") as tmp_msg:
+                    tmp_msg.write(stream.read())
+                    tmp_msg_path = tmp_msg.name
 
-            if not attach_bytes:
-                print(f"⏩ Skipping empty attachment {i}")
-                continue
+            try:
+                # Parse .msg file
+                msg = MsOxMessage(tmp_msg_path)
+                
+                if not msg.attachments:
+                    logger.info(f"📭 No attachments found in {msg_filename}")
+                    continue
 
-            # Get file extension without dot
-            ext = os.path.splitext(attach_name)[1].lower().replace('.', '') or "dat"
+                logger.info(f"📎 Found {len(msg.attachments)} attachments in {msg_filename}")
+                attachment_count = 0
 
-            # Construct output filename
-            output_file_name = f"{email_date}_{ext}.{ext}"
+                for i, attachment in enumerate(msg.attachments, start=1):
+                    attach_bytes = getattr(attachment, "payload", None)
+                    attach_name = get_attachment_name(attachment, i)
 
-            # Save temporary file
-            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                tmp_file.write(attach_bytes)
-                tmp_file_path = tmp_file.name
+                    if not attach_bytes:
+                        logger.warning(f"⏩ Skipping empty attachment {i}: {attach_name}")
+                        continue
 
-            # Upload to Dataiku output folder
-            with open(tmp_file_path, "rb") as f:
-                output_folder.upload_stream(output_file_name, f)
+                    # Get file extension
+                    base_name, ext_with_dot = os.path.splitext(attach_name)
+                    ext = ext_with_dot.lower().lstrip('.') or "dat"
+                    
+                    # Construct unique output filename
+                    safe_base_name = sanitize_filename(base_name)
+                    output_file_name = f"{email_date}_{safe_base_name}_{i}.{ext}"
 
-            os.remove(tmp_file_path)
-            print(f"✅ Saved attachment as: {output_file_name}")
+                    # Save temporary file
+                    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                        tmp_file.write(attach_bytes)
+                        tmp_file_path_attach = tmp_file.name
 
-        # Cleanup temporary .msg
-        os.remove(tmp_msg_path)
-        print(f"✅ Processed .msg file: {msg_filename}")
+                    # Upload to Dataiku output folder
+                    try:
+                        with open(tmp_file_path_attach, "rb") as f:
+                            output_folder.upload_stream(output_file_name, f)
+                        logger.info(f"✅ Saved: {output_file_name}")
+                        attachment_count += 1
+                    except Exception as upload_error:
+                        logger.error(f"❌ Failed to upload {output_file_name}: {upload_error}")
+                    finally:
+                        # Cleanup temporary attachment file
+                        if os.path.exists(tmp_file_path_attach):
+                            os.remove(tmp_file_path_attach)
 
+                logger.info(f"🎉 Processed {msg_filename}: {attachment_count} attachments extracted")
+                processed_count += 1
+
+            except Exception as msg_error:
+                logger.error(f"❌ Error processing {msg_filename}: {msg_error}")
+                traceback.print_exc()
+            finally:
+                # Cleanup temporary .msg file
+                if os.path.exists(tmp_msg_path):
+                    os.remove(tmp_msg_path)
+
+        logger.info(f"🎉 Processing complete! {processed_count}/{len(msg_files)} .msg files processed successfully!")
+        return processed_count
+
+    except Exception as e:
+        logger.error(f"💥 Critical error in main execution: {e}")
+        traceback.print_exc()
+        return 0
+
+# ------------------------------------------------------
+# 🎯 Main Execution
+# ------------------------------------------------------
 if __name__ == "__main__":
-    main()
+    print("=" * 60)
+    print("📧 MSG Attachment Extractor - Dataiku")
+    print("=" * 60)
+    
+    # Step 1: Run diagnostics
+    print("\n🚀 Starting diagnostics...")
+    diagnostic_passed = diagnose_issues()
+    
+    if diagnostic_passed:
+        print("\n✅ Diagnostics passed! Starting main processing...")
+        print("-" * 40)
+        
+        # Step 2: Process files
+        processed_count = process_msg_files()
+        
+        print("-" * 40)
+        if processed_count > 0:
+            print(f"🎊 Successfully processed {processed_count} files!")
+        else:
+            print("❌ No files were processed. Check the logs above for errors.")
+    else:
+        print("\n❌ Diagnostics failed! Please fix the issues above before processing.")
+    
+    print("=" * 60)
