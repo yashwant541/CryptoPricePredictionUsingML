@@ -2,6 +2,7 @@ import dataiku
 import pandas as pd
 import tempfile
 from datetime import datetime
+import os
 
 # ----------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
@@ -41,12 +42,12 @@ with input_folder.get_download_stream(excel_file_info) as stream:
         tmp_path = tmp.name
 
 # ----------------------------------------------------------
-# Step 3: Load Excel file and iterate sheets
+# Step 3: Load Excel file with openpyxl engine and iterate sheets
 # ----------------------------------------------------------
-xls = pd.ExcelFile(tmp_path)
+xls = pd.ExcelFile(tmp_path, engine="openpyxl")  # Specify engine
 for sheet_name in xls.sheet_names:
     # Read sheet without header
-    df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None)
+    df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
 
     # Detect header rows with date
     header_rows = [i for i in range(len(df_raw)) if any(looks_like_date(cell) for cell in df_raw.iloc[i])]
@@ -93,5 +94,4 @@ for sheet_name in xls.sheet_names:
 # ----------------------------------------------------------
 # Step 5: Cleanup temp file
 # ----------------------------------------------------------
-import os
 os.remove(tmp_path)
