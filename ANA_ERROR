@@ -32,8 +32,8 @@ def main():
         msg = MsOxMessage(tmp_msg_path)
 
         for attach in msg.attachments:
-            attach_name = attach.long_fname
-            attach_bytes = attach.data
+            attach_name = attach.filename  # Correct attribute
+            attach_bytes = attach.payload  # Correct attribute
 
             if attach_name.lower().endswith(TABULAR_EXTENSIONS):
                 # Save temporary file
