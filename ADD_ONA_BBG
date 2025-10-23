@@ -8,8 +8,16 @@ output_folder = r"C:\Users\2011747\Desktop\Benchmark HKIN\New Inputs\Independent
 
 os.makedirs(output_folder, exist_ok=True)
 
-# Regex to extract date from filename (e.g., 23-Sep-2024)
-date_pattern = re.compile(r"\d{1,2}-[A-Za-z]{3}-\d{4}")
+# Regex to match dates with optional ordinal suffixes: 16th June 2025, 2nd July 2024, 23-Sep-2024
+date_pattern = re.compile(r'(\d{1,2}(?:st|nd|rd|th)?[- ]?[A-Za-z]{3,9}[- ]\d{4})', re.IGNORECASE)
+
+# Function to normalize date string by removing suffixes and standardizing separators
+def normalize_date(date_str):
+    # Remove ordinal suffix
+    date_str = re.sub(r'(st|nd|rd|th)', '', date_str, flags=re.IGNORECASE)
+    # Replace spaces with hyphens
+    date_str = date_str.replace(' ', '-')
+    return date_str
 
 # Loop through all .msg files
 for filename in os.listdir(msg_folder):
@@ -18,14 +26,14 @@ for filename in os.listdir(msg_folder):
         
         # Extract date from filename
         match = date_pattern.search(filename)
-        file_date = match.group(0) if match else "UnknownDate"
+        file_date = normalize_date(match.group(0)) if match else "UnknownDate"
         
         try:
             msg = extract_msg.Message(msg_path)
             for att in msg.attachments:
                 att_name = getattr(att, 'longFilename', None) or getattr(att, 'shortFilename', None) or att.filename
-                if att_name and att_name.lower().endswith((".xlsx", ".xlsm", ".csv")):
-                    # Save attachment with the extracted date in filename
+                if att_name and att_name.lower().endswith((".xlsx", ".xlsm", ".csv", ".txt")):
+                    # Save attachment with normalized date
                     save_name = f"{file_date}_{att_name}"
                     save_path = os.path.join(output_folder, save_name)
                     with open(save_path, "wb") as f:
