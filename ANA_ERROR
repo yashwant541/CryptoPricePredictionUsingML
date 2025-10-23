@@ -7,13 +7,10 @@ import os
 import tempfile
 
 # -----------------------------
-# Configuration for Dataiku
+# Dataiku folders
 # -----------------------------
-# Input folder (Dataiku managed folder)
-input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")  # replace with actual ID
-
-# Output folder (Dataiku managed folder)
-output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")  # replace with actual ID
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # Replace with actual ID
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID") # Replace with actual ID
 
 # -----------------------------
 # Utility functions
@@ -83,22 +80,26 @@ def process_msg_file(msg_path, filename):
         if table_df is None and msg.body:
             table_df = extract_table_from_text(msg.body)
 
-        # Save output to Dataiku folder
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            if table_df is not None:
-                temp_file = os.path.join(tmp_dir, f"{date_str}_table.csv")
-                table_df.to_csv(temp_file, index=False)
-            else:
-                temp_file = os.path.join(tmp_dir, f"{date_str}_raw.txt")
-                with open(temp_file, "w", encoding="utf-8") as f:
-                    f.write(msg.body or "")
+        # Save to Dataiku folder
+        if table_df is not None:
+            file_name = f"{date_str}_table.csv"
+            csv_bytes = table_df.to_csv(index=False).encode('utf-8')
+        else:
+            file_name = f"{date_str}_raw.txt"
+            csv_bytes = (msg.body or "").encode('utf-8')
 
-            output_folder.upload_file(temp_file, os.path.basename(temp_file))
+        # Upload properly
+        output_folder.upload_stream(file_name, csv_bytes)
+        print(f"Saved: {file_name}")
         return True
+
     except Exception as e:
         print(f"Error processing {filename}: {e}")
         return False
 
+# -----------------------------
+# Process all MSG files
+# -----------------------------
 def process_all_msg_files():
     files_info = input_folder.list_paths_in_partition()
     msg_files = [f for f in files_info if f.lower().endswith(".msg")]
@@ -113,6 +114,7 @@ def process_all_msg_files():
             with tempfile.NamedTemporaryFile(delete=False, suffix=".msg") as tmp_msg:
                 tmp_msg.write(f.read())
                 tmp_msg_path = tmp_msg.name
+
         if process_msg_file(tmp_msg_path, os.path.basename(file_path)):
             success_count += 1
         os.remove(tmp_msg_path)
