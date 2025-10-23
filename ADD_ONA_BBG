@@ -2,125 +2,94 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
+from datetime import datetime
 
 # ------------------------------------------------------
-# 🔧 Configuration (replace with your Dataiku folder IDs)
+# 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXX")      # Folder containing the Excel files
-output_folder = dataiku.Folder("XXXX")    # Folder to save consolidated output
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")      # 📥 Input folder
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")    # 📤 Output folder
 
 # ------------------------------------------------------
 # 🧠 Helper Functions
 # ------------------------------------------------------
-def extract_country_date(filename):
-    """
-    Extract country code and file date from filename.
-    Assumes filename format: ORIGAMI_XXX_COUNTRY_FILEDATE_XXXXX.xlsx
-    """
-    parts = filename.split("_")
-    country = parts[2] if len(parts) > 2 else ""
-    file_date = parts[3] if len(parts) > 3 else ""
-    return country, file_date
+def looks_like_date(val):
+    if isinstance(val, (pd.Timestamp, datetime)):
+        return True
+    if isinstance(val, str):
+        try:
+            datetime.strptime(val.strip(), "%d-%b-%y")
+            return True
+        except:
+            return False
+    return False
 
 def read_excel_safe(file_path):
-    """
-    Read an Excel file safely:
-    - Tries openpyxl for .xlsx
-    - Uses pyxlsb for .xlsb or binary Excel
-    """
-    try:
-        if file_path.endswith('.xlsb'):
-            return pd.read_excel(file_path, engine='pyxlsb')
-        else:
-            return pd.read_excel(file_path, engine='openpyxl')
-    except Exception:
-        # fallback for mis-labeled binary xlsx
-        try:
-            return pd.read_excel(file_path, engine='pyxlsb')
-        except Exception as e2:
-            raise Exception(f"Failed to read Excel file '{file_path}': {e2}")
-
-def process_file(file_path, file_name):
-    """
-    Transform Excel table to long format:
-    FileName | Country | FileDate | Tenure | Rate | Factor | Rationale | Final Rate
-    """
-    df = read_excel_safe(file_path)
-    country, file_date = extract_country_date(file_name)
-    tenures = df.columns[1:]  # All columns after 'Determining Factor'
-
-    output_rows = []
-
-    for col in tenures:
-        col_values = df[col].tolist()
-        rate = None
-        factor = None
-
-        # Pick first non-N/A value from rows 2-6 (index 1-5)
-        for idx in range(1, 6):
-            val = col_values[idx]
-            if pd.notna(val) and str(val).strip().upper() != "N/A":
-                rate = val
-                factor = idx+1  # subtract 1 if needed
-                break
-
-        # Rationale
-        rationale_row = df[df.iloc[:, 0] == "Rational for Proposing the Adjustment"]
-        rationale = rationale_row.iloc[0, df.columns.get_loc(col)] if not rationale_row.empty else ""
-
-        # Final Rate
-        final_rate_row = df[df.iloc[:, 0] == "Final Rate"]
-        final_rate = final_rate_row.iloc[0, df.columns.get_loc(col)] if not final_rate_row.empty else ""
-
-        output_rows.append({
-            "FileName": file_name,
-            "Country": country,
-            "FileDate": file_date,
-            "Tenure": col,
-            "Rate": rate,
-            "Factor": factor,
-            "Rationale": rationale,
-            "Final Rate": final_rate
-        })
-
-    return output_rows
+    """Read Excel using openpyxl engine for .xlsx"""
+    return pd.ExcelFile(file_path, engine="openpyxl")
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
 def main():
-    print("🔍 Reading Excel files from Dataiku input folder...")
+    # Step 1: Get the only Excel file in input folder
+    input_files = input_folder.list_paths_in_partition()
+    if not input_files:
+        raise FileNotFoundError("❌ No files found in input folder!")
 
-    # List all Excel files in the Dataiku input folder
-    excel_files = [f for f in input_folder.list_paths_in_partition() if f.endswith(('.xlsx', '.xlsb'))]
-    if not excel_files:
-        raise Exception("❌ No Excel files found in input folder.")
+    excel_file_info = input_files[0]
+    file_name = os.path.basename(excel_file_info)
 
-    all_data = []
+    # Step 2: Download Excel file to temp path
+    with input_folder.get_download_stream(excel_file_info) as stream:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            tmp.write(stream.read())
+            tmp_path = tmp.name
 
-    for file_path in excel_files:
-        file_name = os.path.basename(file_path)
-        with input_folder.get_download_stream(file_path) as stream:
-            # Save temporary local copy to read
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp_file:
-                tmp_file.write(stream.read())
-                tmp_file_path = tmp_file.name
+    # Step 3: Load Excel and process each sheet
+    xls = read_excel_safe(tmp_path)
+    for sheet_name in xls.sheet_names:
+        df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
 
-        # Process file
-        all_data.extend(process_file(tmp_file_path, file_name))
-        os.remove(tmp_file_path)
+        # Detect stacked tables by rows containing dates
+        header_rows = [i for i in range(len(df_raw)) if any(looks_like_date(cell) for cell in df_raw.iloc[i])]
+        if not header_rows:
+            print(f"⚠️ No tables found in sheet '{sheet_name}', skipping...")
+            continue
 
-    # Convert to DataFrame
-    output_df = pd.DataFrame(all_data)
+        all_tables = []
+        for idx, header_row in enumerate(header_rows):
+            header = df_raw.iloc[header_row].tolist()
+            date_in_header = next((cell for cell in header if looks_like_date(cell)), None)
+            next_header = header_rows[idx + 1] if idx + 1 < len(header_rows) else len(df_raw)
 
-    # Save consolidated output to Dataiku folder
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-        output_df.to_csv(tmp_file.name, index=False)
-        with open(tmp_file.name, "rb") as f:
-            output_folder.upload_stream("Excel_Long_Format_Consolidated.csv", f)
-        os.remove(tmp_file.name)
+            data_block = df_raw.iloc[header_row + 1:next_header].dropna(how='all')
+            if data_block.empty:
+                continue
 
-    print(f"✅ Processing complete: {len(output_df)} rows created.")
+            data_block = data_block.iloc[:, :len(header)]
+            data_block.columns = header
+            data_block["Date"] = date_in_header
+            all_tables.append(data_block)
+
+        if not all_tables:
+            print(f"⚠️ No tables extracted from sheet '{sheet_name}'")
+            continue
+
+        final_df = pd.concat(all_tables, ignore_index=True)
+
+        # Step 4: Save sheet CSV to Dataiku output folder
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+            final_df.to_csv(tmp_file.name, index=False)
+            with open(tmp_file.name, "rb") as f:
+                output_folder.upload_stream(f"{sheet_name}.csv", f)
+            os.remove(tmp_file.name)
+
+        print(f"✅ Sheet '{sheet_name}' saved as CSV: {sheet_name}.csv")
+
+    # Step 5: Cleanup temp Excel
+    os.remove(tmp_path)
+    print(f"✅ Processing complete for file: {file_name}")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
