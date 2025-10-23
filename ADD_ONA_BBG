@@ -1,96 +1,257 @@
-import pandas as pd
+# recipe.py - Dataiku-compatible MSG Attachment Processor
 import dataiku
-import tempfile
-import os
+import re
 from datetime import datetime
+from pathlib import Path
+import extract_msg
+import magic
+import traceback
+from io import BytesIO
 
-# ------------------------------------------------------
-# 🔧 Configuration — Replace with your Dataiku folder IDs
-# ------------------------------------------------------
-input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")      # 📥 Input folder
-output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")    # 📤 Output folder
-
-# ------------------------------------------------------
-# 🧠 Helper Functions
-# ------------------------------------------------------
-def looks_like_date(val):
-    if isinstance(val, (pd.Timestamp, datetime)):
-        return True
-    if isinstance(val, str):
+class MSGAttachmentProcessor:
+    """
+    Automated MSG file attachment extraction using Dataiku API
+    """
+    
+    def __init__(self, input_folder, output_folder):
+        self.input_folder = input_folder  # Dataiku folder object
+        self.output_folder = output_folder  # Dataiku folder object
+        
         try:
-            datetime.strptime(val.strip(), "%d-%b-%y")
-            return True
+            self.file_type_detector = magic.Magic(mime=True)
         except:
-            return False
-    return False
+            self.file_type_detector = None
+        
+        # Supported file type mappings
+        self.file_type_mappings = {
+            'application/vnd.ms-excel': '.xlsx',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+            'application/pdf': '.pdf',
+            'image/jpeg': '.jpg',
+            'image/png': '.png',
+            'image/gif': '.gif',
+            'application/msword': '.doc',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+            'application/vnd.ms-outlook': '.msg',
+            'text/plain': '.txt',
+            'text/csv': '.csv',
+            'application/octet-stream': '.bin'
+        }
+    
+    def extract_date_from_filename(self, filename: str):
+        """
+        Extract date from MSG filename using pattern: [description]_DD-MMM-YYYY.msg
+        """
+        try:
+            date_pattern = r'(\d{2}-[A-Za-z]{3}-\d{4})'
+            match = re.search(date_pattern, filename)
+            if match:
+                return match.group(1)
+            return None
+        except Exception as e:
+            print(f"Warning: Could not extract date from filename {filename}: {str(e)}")
+            return None
+    
+    def detect_file_extension(self, file_content: bytes, original_name: str) -> str:
+        """
+        Detect correct file extension using magic numbers and content analysis
+        """
+        try:
+            # Try magic detection first
+            if self.file_type_detector:
+                mime_type = self.file_type_detector.from_buffer(file_content)
+                if mime_type in self.file_type_mappings:
+                    return self.file_type_mappings[mime_type]
+            
+            # Fallback: check original filename extension
+            original_ext = Path(original_name).suffix.lower()
+            if original_ext and len(original_ext) <= 5:
+                return original_ext
+            
+            # Check common file signatures
+            if file_content.startswith(b'\x50\x4B\x03\x04'):  # ZIP signature (Excel)
+                return '.xlsx'
+            elif file_content.startswith(b'\xD0\xCF\x11\xE0'):  # OLE signature (old Excel)
+                return '.xls'
+            elif file_content.startswith(b'%PDF'):  # PDF signature
+                return '.pdf'
+            elif file_content.startswith(b'\xFF\xD8\xFF'):  # JPEG signature
+                return '.jpg'
+            elif file_content.startswith(b'\x89PNG'):  # PNG signature
+                return '.png'
+            
+            return '.bin'
+            
+        except Exception as e:
+            print(f"Warning: File type detection failed for {original_name}: {str(e)}")
+            return Path(original_name).suffix or '.bin'
+    
+    def sanitize_filename(self, filename: str) -> str:
+        """
+        Remove invalid characters from filename
+        """
+        invalid_chars = '<>:"/\\|?*'
+        for char in invalid_chars:
+            filename = filename.replace(char, '_')
+        return filename.strip()
+    
+    def process_single_msg(self, msg_file_info):
+        """
+        Process a single MSG file and extract all attachments using Dataiku API
+        """
+        attachments_processed = 0
+        attachments_failed = 0
+        
+        try:
+            msg_name = msg_file_info["path"]
+            print(f"Processing MSG file: {msg_name}")
+            
+            # Extract date from filename for naming convention
+            date_prefix = self.extract_date_from_filename(msg_name)
+            if not date_prefix:
+                date_prefix = datetime.now().strftime('%d-%b-%Y')
+                print(f"Using current date for filename: {date_prefix}")
+            
+            # Read MSG file using Dataiku API
+            with self.input_folder.get_download_stream(msg_name) as stream:
+                msg_content = stream.read()
+            
+            # Process MSG file using extract_msg
+            msg_file = BytesIO(msg_content)
+            msg = extract_msg.openMsg(msg_file)
+            attachments = msg.attachments
+            
+            if not attachments:
+                print(f"No attachments found in {msg_name}")
+                msg.close()
+                return attachments_processed, attachments_failed
+            
+            print(f"Found {len(attachments)} attachments in {msg_name}")
+            
+            # Process each attachment
+            for idx, attachment in enumerate(attachments, 1):
+                try:
+                    # Get attachment details
+                    attachment_name = f'attachment_{idx}'
+                    if hasattr(attachment, 'filename') and attachment.filename:
+                        attachment_name = attachment.filename
+                    
+                    # Sanitize the attachment name
+                    clean_name = self.sanitize_filename(attachment_name)
+                    base_name = Path(clean_name).stem
+                    
+                    # Get attachment data
+                    attachment_data = attachment.data
+                    
+                    if not attachment_data:
+                        raise ValueError("No data found in attachment")
+                    
+                    # Check file size (50MB limit)
+                    if len(attachment_data) > 50 * 1024 * 1024:
+                        raise ValueError(f"Attachment too large: {len(attachment_data)} bytes")
+                    
+                    # Detect correct file extension
+                    file_extension = self.detect_file_extension(attachment_data, clean_name)
+                    
+                    # Generate output filename
+                    output_filename = f"{date_prefix}_{base_name}_{idx}{file_extension}"
+                    
+                    # Check if file already exists in output folder
+                    existing_files = self.output_folder.list_paths_in_partition()
+                    counter = 1
+                    original_output_filename = output_filename
+                    while output_filename in existing_files:
+                        output_filename = f"{date_prefix}_{base_name}_{idx}_{counter}{file_extension}"
+                        counter += 1
+                    
+                    # Save attachment using Dataiku API
+                    with self.output_folder.get_writer(output_filename) as writer:
+                        writer.write(attachment_data)
+                    
+                    print(f"✓ Saved: {output_filename} ({len(attachment_data)} bytes)")
+                    attachments_processed += 1
+                        
+                except Exception as e:
+                    error_msg = f"Failed to process attachment {attachment_name}: {str(e)}"
+                    print(f"✗ Error: {error_msg}")
+                    attachments_failed += 1
+            
+            msg.close()
+            print(f"Completed {msg_name}: {attachments_processed} successful, {attachments_failed} failed")
+            
+        except Exception as e:
+            error_msg = f"Failed to process MSG file {msg_name}: {str(e)}"
+            print(f"✗ Error: {error_msg}")
+            attachments_failed += 1
+        
+        return attachments_processed, attachments_failed
+    
+    def process_batch(self):
+        """
+        Process all MSG files in the input folder using Dataiku API
+        """
+        print("Starting batch processing of MSG files...")
+        
+        # List all files in input folder
+        all_files = self.input_folder.list_paths_in_partition()
+        msg_files = [f for f in all_files if f.lower().endswith('.msg')]
+        
+        if not msg_files:
+            print("No MSG files found in input folder")
+            return
+        
+        print(f"Found {len(msg_files)} MSG files to process")
+        
+        total_attachments_processed = 0
+        total_attachments_failed = 0
+        
+        for msg_file_path in msg_files:
+            file_info = {"path": msg_file_path}
+            processed, failed = self.process_single_msg(file_info)
+            total_attachments_processed += processed
+            total_attachments_failed += failed
+        
+        # Print summary
+        print("=" * 50)
+        print("PROCESSING SUMMARY")
+        print("=" * 50)
+        print(f"Files processed: {len(msg_files)}")
+        print(f"Attachments extracted: {total_attachments_processed}")
+        print(f"Attachments failed: {total_attachments_failed}")
+        total_attachments = total_attachments_processed + total_attachments_failed
+        if total_attachments > 0:
+            success_rate = (total_attachments_processed / total_attachments) * 100
+            print(f"Success rate: {success_rate:.1f}%")
+        print("=" * 50)
 
-def read_excel_safe(file_path):
-    """Read Excel using openpyxl engine for .xlsx"""
-    return pd.ExcelFile(file_path, engine="openpyxl")
-
-# ------------------------------------------------------
-# 🚀 Main Execution
-# ------------------------------------------------------
 def main():
-    # Step 1: Get the only Excel file in input folder
-    input_files = input_folder.list_paths_in_partition()
-    if not input_files:
-        raise FileNotFoundError("❌ No files found in input folder!")
+    """
+    Main function for Dataiku execution
+    """
+    print("🚀 Starting MSG Attachment Processing...")
+    
+    try:
+        # Initialize Dataiku folders - replace with your actual folder names
+        # You can also get these from recipe inputs if needed
+        input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_NAME")  # Replace with your input folder ID
+        output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_NAME")  # Replace with your output folder ID
+        
+        print(f"📁 Input folder: {input_folder.get_id()}")
+        print(f"📁 Output folder: {output_folder.get_id()}")
+        
+        # Initialize processor
+        processor = MSGAttachmentProcessor(input_folder, output_folder)
+        
+        # Process batch
+        processor.process_batch()
+        
+        print("✅ Processing completed!")
+            
+    except Exception as e:
+        error_msg = f"❌ Processing failed: {str(e)}"
+        print(error_msg)
+        print(f"Detailed error: {traceback.format_exc()}")
+        raise
 
-    excel_file_info = input_files[0]
-    file_name = os.path.basename(excel_file_info)
-
-    # Step 2: Download Excel file to temp path
-    with input_folder.get_download_stream(excel_file_info) as stream:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            tmp.write(stream.read())
-            tmp_path = tmp.name
-
-    # Step 3: Load Excel and process each sheet
-    xls = read_excel_safe(tmp_path)
-    for sheet_name in xls.sheet_names:
-        df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
-
-        # Detect stacked tables by rows containing dates
-        header_rows = [i for i in range(len(df_raw)) if any(looks_like_date(cell) for cell in df_raw.iloc[i])]
-        if not header_rows:
-            print(f"⚠️ No tables found in sheet '{sheet_name}', skipping...")
-            continue
-
-        all_tables = []
-        for idx, header_row in enumerate(header_rows):
-            header = df_raw.iloc[header_row].tolist()
-            date_in_header = next((cell for cell in header if looks_like_date(cell)), None)
-            next_header = header_rows[idx + 1] if idx + 1 < len(header_rows) else len(df_raw)
-
-            data_block = df_raw.iloc[header_row + 1:next_header].dropna(how='all')
-            if data_block.empty:
-                continue
-
-            data_block = data_block.iloc[:, :len(header)]
-            data_block.columns = header
-            data_block["Date"] = date_in_header
-            all_tables.append(data_block)
-
-        if not all_tables:
-            print(f"⚠️ No tables extracted from sheet '{sheet_name}'")
-            continue
-
-        final_df = pd.concat(all_tables, ignore_index=True)
-
-        # Step 4: Save sheet CSV to Dataiku output folder
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-            final_df.to_csv(tmp_file.name, index=False)
-            with open(tmp_file.name, "rb") as f:
-                output_folder.upload_stream(f"{sheet_name}.csv", f)
-            os.remove(tmp_file.name)
-
-        print(f"✅ Sheet '{sheet_name}' saved as CSV: {sheet_name}.csv")
-
-    # Step 5: Cleanup temp Excel
-    os.remove(tmp_path)
-    print(f"✅ Processing complete for file: {file_name}")
-
-# ------------------------------------------------------
 if __name__ == "__main__":
     main()
