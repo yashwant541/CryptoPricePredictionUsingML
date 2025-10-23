@@ -1,135 +1,36 @@
 import dataiku
 import extract_msg
-import re
-import io
 import os
-from datetime import datetime
-import pandas as pd
 
-# ------------------------------------------------------------
-# 🕒 Force UTC timezone to avoid timestamp/timezone conflicts
-# ------------------------------------------------------------
-os.environ["TZ"] = "UTC"
-try:
-    import time
-    time.tzset()
-except Exception:
-    pass
+# -----------------------------
+# 🔧 Configuration
+input_folder_name = "input_msg_folder"   # Dataiku input folder
+output_folder_name = "output_txt_folder" # Dataiku output folder
 
-# -------------------------------
-# 🔧 Configuration: Dataiku folders
-# -------------------------------
-input_folder = dataiku.Folder("INPUT_FOLDER_ID")   # Replace with your input folder ID
-output_folder = dataiku.Folder("OUTPUT_FOLDER_ID") # Replace with your output folder ID
+# -----------------------------
+# Get Dataiku folders
+input_folder = dataiku.Folder(input_folder_name)
+output_folder = dataiku.Folder(output_folder_name)
 
-# -------------------------------
-# Print all files in input folder
-# -------------------------------
-all_files = input_folder.list_paths_in_partition()
-if not all_files:
-    print("No files found in the input folder!")
-else:
-    print(f"Found {len(all_files)} files in the input folder:\n")
-    for f in all_files:
-        print(f)
-print("="*50)
+# List all files in the input folder
+input_files_info = input_folder.list_paths_in_partition()  # Relative paths
 
-# Regex to match dates in filename (ordinals or 6-digit numbers)
-date_pattern = re.compile(
-    r'(\d{1,2}(?:st|nd|rd|th)?[- ]?[A-Za-z]{3,9}[- ]\d{4}|\b\d{6}\b)',
-    re.IGNORECASE
-)
+# Process each .msg file
+for file_rel_path in input_files_info:
+    if file_rel_path.lower().endswith(".msg"):
+        # Read the .msg file as a stream
+        with input_folder.get_download_stream(file_rel_path) as f:
+            msg = extract_msg.Message(f)
+            msg_body = msg.body  # Entire email body
 
-# -------------------------------
-# Helper: Normalize date string
-# -------------------------------
-def normalize_date(date_str):
-    if re.fullmatch(r'\d{6}', date_str):
-        dt = datetime.strptime(date_str, "%d%m%y")
-        return dt.strftime("%d-%b-%Y")
-    else:
-        date_str = re.sub(r'(st|nd|rd|th)', '', date_str, flags=re.IGNORECASE)
-        date_str = date_str.replace(' ', '-')
-        return date_str
+        # Prepare output filename
+        base_name = os.path.splitext(os.path.basename(file_rel_path))[0]
+        output_filename = f"{base_name}.txt"
 
-# -------------------------------
-# Helper: Extract table from email body
-# -------------------------------
-def extract_table_from_html(html_content):
-    try:
-        tables = pd.read_html(html_content)
-        if tables:
-            return tables[0]
-    except Exception as e:
-        print(f"Error extracting table from HTML: {e}")
-    return None
+        # Write the email body to Dataiku output folder using upload_stream
+        with output_folder.upload_stream(output_filename) as out_f:
+            out_f.write(msg_body.encode("utf-8"))  # upload_stream expects bytes
 
-def extract_table_from_text(text_content):
-    lines = text_content.split('\n')
-    table_data = []
+        print(f"Saved: {output_filename}")
 
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if '\t' in line:
-            row = [c.strip() for c in line.split('\t') if c.strip()]
-        elif ',' in line and len(line.split(',')) > 1:
-            row = [c.strip() for c in line.split(',') if c.strip()]
-        else:
-            row = [c.strip() for c in re.split(r'\s{2,}', line) if c.strip()]
-        if len(row) > 1:
-            table_data.append(row)
-
-    if len(table_data) > 1:
-        try:
-            df = pd.DataFrame(table_data[1:], columns=table_data[0])
-            return df
-        except Exception as e:
-            print(f"Error creating DataFrame from text: {e}")
-    return None
-
-# -------------------------------
-# Process all MSG files
-# -------------------------------
-msg_files_found = False
-
-for file_info in all_files:
-    # Case-insensitive check for MSG files
-    if not file_info.lower().endswith(".msg"):
-        continue
-
-    msg_files_found = True
-
-    try:
-        # Read MSG bytes
-        with input_folder.get_download_stream(file_info) as f:
-            file_bytes = io.BytesIO(f.read())
-
-        msg = extract_msg.Message(file_bytes)
-
-        # Extract date from filename
-        match = date_pattern.search(file_info)
-        file_date = normalize_date(match.group(0)) if match else "UnknownDate"
-
-        # Extract table from email body
-        table_df = None
-        if msg.htmlBody:
-            table_df = extract_table_from_html(msg.htmlBody)
-        if table_df is None and msg.body:
-            table_df = extract_table_from_text(msg.body)
-
-        # Save table if found using upload stream
-        if table_df is not None:
-            table_name = f"{file_date}_table.csv"
-            with output_folder.get_upload_stream(table_name) as out_f:
-                out_f.write(table_df.to_csv(index=False).encode('utf-8'))
-            print(f"Saved table {table_name} from {file_info}")
-        else:
-            print(f"No table found in {file_info}")
-
-    except Exception as e:
-        print(f"Failed to process {file_info}: {e}")
-
-if not msg_files_found:
-    print("No MSG files found in the input folder.")
+print("All emails have been processed using upload_stream.")
