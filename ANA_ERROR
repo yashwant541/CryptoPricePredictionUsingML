@@ -3,22 +3,13 @@ import pandas as pd
 from datetime import datetime
 
 # ----------------------------------------------------------
-# 🔧 Configuration
+# 🔧 Configuration — Replace with your Dataiku folder IDs
 # ----------------------------------------------------------
-input_folder = dataiku.Folder("INPUT_FOLDER_ID")    # Folder containing the Excel file
-output_folder = dataiku.Folder("OUTPUT_FOLDER_ID")  # Folder to save CSV outputs
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")      # 📥 Input folder
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")    # 📤 Output folder
 
 # ----------------------------------------------------------
-# Step 1: Get the input Excel file (first/only file in folder)
-# ----------------------------------------------------------
-input_files = input_folder.list_paths_in_partition()
-if not input_files:
-    raise FileNotFoundError("❌ No files found in the input folder!")
-
-excel_file_path = input_files[0]  # Take the first file
-
-# ----------------------------------------------------------
-# Step 2: Detect table header rows (rows containing a date)
+# 📂 Function to check if a value looks like a date
 # ----------------------------------------------------------
 def looks_like_date(val):
     if isinstance(val, (pd.Timestamp, datetime)):
@@ -32,36 +23,42 @@ def looks_like_date(val):
     return False
 
 # ----------------------------------------------------------
-# Step 3: Process all sheets
+# Step 1: Get the only Excel file from the input folder
+# ----------------------------------------------------------
+input_files = input_folder.list_paths_in_partition()
+if not input_files:
+    raise FileNotFoundError("❌ No files found in input folder!")
+
+excel_file_path = input_files[0]  # take the only file
+
+# ----------------------------------------------------------
+# Step 2: Load Excel file and iterate sheets
 # ----------------------------------------------------------
 xls = pd.ExcelFile(excel_file_path)
 for sheet_name in xls.sheet_names:
     # Read sheet without header
     df_raw = pd.read_excel(excel_file_path, sheet_name=sheet_name, header=None)
 
-    # Detect header rows
+    # Detect header rows with date
     header_rows = [i for i in range(len(df_raw)) if any(looks_like_date(cell) for cell in df_raw.iloc[i])]
     if not header_rows:
-        print(f"⚠️ No table headers found in sheet '{sheet_name}', skipping...")
+        print(f"⚠️ No tables found in sheet '{sheet_name}', skipping...")
         continue
 
     all_tables = []
-
-    # Extract each table dynamically
     for idx, header_row in enumerate(header_rows):
         header = df_raw.iloc[header_row].tolist()
         date_in_header = next((cell for cell in header if looks_like_date(cell)), None)
-
         next_header = header_rows[idx + 1] if idx + 1 < len(header_rows) else len(df_raw)
 
         data_block = df_raw.iloc[header_row + 1:next_header].dropna(how='all')
         if data_block.empty:
             continue
 
-        # Keep only columns with same count as header
+        # Keep only columns matching header length
         data_block = data_block.iloc[:, :len(header)]
 
-        # Assign headers dynamically
+        # Assign header
         data_block.columns = header
 
         # Add Date column
@@ -73,12 +70,13 @@ for sheet_name in xls.sheet_names:
         print(f"⚠️ No tables extracted from sheet '{sheet_name}'")
         continue
 
-    # Combine all tables
+    # Combine tables for this sheet
     final_df = pd.concat(all_tables, ignore_index=True)
 
     # ------------------------------------------------------
-    # Step 4: Save CSV to Dataiku output folder
+    # Step 3: Save CSV to Dataiku output folder
     # ------------------------------------------------------
-    output_path = f"{output_folder.get_path()}/{sheet_name}.csv"
-    final_df.to_csv(output_path, index=False)
+    with output_folder.get_writer(f"{sheet_name}.csv") as writer:
+        final_df.to_csv(writer, index=False)
+
     print(f"✅ Sheet '{sheet_name}' saved as CSV: {sheet_name}.csv")
