@@ -27,7 +27,7 @@ output_folder = dataiku.Folder("OUTPUT_FOLDER_ID") # Replace with your output fo
 # -------------------------------
 all_files = input_folder.list_paths_in_partition()
 if not all_files:
-    print("No files found in the input folder.")
+    print("No files found in the input folder!")
 else:
     print(f"Found {len(all_files)} files in the input folder:\n")
     for f in all_files:
@@ -95,6 +95,7 @@ def extract_table_from_text(text_content):
 msg_files_found = False
 
 for file_info in all_files:
+    # Case-insensitive check for MSG files
     if not file_info.lower().endswith(".msg"):
         continue
 
