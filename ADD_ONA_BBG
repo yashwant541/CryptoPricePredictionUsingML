@@ -1,25 +1,29 @@
-# recipe_xlsx_safe_final.py - Dataiku MSG XLSX Extractor (Timezone-immune)
+# ============================================================
+# recipe_xlsx_safe_final.py — Safe MSG Excel Extractor for Dataiku
+# ============================================================
+
 import os
 import dataiku
 from io import BytesIO
 from pathlib import Path
 import extract_msg
 import traceback
+import time
 
-# -------------------------------------------------------------
-# 🌍 FORCE FIXED TIMEZONE to prevent Dataiku timestamp conflicts
-# -------------------------------------------------------------
+# ------------------------------------------------------------
+# 🕒 Force UTC timezone to avoid timestamp/timezone conflicts
+# ------------------------------------------------------------
 os.environ["TZ"] = "UTC"
 try:
-    import time
-    time.tzset()  # works on Unix/Linux (ignored on Windows)
+    time.tzset()
 except Exception:
     pass
 
+
 class MSGAttachmentProcessor:
     """
-    Extract XLSX attachments from MSG files.
-    Fully ignores timestamps and enforces UTC timezone safety.
+    Safely extracts only Excel (.xls, .xlsx) attachments from .msg files
+    without touching any timestamp or timezone metadata.
     """
 
     def __init__(self, input_folder, output_folder):
@@ -27,98 +31,108 @@ class MSGAttachmentProcessor:
         self.output_folder = output_folder
 
     def sanitize_filename(self, filename: str) -> str:
-        """
-        Remove invalid characters from filename
-        """
+        """Replace invalid filename characters."""
         invalid_chars = '<>:"/\\|?*'
-        for char in invalid_chars:
-            filename = filename.replace(char, '_')
+        for ch in invalid_chars:
+            filename = filename.replace(ch, "_")
         return filename.strip()
 
     def process_single_msg(self, msg_file_info):
-        """
-        Process a single MSG file, extracting only XLSX attachments.
-        """
+        """Process one MSG file, list attachments, and extract only Excel ones."""
         attachments_processed = 0
         attachments_failed = 0
 
-        try:
-            msg_name = msg_file_info["path"]
-            print(f"Processing MSG file: {msg_name}")
+        msg_name = msg_file_info["path"]
+        print(f"\n📩 Processing MSG file: {msg_name}")
 
-            # Read MSG file bytes
+        try:
+            # --- Read the MSG file from Dataiku ---
             with self.input_folder.get_download_stream(msg_name) as stream:
                 msg_content = stream.read()
 
-            # Parse MSG (never touch metadata/timestamps)
+            # --- Parse MSG safely (no timestamps used) ---
             msg_file = BytesIO(msg_content)
             msg = extract_msg.openMsg(msg_file)
 
-            # Force timezone safety
             try:
-                msg.setTz("UTC")
+                msg.setTz("UTC")  # optional, just in case extract_msg uses timezones
             except Exception:
                 pass
 
-            attachments = getattr(msg, 'attachments', [])
+            attachments = getattr(msg, "attachments", [])
             if not attachments:
-                print(f"No attachments found in {msg_name}")
+                print("⚠️ No attachments found.")
                 msg.close()
-                return attachments_processed, attachments_failed
+                return 0, 0
 
-            print(f"Found {len(attachments)} attachments in {msg_name}")
+            # --- Log all attachments ---
+            print(f"📎 Found {len(attachments)} attachment(s):")
+            for att in attachments:
+                att_name = getattr(att, "filename", "Unnamed attachment")
+                if att_name.lower().endswith((".xls", ".xlsx")):
+                    print(f"   ✅ Excel file detected: {att_name}")
+                else:
+                    print(f"   ❌ Non-Excel file (will skip): {att_name}")
 
+            # --- Process Excel attachments only ---
             existing_files = set(self.output_folder.list_paths_in_partition())
 
             for idx, attachment in enumerate(attachments, 1):
                 try:
-                    # Only XLSX attachments
-                    attachment_name = getattr(attachment, 'filename', f'attachment_{idx}')
-                    if not attachment_name.lower().endswith(('.xls', '.xlsx')):
-                        print(f"Skipping non-Excel attachment: {attachment_name}")
-                        continue
+                    attachment_name = getattr(attachment, "filename", f"attachment_{idx}")
+                    if not attachment_name.lower().endswith((".xls", ".xlsx")):
+                        continue  # skip non-excel files
 
                     clean_name = self.sanitize_filename(attachment_name)
                     base_name = Path(clean_name).stem
-                    attachment_data = getattr(attachment, 'data', None)
+
+                    attachment_data = getattr(attachment, "data", None)
                     if not attachment_data:
                         raise ValueError("Attachment has no data")
 
+                    # force output to .xlsx
                     output_filename = f"{base_name}_{idx}.xlsx"
+
+                    # avoid overwriting
                     counter = 1
                     while output_filename in existing_files:
                         output_filename = f"{base_name}_{idx}_{counter}.xlsx"
                         counter += 1
                     existing_files.add(output_filename)
 
+                    # --- Save attachment to output folder ---
                     with self.output_folder.get_writer(output_filename) as writer:
                         writer.write(attachment_data)
 
-                    print(f"✓ Saved: {output_filename}")
+                    print(f"   💾 Saved Excel file: {output_filename} ({len(attachment_data)} bytes)")
                     attachments_processed += 1
 
                 except Exception as e:
-                    print(f"✗ Failed to process attachment {attachment_name}: {e}")
+                    print(f"   ❌ Failed to process attachment {attachment_name}: {str(e)}")
                     attachments_failed += 1
 
             msg.close()
-            print(f"Done with {msg_name} — {attachments_processed} OK, {attachments_failed} failed")
 
         except Exception as e:
-            print(f"✗ MSG processing error: {e}")
+            print(f"❌ Error processing MSG file {msg_name}: {str(e)}")
+            print(traceback.format_exc())
             attachments_failed += 1
 
+        print(f"✅ Done {msg_name}: {attachments_processed} Excel saved, {attachments_failed} failed.")
         return attachments_processed, attachments_failed
 
     def process_batch(self):
-        print("🚀 Starting MSG XLSX extraction (Timezone-safe mode)...")
+        """Process all MSG files in input folder."""
+        print("🚀 Starting batch processing of MSG files...")
 
         all_files = self.input_folder.list_paths_in_partition()
-        msg_files = [f for f in all_files if f.lower().endswith('.msg')]
+        msg_files = [f for f in all_files if f.lower().endswith(".msg")]
 
         if not msg_files:
-            print("No MSG files found in input folder")
+            print("No MSG files found in input folder.")
             return
+
+        print(f"📂 Found {len(msg_files)} MSG files to process.")
 
         total_ok = 0
         total_fail = 0
@@ -129,28 +143,42 @@ class MSGAttachmentProcessor:
             total_ok += ok
             total_fail += fail
 
-        print("=" * 50)
-        print("SUMMARY:")
-        print(f"MSG files processed: {len(msg_files)}")
-        print(f"✅ Attachments extracted: {total_ok}")
-        print(f"❌ Attachments failed: {total_fail}")
-        print("=" * 50)
+        print("\n" + "=" * 60)
+        print("📊 PROCESSING SUMMARY")
+        print("=" * 60)
+        print(f"Total MSG files processed: {len(msg_files)}")
+        print(f"Total Excel attachments saved: {total_ok}")
+        print(f"Total failed attachments: {total_fail}")
+        if total_ok + total_fail > 0:
+            success_rate = (total_ok / (total_ok + total_fail)) * 100
+            print(f"Success rate: {success_rate:.1f}%")
+        print("=" * 60)
 
+
+# ------------------------------------------------------------
+# 🔧 Main Entry Point (Dataiku-Compatible)
+# ------------------------------------------------------------
 def main():
-    print("Initializing Dataiku MSG extractor (Timezone-immune)")
+    print("🚀 Starting Safe MSG Excel Attachment Extraction...")
 
     try:
-        input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # Replace
-        output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID") # Replace
+        # Replace these with your Dataiku folder IDs or use recipe inputs
+        input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")
+        output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")
+
+        print(f"📁 Input folder ID: {input_folder.get_id()}")
+        print(f"📁 Output folder ID: {output_folder.get_id()}")
 
         processor = MSGAttachmentProcessor(input_folder, output_folder)
         processor.process_batch()
 
-        print("✅ Completed successfully with timezone isolation.")
+        print("✅ All done! Excel files extracted successfully.")
 
     except Exception as e:
-        print(f"❌ Fatal error: {e}")
+        print(f"❌ Processing failed: {str(e)}")
         print(traceback.format_exc())
+        raise
+
 
 if __name__ == "__main__":
     main()
