@@ -1,157 +1,21 @@
-# ============================================================
-# recipe_xlsx_safe_final.py — Safe MSG Excel Extractor for Dataiku
-# ============================================================
-
 import os
-import re
-import io
-import tempfile
-import dataiku
 import extract_msg
-import traceback
-import time
-from datetime import datetime
-from pathlib import Path
+import shutil
 
-# ------------------------------------------------------------
-# 🕒 Force UTC timezone to avoid timestamp/timezone conflicts
-# ------------------------------------------------------------
-os.environ["TZ"] = "UTC"
-try:
-    time.tzset()
-except Exception:
-    pass
+# Define your input and output folders
+msg_folder = r"C:\Users\2011747\Desktop\Benchmark HKIN\New Inputs\Independent Sources - RFI\MIBOR TM\MIBOR TM"
+output_folder = r"C:\Users\2011747\Desktop\Benchmark HKIN\New Inputs\Independent Sources - RFI\MIBOR TM\Mibor TM Attachments"
+os.makedirs(output_folder, exist_ok=True)
 
-# ==========================================================
-# ⚙️ CONFIGURATION
-# ==========================================================
-input_folder = dataiku.Folder("O6cNhxMz")   # 📥 Input folder ID
-output_folder = dataiku.Folder("UeSjIQkY")  # 📤 Output folder ID
-
-input_path = input_folder.get_path()
-output_path = output_folder.get_path()
-
-print("🚀 Starting MSG Excel Extractor (Safe Mode)")
-print(f"📁 Input Folder: {input_folder.short_name}")
-print(f"📁 Output Folder: {output_folder.short_name}")
-print("-" * 60)
-
-# ==========================================================
-# 🧠 HELPER FUNCTIONS
-# ==========================================================
-
-def extract_date_from_filename(filename):
-    """
-    Extracts a date from the email filename.
-    Supports multiple formats like:
-    'MIBOR Submission_ 18th March 2025.msg' or '17-Feb-2025.msg'
-    """
-    date_patterns = [
-        r"(\d{1,2}[ -](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*[ -]\d{4})",
-        r"(\d{1,2}[-_/](\d{1,2})[-_/](\d{2,4}))"
-    ]
-    for pattern in date_patterns:
-        match = re.search(pattern, filename, re.IGNORECASE)
-        if match:
-            date_str = match.group(1).replace("_", "-").replace("/", "-").strip()
-            try:
-                # Normalize to format: 23-Sep-2024
-                date_obj = datetime.strptime(date_str, "%d-%b-%Y")
-            except:
-                try:
-                    date_obj = datetime.strptime(date_str, "%d-%B-%Y")
-                except:
-                    try:
-                        date_obj = datetime.strptime(date_str, "%d-%m-%Y")
-                    except:
-                        continue
-            return date_obj.strftime("%d-%b-%Y")
-    return "UnknownDate"
-
-def safe_filename(name):
-    """Sanitize filename for saving."""
-    return re.sub(r'[\\/*?:"<>|]', "_", name)
-
-def save_attachment(date_str, attachment_name, payload):
-    """
-    Saves any attachment type (.xlsx, .csv, .txt, etc.)
-    using the format: {date}_{ext}.{ext}
-    Example: 23-Sep-2024_txt.txt
-    """
-    ext = os.path.splitext(attachment_name)[1].lower().replace(".", "")
-    if not ext:
-        ext = "bin"
-    safe_name = f"{date_str}_{ext}.{ext}"
-    save_path = os.path.join(output_path, safe_filename(safe_name))
-    
-    try:
-        # Save binary payload
-        with open(save_path, "wb") as f:
-            if isinstance(payload, bytes):
-                f.write(payload)
-            elif hasattr(payload, "read"):
-                f.write(payload.read())
-            else:
-                raise TypeError("Unsupported payload type")
-        print(f"   ✅ Saved: {safe_name}")
-        return True
-    except Exception as e:
-        print(f"   ✗ Failed to save {attachment_name}: {e}")
-        return False
-
-# ==========================================================
-# 📨 MAIN PROCESS
-# ==========================================================
-msg_files = [f for f in os.listdir(input_path) if f.lower().endswith(".msg")]
-
-if not msg_files:
-    print("⚠️ No MSG files found.")
-else:
-    print(f"📬 Found {len(msg_files)} MSG file(s) to process.")
-print("-" * 60)
-
-for msg_file in msg_files:
-    msg_path = os.path.join(input_path, msg_file)
-    print(f"📩 Processing: {msg_file}")
-
-    try:
-        with extract_msg.Message(msg_path) as msg:
-            attachments = msg.attachments
-            print(f"📎 Found {len(attachments)} attachment(s):")
-
-            # Show all attachments found
-            for attachment in attachments:
-                print(f"   - {attachment.longFilename or attachment.shortFilename}")
-
-            date_str = extract_date_from_filename(msg_file)
-            saved_count = 0
-
-            # Process only Excel attachments (.xlsx, .xls)
-            excel_attachments = [
-                a for a in attachments
-                if (a.longFilename or a.shortFilename).lower().endswith((".xlsx", ".xls"))
-            ]
-
-            if not excel_attachments:
-                print("   ⚠️ No Excel attachments found in this email.")
-            else:
-                print(f"   📊 Found {len(excel_attachments)} Excel attachment(s):")
-
-                for attachment in excel_attachments:
-                    try:
-                        attach_name = attachment.longFilename or attachment.shortFilename
-                        payload = attachment.data
-                        if save_attachment(date_str, attach_name, payload):
-                            saved_count += 1
-                    except Exception as e:
-                        print(f"   ✗ Attachment error ({attach_name}): {e}")
-
-            print(f"✅ Completed {msg_file}: {saved_count} Excel file(s) saved.")
-            print("-" * 60)
-
-    except Exception as e:
-        print(f"❌ Failed to process {msg_file}: {e}")
-        traceback.print_exc()
-        print("-" * 60)
-
-print("🏁 All MSG files processed successfully.")
+# Loop through all .msg files in the msgfiles folder
+for filename in os.listdir(msg_folder):
+    if filename.lower().endswith(".msg"):
+        msg_path = os.path.join(msg_folder, filename)
+        msg = extract_msg.Message(msg_path)
+        for att in msg.attachments:
+            att_name = att.longFilename or att.shortFilename
+            if att_name and att_name.lower().endswith((".xlsx", ".xlsm", ".csv")):
+                save_path = os.path.join(output_folder, att_name)
+                with open(save_path, "wb") as f:
+                    f.write(att.data)
+                print(f"Saved {att_name} from {filename} to {output_folder}")
