@@ -3,40 +3,41 @@ import re
 import pandas as pd
 from extract_msg import Message
 import glob
+from datetime import datetime
 
 def extract_date_from_filename(filename):
     """
-    Extract date from filename. Assumes date is in the filename.
-    Common formats: YYYY-MM-DD, YYYYMMDD, MM-DD-YYYY, etc.
+    Extract date from filename in format like 04-Apr-2025
     """
     # Remove file extension
     name_without_ext = os.path.splitext(filename)[0]
     
-    # Try different date patterns
-    patterns = [
+    # Pattern for dates like 04-Apr-2025, 4-Apr-2025, 04-Apr-2025, etc.
+    pattern = r'(\d{1,2}-[A-Za-z]{3}-\d{4})'
+    
+    match = re.search(pattern, name_without_ext)
+    if match:
+        date_str = match.group(1)
+        try:
+            # Convert to datetime object to standardize format
+            dt = datetime.strptime(date_str, '%d-%b-%Y')
+            return dt.strftime('%Y-%m-%d')  # Standardize to YYYY-MM-DD
+        except ValueError:
+            print(f"Warning: Could not parse date: {date_str}")
+    
+    # Alternative patterns if the main one fails
+    alternative_patterns = [
         r'(\d{4}-\d{1,2}-\d{1,2})',  # YYYY-MM-DD
-        r'(\d{4}\d{2}\d{2})',        # YYYYMMDD
         r'(\d{1,2}-\d{1,2}-\d{4})',  # MM-DD-YYYY
-        r'(\d{1,2}\.\d{1,2}\.\d{4})', # MM.DD.YYYY
-        r'(\d{4}_\d{1,2}_\d{1,2})',  # YYYY_MM_DD
     ]
     
-    for pattern in patterns:
+    for pattern in alternative_patterns:
         match = re.search(pattern, name_without_ext)
         if match:
             date_str = match.group(1)
-            # Standardize to YYYY-MM-DD format
-            if re.match(r'\d{4}-\d{1,2}-\d{1,2}', date_str):
-                return date_str
-            elif re.match(r'\d{4}\d{2}\d{2}', date_str):
-                # Convert YYYYMMDD to YYYY-MM-DD
-                return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-            elif re.match(r'\d{1,2}-\d{1,2}-\d{4}', date_str):
-                # Convert MM-DD-YYYY to YYYY-MM-DD
-                parts = date_str.split('-')
-                return f"{parts[2]}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
+            print(f"Found alternative date format: {date_str}")
+            return date_str
     
-    # If no date found, use today's date or return None
     print(f"Warning: Could not extract date from filename: {filename}")
     return "unknown_date"
 
@@ -57,32 +58,35 @@ def extract_table_from_html(html_content):
 def extract_table_from_text(text_content):
     """
     Extract table data from plain text content
-    This is a basic implementation - you might need to customize based on your table format
     """
     lines = text_content.split('\n')
     table_data = []
     
     for line in lines:
-        # Look for lines that might be table rows (contain multiple values separated by tabs, spaces, or commas)
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Look for lines that might be table rows
         if re.search(r'\t', line):  # Tab-separated
             row = [cell.strip() for cell in line.split('\t') if cell.strip()]
-        elif re.search(r',\s*\w', line):  # Comma-separated (but not just normal text)
+        elif re.search(r',\s*\w', line) and len(line.split(',')) > 2:  # Comma-separated with multiple columns
             row = [cell.strip() for cell in line.split(',') if cell.strip()]
         else:
-            # Space-separated (more complex)
-            cells = re.split(r'\s{2,}', line.strip())  # Split on 2+ spaces
+            # Space-separated (split on 2+ spaces)
+            cells = re.split(r'\s{2,}', line)
             row = [cell.strip() for cell in cells if cell.strip()]
         
         if len(row) > 1:  # Consider it a table row if it has multiple cells
             table_data.append(row)
     
     if len(table_data) > 1:  # At least header and one data row
-        # Try to create DataFrame
         try:
+            # Use first row as header, rest as data
             df = pd.DataFrame(table_data[1:], columns=table_data[0])
             return df
-        except:
-            pass
+        except Exception as e:
+            print(f"Error creating DataFrame from text: {e}")
     
     return None
 
@@ -98,26 +102,33 @@ def process_msg_file(msg_path):
         filename = os.path.basename(msg_path)
         date_str = extract_date_from_filename(filename)
         
-        print(f"Processing: {filename} | Date: {date_str}")
+        print(f"Processing: {filename}")
+        print(f"Extracted date: {date_str}")
         
-        # Try to extract table from HTML body first
+        # Try to extract table from HTML body first (most common)
         table_df = None
         if msg.htmlBody:
+            print("Found HTML body, extracting tables...")
             table_df = extract_table_from_html(msg.htmlBody)
         
         # If no table found in HTML, try plain text
         if table_df is None and msg.body:
+            print("Trying plain text extraction...")
             table_df = extract_table_from_text(msg.body)
         
         # Save table if found
         if table_df is not None:
             output_filename = f"{date_str}_table.csv"
             table_df.to_csv(output_filename, index=False)
-            print(f"Table saved as: {output_filename}")
-            print(f"Table shape: {table_df.shape}")
+            print(f"✓ Table saved as: {output_filename}")
+            print(f"  Table shape: {table_df.shape}")
+            print(f"  Columns: {list(table_df.columns)}")
             return True
         else:
-            print(f"No table found in: {filename}")
+            print(f"✗ No table found in: {filename}")
+            # Print a sample of the body for debugging
+            if msg.body and len(msg.body) > 200:
+                print(f"  Body sample: {msg.body[:200]}...")
             return False
             
     except Exception as e:
@@ -136,82 +147,63 @@ def process_all_msg_files(folder_path):
         return
     
     print(f"Found {len(msg_files)} MSG files")
+    print("=" * 50)
     
     successful_extractions = 0
     
-    for msg_file in msg_files:
+    for i, msg_file in enumerate(msg_files, 1):
+        print(f"\n[{i}/{len(msg_files)}] ", end="")
         if process_msg_file(msg_file):
             successful_extractions += 1
     
-    print(f"\nProcessing complete!")
+    print("\n" + "=" * 50)
+    print(f"Processing complete!")
     print(f"Successfully extracted tables from {successful_extractions} out of {len(msg_files)} files")
 
-# Alternative function for more complex table detection
-def advanced_table_extraction(msg_path):
+# Enhanced version with better debugging
+def debug_msg_content(msg_path):
     """
-    More advanced table extraction that tries multiple methods
+    Debug function to see what's in the MSG file
     """
     try:
         msg = Message(msg_path)
         filename = os.path.basename(msg_path)
         date_str = extract_date_from_filename(filename)
         
-        tables_found = []
+        print(f"\nDebugging: {filename}")
+        print(f"Date: {date_str}")
+        print(f"Has HTML body: {bool(msg.htmlBody)}")
+        print(f"Has text body: {bool(msg.body)}")
         
-        # Method 1: HTML tables
-        if msg.htmlBody:
-            try:
-                html_tables = pd.read_html(msg.htmlBody)
-                tables_found.extend(html_tables)
-            except:
-                pass
-        
-        # Method 2: Text-based table detection with multiple patterns
         if msg.body:
-            text = msg.body
-            # Look for table-like structures
-            lines = text.split('\n')
-            
-            # Pattern 1: Lines with consistent separators
-            potential_table_lines = []
-            for line in lines:
-                if re.match(r'^(.+?\t.+?)+$', line):  # Tab-separated
-                    potential_table_lines.append(line)
-                elif re.match(r'^(.+?,.+?)+$', line) and len(line.split(',')) > 2:  # Comma-separated with multiple columns
-                    potential_table_lines.append(line)
-            
-            if len(potential_table_lines) > 1:
-                # Try to parse as CSV or TSV
-                try:
-                    if '\t' in potential_table_lines[0]:
-                        df = pd.DataFrame([line.split('\t') for line in potential_table_lines])
-                        tables_found.append(df)
-                    else:
-                        df = pd.DataFrame([line.split(',') for line in potential_table_lines])
-                        tables_found.append(df)
-                except:
-                    pass
+            print(f"Body length: {len(msg.body)}")
+            # Show first 500 characters of body
+            print(f"Body preview: {msg.body[:500]}...")
         
-        # Save the first table found
-        if tables_found:
-            output_filename = f"{date_str}_table.csv"
-            tables_found[0].to_csv(output_filename, index=False)
-            print(f"Table saved as: {output_filename}")
-            return True
-        
-        return False
-        
+        return True
     except Exception as e:
-        print(f"Error in advanced extraction for {msg_path}: {e}")
+        print(f"Debug error: {e}")
         return False
+
+# Test with a single file first
+def test_single_file(msg_path):
+    """
+    Test extraction on a single file with detailed output
+    """
+    print("Testing single file extraction...")
+    success = process_msg_file(msg_path)
+    
+    if not success:
+        print("\nRunning debug mode...")
+        debug_msg_content(msg_path)
 
 # Usage example
 if __name__ == "__main__":
     # Specify your folder containing MSG files
-    folder_path = "path/to/your/msg/files"
+    folder_path = "path/to/your/msg/files"  # Update this path
     
-    # Process all MSG files
+    # Option 1: Process all files
     process_all_msg_files(folder_path)
     
-    # Or process a single file
-    # process_msg_file("path/to/specific/file.msg")
+    # Option 2: Test with a single file first
+    # test_single_file("path/to/specific/file_04-Apr-2025.msg")
