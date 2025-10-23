@@ -1,48 +1,209 @@
-import dataiku
-import extract_msg
+import os
 import re
-import io
+import pandas as pd
+from extract_msg import Message
+import glob
+from datetime import datetime
 
-# -------------------------------
-# 🔧 Configuration: Dataiku folders
-# -------------------------------
-input_folder = dataiku.Folder("INPUT_FOLDER_ID")   # Replace with your input folder ID
-output_folder = dataiku.Folder("OUTPUT_FOLDER_ID") # Replace with your output folder ID
-
-# Regex to match dates with optional ordinal suffixes: 16th June 2025, 2nd July 2024, 23-Sep-2024
-date_pattern = re.compile(r'(\d{1,2}(?:st|nd|rd|th)?[- ]?[A-Za-z]{3,9}[- ]\d{4})', re.IGNORECASE)
-
-# Function to normalize date string by removing suffixes and standardizing separators
-def normalize_date(date_str):
-    date_str = re.sub(r'(st|nd|rd|th)', '', date_str, flags=re.IGNORECASE)
-    date_str = date_str.replace(' ', '-')
-    return date_str
-
-# List all files in the Dataiku input folder
-for file_info in input_folder.list_paths_in_partition():
-    if file_info.lower().endswith(".msg"):
+def extract_date_from_filename(filename):
+    """
+    Extract date from filename in format like 04-Apr-2025
+    """
+    # Remove file extension
+    name_without_ext = os.path.splitext(filename)[0]
+    
+    # Pattern for dates like 04-Apr-2025, 4-Apr-2025, 04-Apr-2025, etc.
+    pattern = r'(\d{1,2}-[A-Za-z]{3}-\d{4})'
+    
+    match = re.search(pattern, name_without_ext)
+    if match:
+        date_str = match.group(1)
         try:
-            # Read the file into a seekable BytesIO object
-            with input_folder.get_download_stream(file_info) as f:
-                file_bytes = io.BytesIO(f.read())
+            # Convert to datetime object to standardize format
+            dt = datetime.strptime(date_str, '%d-%b-%Y')
+            return dt.strftime('%Y-%m-%d')  # Standardize to YYYY-MM-DD
+        except ValueError:
+            print(f"Warning: Could not parse date: {date_str}")
+    
+    # Alternative patterns if the main one fails
+    alternative_patterns = [
+        r'(\d{4}-\d{1,2}-\d{1,2})',  # YYYY-MM-DD
+        r'(\d{1,2}-\d{1,2}-\d{4})',  # MM-DD-YYYY
+    ]
+    
+    for pattern in alternative_patterns:
+        match = re.search(pattern, name_without_ext)
+        if match:
+            date_str = match.group(1)
+            print(f"Found alternative date format: {date_str}")
+            return date_str
+    
+    print(f"Warning: Could not extract date from filename: {filename}")
+    return "unknown_date"
 
-            msg = extract_msg.Message(file_bytes)
+def extract_table_from_html(html_content):
+    """
+    Extract table data from HTML content
+    """
+    try:
+        # Use pandas to read HTML tables
+        tables = pd.read_html(html_content)
+        if tables:
+            return tables[0]  # Return first table found
+    except Exception as e:
+        print(f"Error extracting table from HTML: {e}")
+    
+    return None
+
+def extract_table_from_text(text_content):
+    """
+    Extract table data from plain text content
+    """
+    lines = text_content.split('\n')
+    table_data = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
             
-            # Extract date from filename
-            match = date_pattern.search(file_info)
-            file_date = normalize_date(match.group(0)) if match else "UnknownDate"
-            
-            for att in msg.attachments:
-                att_name = getattr(att, 'longFilename', None) or getattr(att, 'shortFilename', None) or att.filename
-                if att_name and att_name.lower().endswith((".xlsx", ".xlsm", ".csv", ".txt")):
-                    # Construct save name
-                    save_name = f"{file_date}_{att_name}"
-                    
-                    # Save to Dataiku output folder
-                    with output_folder.get_writer(save_name) as out_f:
-                        out_f.write(att.data)
-                    
-                    print(f"Saved {save_name} from {file_info}")
-                    
+        # Look for lines that might be table rows
+        if re.search(r'\t', line):  # Tab-separated
+            row = [cell.strip() for cell in line.split('\t') if cell.strip()]
+        elif re.search(r',\s*\w', line) and len(line.split(',')) > 2:  # Comma-separated with multiple columns
+            row = [cell.strip() for cell in line.split(',') if cell.strip()]
+        else:
+            # Space-separated (split on 2+ spaces)
+            cells = re.split(r'\s{2,}', line)
+            row = [cell.strip() for cell in cells if cell.strip()]
+        
+        if len(row) > 1:  # Consider it a table row if it has multiple cells
+            table_data.append(row)
+    
+    if len(table_data) > 1:  # At least header and one data row
+        try:
+            # Use first row as header, rest as data
+            df = pd.DataFrame(table_data[1:], columns=table_data[0])
+            return df
         except Exception as e:
-            print(f"Failed to process {file_info}: {e}")
+            print(f"Error creating DataFrame from text: {e}")
+    
+    return None
+
+def process_msg_file(msg_path):
+    """
+    Process a single MSG file and extract tables
+    """
+    try:
+        # Open the MSG file
+        msg = Message(msg_path)
+        
+        # Get filename for date extraction
+        filename = os.path.basename(msg_path)
+        date_str = extract_date_from_filename(filename)
+        
+        print(f"Processing: {filename}")
+        print(f"Extracted date: {date_str}")
+        
+        # Try to extract table from HTML body first (most common)
+        table_df = None
+        if msg.htmlBody:
+            print("Found HTML body, extracting tables...")
+            table_df = extract_table_from_html(msg.htmlBody)
+        
+        # If no table found in HTML, try plain text
+        if table_df is None and msg.body:
+            print("Trying plain text extraction...")
+            table_df = extract_table_from_text(msg.body)
+        
+        # Save table if found
+        if table_df is not None:
+            output_filename = f"{date_str}_table.csv"
+            table_df.to_csv(output_filename, index=False)
+            print(f"✓ Table saved as: {output_filename}")
+            print(f"  Table shape: {table_df.shape}")
+            print(f"  Columns: {list(table_df.columns)}")
+            return True
+        else:
+            print(f"✗ No table found in: {filename}")
+            # Print a sample of the body for debugging
+            if msg.body and len(msg.body) > 200:
+                print(f"  Body sample: {msg.body[:200]}...")
+            return False
+            
+    except Exception as e:
+        print(f"Error processing {msg_path}: {e}")
+        return False
+
+def process_all_msg_files(folder_path):
+    """
+    Process all MSG files in a folder
+    """
+    # Find all MSG files in the folder
+    msg_files = glob.glob(os.path.join(folder_path, "*.msg"))
+    
+    if not msg_files:
+        print(f"No MSG files found in: {folder_path}")
+        return
+    
+    print(f"Found {len(msg_files)} MSG files")
+    print("=" * 50)
+    
+    successful_extractions = 0
+    
+    for i, msg_file in enumerate(msg_files, 1):
+        print(f"\n[{i}/{len(msg_files)}] ", end="")
+        if process_msg_file(msg_file):
+            successful_extractions += 1
+    
+    print("\n" + "=" * 50)
+    print(f"Processing complete!")
+    print(f"Successfully extracted tables from {successful_extractions} out of {len(msg_files)} files")
+
+# Enhanced version with better debugging
+def debug_msg_content(msg_path):
+    """
+    Debug function to see what's in the MSG file
+    """
+    try:
+        msg = Message(msg_path)
+        filename = os.path.basename(msg_path)
+        date_str = extract_date_from_filename(filename)
+        
+        print(f"\nDebugging: {filename}")
+        print(f"Date: {date_str}")
+        print(f"Has HTML body: {bool(msg.htmlBody)}")
+        print(f"Has text body: {bool(msg.body)}")
+        
+        if msg.body:
+            print(f"Body length: {len(msg.body)}")
+            # Show first 500 characters of body
+            print(f"Body preview: {msg.body[:500]}...")
+        
+        return True
+    except Exception as e:
+        print(f"Debug error: {e}")
+        return False
+
+# Test with a single file first
+def test_single_file(msg_path):
+    """
+    Test extraction on a single file with detailed output
+    """
+    print("Testing single file extraction...")
+    success = process_msg_file(msg_path)
+    
+    if not success:
+        print("\nRunning debug mode...")
+        debug_msg_content(msg_path)
+
+# Usage example
+if __name__ == "__main__":
+    # Specify your folder containing MSG files
+    folder_path = r"C:\Users\2011747\Desktop\Benchmark HKIN\New Inputs\Independent Sources - RFI\FXO_CCIL\FXO_CCIL"  # Update this path
+    
+    # Option 1: Process all files
+    process_all_msg_files(folder_path)
+    
+    # Option 2: Test with a single file first
+    # test_single_file("path/to/specific/file_04-Apr-2025.msg")
