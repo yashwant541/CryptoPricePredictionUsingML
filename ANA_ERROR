@@ -2,6 +2,7 @@ import dataiku
 import extract_msg
 import re
 import io
+from datetime import datetime
 
 # -------------------------------
 # 🔧 Configuration: Dataiku folders
@@ -9,14 +10,26 @@ import io
 input_folder = dataiku.Folder("INPUT_FOLDER_ID")   # Replace with your input folder ID
 output_folder = dataiku.Folder("OUTPUT_FOLDER_ID") # Replace with your output folder ID
 
-# Regex to match dates with optional ordinal suffixes: 16th June 2025, 2nd July 2024, 23-Sep-2024
-date_pattern = re.compile(r'(\d{1,2}(?:st|nd|rd|th)?[- ]?[A-Za-z]{3,9}[- ]\d{4})', re.IGNORECASE)
+# Regex to match dates:
+# 1) Optional ordinal dates: 16th June 2025, 2nd July 2024, 23-Sep-2024
+# 2) 6-digit numeric dates: 230924 (ddmmyy)
+date_pattern = re.compile(
+    r'(\d{1,2}(?:st|nd|rd|th)?[- ]?[A-Za-z]{3,9}[- ]\d{4}|\b\d{6}\b)',
+    re.IGNORECASE
+)
 
-# Function to normalize date string by removing suffixes and standardizing separators
+# Function to normalize date string
 def normalize_date(date_str):
-    date_str = re.sub(r'(st|nd|rd|th)', '', date_str, flags=re.IGNORECASE)
-    date_str = date_str.replace(' ', '-')
-    return date_str
+    # Check if it's a 6-digit number
+    if re.fullmatch(r'\d{6}', date_str):
+        # Convert ddmmyy -> dd-Mmm-yyyy
+        dt = datetime.strptime(date_str, "%d%m%y")
+        return dt.strftime("%d-%b-%Y")
+    else:
+        # Remove ordinal suffix and replace spaces with hyphens
+        date_str = re.sub(r'(st|nd|rd|th)', '', date_str, flags=re.IGNORECASE)
+        date_str = date_str.replace(' ', '-')
+        return date_str
 
 # List all files in the Dataiku input folder
 for file_info in input_folder.list_paths_in_partition():
@@ -34,7 +47,7 @@ for file_info in input_folder.list_paths_in_partition():
             
             for att in msg.attachments:
                 att_name = getattr(att, 'longFilename', None) or getattr(att, 'shortFilename', None) or att.filename
-                # ✅ Only PDFs
+                # Only PDFs
                 if att_name and att_name.lower().endswith(".pdf"):
                     # Construct save name
                     save_name = f"{file_date}_{att_name}"
