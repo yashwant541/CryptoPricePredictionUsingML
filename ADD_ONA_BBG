@@ -1,21 +1,35 @@
 import os
 import extract_msg
-import shutil
+import re
 
-# Define your input and output folders
+# Input and output folders
 msg_folder = r"C:\Users\2011747\Desktop\Benchmark HKIN\New Inputs\Independent Sources - RFI\MIBOR TM\MIBOR TM"
 output_folder = r"C:\Users\2011747\Desktop\Benchmark HKIN\New Inputs\Independent Sources - RFI\MIBOR TM\Mibor TM Attachments"
+
 os.makedirs(output_folder, exist_ok=True)
 
-# Loop through all .msg files in the msgfiles folder
+# Regex to extract date from filename (e.g., 23-Sep-2024)
+date_pattern = re.compile(r"\d{1,2}-[A-Za-z]{3}-\d{4}")
+
+# Loop through all .msg files
 for filename in os.listdir(msg_folder):
     if filename.lower().endswith(".msg"):
         msg_path = os.path.join(msg_folder, filename)
-        msg = extract_msg.Message(msg_path)
-        for att in msg.attachments:
-            att_name = att.longFilename or att.shortFilename
-            if att_name and att_name.lower().endswith((".xlsx", ".xlsm", ".csv")):
-                save_path = os.path.join(output_folder, att_name)
-                with open(save_path, "wb") as f:
-                    f.write(att.data)
-                print(f"Saved {att_name} from {filename} to {output_folder}")
+        
+        # Extract date from filename
+        match = date_pattern.search(filename)
+        file_date = match.group(0) if match else "UnknownDate"
+        
+        try:
+            msg = extract_msg.Message(msg_path)
+            for att in msg.attachments:
+                att_name = getattr(att, 'longFilename', None) or getattr(att, 'shortFilename', None) or att.filename
+                if att_name and att_name.lower().endswith((".xlsx", ".xlsm", ".csv")):
+                    # Save attachment with the extracted date in filename
+                    save_name = f"{file_date}_{att_name}"
+                    save_path = os.path.join(output_folder, save_name)
+                    with open(save_path, "wb") as f:
+                        f.write(att.data)
+                    print(f"Saved {save_name} from {filename}")
+        except Exception as e:
+            print(f"Failed to process {filename}: {e}")
