@@ -14,10 +14,11 @@ output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")    # 📤 Output folder
 # 🧠 Helper Functions
 # ------------------------------------------------------
 def looks_like_date(val):
+    """Check if a value looks like a date"""
     if isinstance(val, (pd.Timestamp, datetime)):
         return True
     if isinstance(val, str):
-        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d"):
+        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
             try:
                 datetime.strptime(val.strip(), fmt)
                 return True
@@ -40,54 +41,59 @@ def main():
     excel_file_info = input_files[0]
     file_name = os.path.basename(excel_file_info)
 
+    # Download file to temporary location
     with input_folder.get_download_stream(excel_file_info) as stream:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
             tmp.write(stream.read())
             tmp_path = tmp.name
 
     xls = read_excel_safe(tmp_path)
+
     for sheet_name in xls.sheet_names:
         df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
 
-        # Detect header rows by presence of date
-        header_rows = [i for i in range(len(df_raw)) if any(looks_like_date(cell) for cell in df_raw.iloc[i])]
-        if not header_rows:
-            print(f"⚠️ No tables found in sheet '{sheet_name}', skipping...")
+        # Row 7 (index 6) contains labels
+        label_row_index = 6
+        labels_row = df_raw.iloc[label_row_index]
+
+        tidy_data_list = []
+
+        # Loop through all columns to find labels
+        for col in range(df_raw.shape[1]):
+            label = labels_row[col]
+
+            # Only process columns that have a label
+            if pd.notna(label):
+                if col + 1 < df_raw.shape[1]:
+                    dates = df_raw.iloc[label_row_index + 1:, col]
+                    values = df_raw.iloc[label_row_index + 1:, col + 1]
+
+                    # Remove rows where dates or values are missing
+                    mask = dates.notna() & values.notna()
+                    dates = dates[mask]
+                    values = values[mask]
+
+                    temp_df = pd.DataFrame({
+                        "Date": dates,
+                        "Label": label,
+                        "Value": values
+                    })
+                    tidy_data_list.append(temp_df)
+
+        if not tidy_data_list:
+            print(f"⚠️ No valid data found in sheet '{sheet_name}'")
             continue
 
-        all_tables = []
-        for idx, header_row in enumerate(header_rows):
-            header = df_raw.iloc[header_row].tolist()
+        # Concatenate all label blocks into one tidy DataFrame
+        final_df = pd.concat(tidy_data_list, ignore_index=True)
 
-            # Find the first non-empty column (to remove leading empty columns like column A)
-            first_col_idx = next((i for i, val in enumerate(header) if pd.notna(val)), 0)
-            header = header[first_col_idx:]
+        # Convert Date column to datetime
+        final_df["Date"] = pd.to_datetime(final_df["Date"], errors='coerce')
 
-            # Find the date in the header row and rename that column to 'Fixing Rate'
-            date_in_header = next((cell for cell in header if looks_like_date(cell)), None)
-            header = ["Fixing Rate" if looks_like_date(cell) else cell for cell in header]
+        # Optional: sort by Date
+        final_df = final_df.sort_values("Date").reset_index(drop=True)
 
-            next_header = header_rows[idx + 1] if idx + 1 < len(header_rows) else len(df_raw)
-            data_block = df_raw.iloc[header_row + 1:next_header].dropna(how='all')
-
-            if data_block.empty:
-                continue
-
-            # Slice data_block to match header
-            data_block = data_block.iloc[:, first_col_idx:first_col_idx + len(header)]
-            data_block.columns = header
-
-            # Add a new Date column
-            data_block["Date"] = date_in_header
-            all_tables.append(data_block)
-
-        if not all_tables:
-            print(f"⚠️ No tables extracted from sheet '{sheet_name}'")
-            continue
-
-        final_df = pd.concat(all_tables, ignore_index=True)
-
-        # Save sheet CSV to Dataiku output folder
+        # Save to CSV in Dataiku output folder
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
             final_df.to_csv(tmp_file.name, index=False)
             with open(tmp_file.name, "rb") as f:
@@ -96,7 +102,7 @@ def main():
 
         print(f"✅ Sheet '{sheet_name}' saved as CSV: {sheet_name}.csv")
 
-    # Cleanup temporary Excel
+    # Cleanup
     os.remove(tmp_path)
     print(f"✅ Processing complete for file: {file_name}")
 
