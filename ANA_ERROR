@@ -1,18 +1,18 @@
-import dataiku
 import pandas as pd
+import dataiku
+import os
 import tempfile
 from datetime import datetime
-import os
 
-# ----------------------------------------------------------
+# ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
-# ----------------------------------------------------------
+# ------------------------------------------------------
 input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")      # 📥 Input folder
 output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")    # 📤 Output folder
 
-# ----------------------------------------------------------
+# ------------------------------------------------------
 # 📂 Function to check if a value looks like a date
-# ----------------------------------------------------------
+# ------------------------------------------------------
 def looks_like_date(val):
     if isinstance(val, (pd.Timestamp, datetime)):
         return True
@@ -24,32 +24,34 @@ def looks_like_date(val):
             return False
     return False
 
-# ----------------------------------------------------------
+# ------------------------------------------------------
 # Step 1: Get the only Excel file from the input folder
-# ----------------------------------------------------------
+# ------------------------------------------------------
 input_files = input_folder.list_paths_in_partition()
 if not input_files:
     raise FileNotFoundError("❌ No files found in input folder!")
 
 excel_file_info = input_files[0]
+file_name = os.path.basename(excel_file_info)
 
-# ----------------------------------------------------------
-# Step 2: Download the Excel file to a temporary path
-# ----------------------------------------------------------
+# ------------------------------------------------------
+# Step 2: Download Excel file to a temporary path
+# ------------------------------------------------------
 with input_folder.get_download_stream(excel_file_info) as stream:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(stream.read())
         tmp_path = tmp.name
 
-# ----------------------------------------------------------
-# Step 3: Load Excel file with openpyxl engine and iterate sheets
-# ----------------------------------------------------------
-xls = pd.ExcelFile(tmp_path, engine="openpyxl")  # Specify engine
+# ------------------------------------------------------
+# Step 3: Load Excel file and process each sheet
+# ------------------------------------------------------
+xls = pd.ExcelFile(tmp_path, engine="openpyxl")
+
 for sheet_name in xls.sheet_names:
     # Read sheet without header
     df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
 
-    # Detect header rows with date
+    # Detect header rows (rows containing a date)
     header_rows = [i for i in range(len(df_raw)) if any(looks_like_date(cell) for cell in df_raw.iloc[i])]
     if not header_rows:
         print(f"⚠️ No tables found in sheet '{sheet_name}', skipping...")
@@ -80,18 +82,19 @@ for sheet_name in xls.sheet_names:
         print(f"⚠️ No tables extracted from sheet '{sheet_name}'")
         continue
 
-    # Combine tables for this sheet
+    # Combine all tables for this sheet
     final_df = pd.concat(all_tables, ignore_index=True)
 
     # ------------------------------------------------------
     # Step 4: Save CSV to Dataiku output folder
     # ------------------------------------------------------
-    with output_folder.get_writer(f"{sheet_name}.csv") as writer:
+    output_csv_name = f"{sheet_name}.csv"
+    with output_folder.get_writer(output_csv_name) as writer:
         final_df.to_csv(writer, index=False)
 
-    print(f"✅ Sheet '{sheet_name}' saved as CSV: {sheet_name}.csv")
+    print(f"✅ Sheet '{sheet_name}' saved as CSV: {output_csv_name}")
 
-# ----------------------------------------------------------
+# ------------------------------------------------------
 # Step 5: Cleanup temp file
-# ----------------------------------------------------------
+# ------------------------------------------------------
 os.remove(tmp_path)
