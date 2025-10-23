@@ -1,62 +1,80 @@
 import dataiku
 import extract_msg
+import pandas as pd
 import re
 import io
-from datetime import datetime
 
-# -------------------------------
-# 🔧 Configuration: Dataiku folders
-# -------------------------------
-input_folder = dataiku.Folder("INPUT_FOLDER_ID")   # Replace with your input folder ID
-output_folder = dataiku.Folder("OUTPUT_FOLDER_ID") # Replace with your output folder ID
+# -----------------------------
+# Configuration
+# -----------------------------
+# Replace these with your actual Dataiku folder names
+input_folder_name = "INPUT_FOLDER"
+output_folder_name = "OUTPUT_FOLDER"
 
-# Regex to match dates:
-# 1) Optional ordinal dates: 16th June 2025, 2nd July 2024, 23-Sep-2024
-# 2) 6-digit numeric dates: 230924 (ddmmyy)
-date_pattern = re.compile(
-    r'(\d{1,2}(?:st|nd|rd|th)?[- ]?[A-Za-z]{3,9}[- ]\d{4}|\b\d{6}\b)',
-    re.IGNORECASE
-)
+# Get Dataiku folder objects
+input_folder = dataiku.Folder(input_folder_name)
+output_folder = dataiku.Folder(output_folder_name)
 
-# Function to normalize date string
-def normalize_date(date_str):
-    # Check if it's a 6-digit number
-    if re.fullmatch(r'\d{6}', date_str):
-        # Convert ddmmyy -> dd-Mmm-yyyy
-        dt = datetime.strptime(date_str, "%d%m%y")
-        return dt.strftime("%d-%b-%Y")
+# Function to extract date from filename
+def extract_date_from_filename(filename):
+    # Looks for patterns like 23-Sep-2024 or 2-Jul-2024
+    date_pattern = r'\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}'
+    match = re.search(date_pattern, filename)
+    if match:
+        return match.group(0)
     else:
-        # Remove ordinal suffix and replace spaces with hyphens
-        date_str = re.sub(r'(st|nd|rd|th)', '', date_str, flags=re.IGNORECASE)
-        date_str = date_str.replace(' ', '-')
-        return date_str
+        return os.path.splitext(filename)[0]
 
-# List all files in the Dataiku input folder
+# Function to extract table from email body
+def extract_table_from_body(body_text):
+    lines = body_text.splitlines()
+    lines = [line for line in lines if line.strip()]
+    
+    # Try comma-separated
+    try:
+        df = pd.DataFrame([line.split(',') for line in lines[1:]], columns=lines[0].split(','))
+        return df
+    except:
+        pass
+
+    # Try tab-separated
+    try:
+        df = pd.DataFrame([line.split('\t') for line in lines[1:]], columns=lines[0].split('\t'))
+        return df
+    except:
+        pass
+    
+    # fallback: whitespace separated
+    df = pd.DataFrame([re.split(r'\s+', line) for line in lines[1:]], columns=re.split(r'\s+', lines[0]))
+    return df
+
+# -----------------------------
+# Processing MSG files in Dataiku folder
+# -----------------------------
 for file_info in input_folder.list_paths_in_partition():
-    if file_info.lower().endswith(".msg"):
-        try:
-            # Read the file into a seekable BytesIO object
-            with input_folder.get_download_stream(file_info) as f:
-                file_bytes = io.BytesIO(f.read())
+    if file_info.lower().endswith('.msg'):
+        # Read MSG file into memory
+        with input_folder.get_download_stream(file_info) as f:
+            msg_data = f.read()
+        
+        # Save to a temporary buffer to read with extract_msg
+        with io.BytesIO(msg_data) as msg_buffer:
+            msg = extract_msg.Message(msg_buffer)
+            msg_body = msg.body
 
-            msg = extract_msg.Message(file_bytes)
-            
+            # Extract table from body
+            try:
+                table_df = extract_table_from_body(msg_body)
+            except Exception as e:
+                print(f"Error extracting table from {file_info}: {e}")
+                continue
+
             # Extract date from filename
-            match = date_pattern.search(file_info)
-            file_date = normalize_date(match.group(0)) if match else "UnknownDate"
+            date_str = extract_date_from_filename(file_info)
+            output_file_name = f"{date_str}_table.csv"
+
+            # Save CSV to output folder
+            with output_folder.get_writer(output_file_name) as writer:
+                table_df.to_csv(writer, index=False)
             
-            for att in msg.attachments:
-                att_name = getattr(att, 'longFilename', None) or getattr(att, 'shortFilename', None) or att.filename
-                # Only PDFs
-                if att_name and att_name.lower().endswith(".pdf"):
-                    # Construct save name
-                    save_name = f"{file_date}_{att_name}"
-                    
-                    # Save to Dataiku output folder
-                    with output_folder.get_writer(save_name) as out_f:
-                        out_f.write(att.data)
-                    
-                    print(f"Saved PDF {save_name} from {file_info}")
-                    
-        except Exception as e:
-            print(f"Failed to process {file_info}: {e}")
+            print(f"Saved table from {file_info} as {output_file_name}")
