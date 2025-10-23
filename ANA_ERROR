@@ -58,19 +58,26 @@ def main():
         all_tables = []
         for idx, header_row in enumerate(header_rows):
             header = df_raw.iloc[header_row].tolist()
-            # Find the date in header
+
+            # Find the first non-empty column (to remove leading empty columns like column A)
+            first_col_idx = next((i for i, val in enumerate(header) if pd.notna(val)), 0)
+            header = header[first_col_idx:]
+
+            # Find the date in the header row and rename that column to 'Fixing Rate'
             date_in_header = next((cell for cell in header if looks_like_date(cell)), None)
-            # Replace that header with 'Fixing Rate'
             header = ["Fixing Rate" if looks_like_date(cell) else cell for cell in header]
 
             next_header = header_rows[idx + 1] if idx + 1 < len(header_rows) else len(df_raw)
             data_block = df_raw.iloc[header_row + 1:next_header].dropna(how='all')
+
             if data_block.empty:
                 continue
 
-            data_block = data_block.iloc[:, :len(header)]
+            # Slice data_block to match header
+            data_block = data_block.iloc[:, first_col_idx:first_col_idx + len(header)]
             data_block.columns = header
-            # Add new 'Date' column
+
+            # Add a new Date column
             data_block["Date"] = date_in_header
             all_tables.append(data_block)
 
@@ -89,10 +96,10 @@ def main():
 
         print(f"✅ Sheet '{sheet_name}' saved as CSV: {sheet_name}.csv")
 
+    # Cleanup temporary Excel
     os.remove(tmp_path)
     print(f"✅ Processing complete for file: {file_name}")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
     main()
-
