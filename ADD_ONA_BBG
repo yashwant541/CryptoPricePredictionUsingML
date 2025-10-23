@@ -1,70 +1,130 @@
-import dataiku
-import extract_msg
-import io
+# ============================================================
+# recipe_xlsx_safe_final.py — Safe MSG Excel Extractor for Dataiku
+# ============================================================
+
 import os
+import dataiku
+from io import BytesIO
+from pathlib import Path
+import extract_msg
+import traceback
+import time
 
-# ----------------------------------------------------------
-# ✅ Configuration
-# ----------------------------------------------------------
-input_folder = dataiku.Folder("O6cNhxMz")   # Folder containing MSG files
-output_folder = dataiku.Folder("UeSjIQkY")  # Folder where Excel files will be saved
+# ------------------------------------------------------------
+# 🕒 Force UTC timezone to avoid timestamp/timezone conflicts
+# ------------------------------------------------------------
+os.environ["TZ"] = "UTC"
+try:
+    time.tzset()
+except Exception:
+    pass
 
-print("🚀 Starting improved MSG Excel extractor (no timestamp usage)")
-print("📁 Using Dataiku managed folders (safe mode, no local filesystem).")
+# ------------------------------------------------------------
+# 📁 Configuration — Replace with your Dataiku folder IDs
+# ------------------------------------------------------------
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # MSG input folder
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")  # Output folder for Excel files
 
-# ----------------------------------------------------------
-# ✅ Helper: Detect if attachment is Excel
-# ----------------------------------------------------------
+print("🚀 Starting MSG Excel Extractor (Safe Mode)")
+print("📁 Input Folder:", input_folder.get_id())
+print("📁 Output Folder:", output_folder.get_id())
+print("------------------------------------------------------------")
+
+# ------------------------------------------------------------
+# 🧩 Helper: Detect if attachment is Excel file
+# ------------------------------------------------------------
 def is_excel_file(filename, data_bytes):
-    """Detect if a file is likely an Excel file."""
+    """
+    Detect if an attachment is an Excel file based on name or magic bytes.
+    """
     name_lower = (filename or "").lower()
     if name_lower.endswith(('.xlsx', '.xls', '.xlsm')):
         return True
-    # Check magic bytes (Excel = ZIP format)
+    # Check for ZIP magic bytes (PK) — used by XLSX
     return data_bytes[:4] == b'PK\x03\x04'
 
-# ----------------------------------------------------------
-# ✅ Main Logic
-# ----------------------------------------------------------
+# ------------------------------------------------------------
+# 🧹 Helper: Clean file name safely
+# ------------------------------------------------------------
+def sanitize_filename(filename):
+    invalid_chars = '<>:"/\\|?*'
+    for char in invalid_chars:
+        filename = filename.replace(char, '_')
+    return filename.strip()
+
+# ------------------------------------------------------------
+# 📨 Process MSG files
+# ------------------------------------------------------------
 msg_files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith(".msg")]
-print(f"📬 Found {len(msg_files)} MSG file(s) to process.\n")
+print(f"📬 Found {len(msg_files)} MSG file(s) to process.")
+print("------------------------------------------------------------")
+
+summary = []
 
 for msg_path in msg_files:
-    msg_name = os.path.basename(msg_path)
-    print(f"📩 Processing MSG: {msg_name}")
+    msg_name = Path(msg_path).name
+    print(f"📩 Processing: {msg_name}")
 
     try:
-        # Read MSG file bytes
-        msg_bytes = input_folder.get_download_stream(msg_path).read()
+        # Read MSG file from Dataiku folder
+        with input_folder.get_download_stream(msg_path) as stream:
+            msg_bytes = stream.read()
 
-        # Load using extract_msg (safe mode: no timestamp fields)
-        msg = extract_msg.Message(io.BytesIO(msg_bytes))
+        # Load MSG safely (ignore timestamps)
+        msg = extract_msg.Message(BytesIO(msg_bytes))
 
-        if not msg.attachments:
-            print("⚠️  No attachments found.\n")
-            continue
+        attachments = msg.attachments or []
+        print(f"📎 Found {len(attachments)} attachment(s):")
 
-        print(f"📎 Found {len(msg.attachments)} attachment(s):")
-        excel_count = 0
+        excel_saved = 0
+        excel_skipped = 0
 
-        for i, att in enumerate(msg.attachments, start=1):
-            filename = att.longFilename or att.shortFilename or f"attachment_{i}.bin"
-            data = att.data
+        for i, att in enumerate(attachments, start=1):
+            try:
+                att_name = att.longFilename or att.shortFilename or f"attachment_{i}.bin"
+                clean_name = sanitize_filename(att_name)
+                att_data = att.data or b""
 
-            if is_excel_file(filename, data):
-                excel_count += 1
-                # Ensure .xlsx extension
-                safe_name = filename if filename.lower().endswith(".xlsx") else f"{os.path.splitext(filename)[0]}.xlsx"
+                if not att_data:
+                    print(f"   ⚠️ Empty attachment skipped: {clean_name}")
+                    excel_skipped += 1
+                    continue
 
-                # Upload directly to Dataiku folder
-                output_folder.upload_data(safe_name, io.BytesIO(data))
-                print(f"   ✅ Saved Excel: {safe_name}")
-            else:
-                print(f"   ❌ Skipped non-Excel: {filename}")
+                # Check if it's Excel
+                if is_excel_file(clean_name, att_data):
+                    excel_saved += 1
+                    # Ensure correct extension
+                    if not clean_name.lower().endswith(".xlsx"):
+                        clean_name = Path(clean_name).stem + ".xlsx"
+                    # Save to Dataiku output folder
+                    output_folder.upload_data(clean_name, BytesIO(att_data))
+                    print(f"   ✅ Saved Excel: {clean_name}")
+                else:
+                    print(f"   ❌ Skipped non-Excel: {clean_name}")
+                    excel_skipped += 1
 
-        print(f"✅ Done {msg_name}: {excel_count} Excel saved.\n")
+            except Exception as att_err:
+                print(f"   ✗ Attachment error ({att_name}): {att_err}")
+                excel_skipped += 1
+
+        msg.close()
+        summary.append((msg_name, len(attachments), excel_saved, excel_skipped))
+        print(f"✅ Completed {msg_name}: {excel_saved} Excel saved, {excel_skipped} skipped.\n")
 
     except Exception as e:
-        print(f"❌ Error processing {msg_name}: {e}\n")
+        print(f"❌ Error processing {msg_name}: {e}")
+        traceback.print_exc()
+        summary.append((msg_name, 0, 0, 0))
 
-print("🎯 Extraction complete. All Excel attachments saved to Dataiku output folder.")
+# ------------------------------------------------------------
+# 📊 Summary Report
+# ------------------------------------------------------------
+print("\n============================================================")
+print("🧾 EXTRACTION SUMMARY")
+print("============================================================")
+print(f"{'Email File':50} | {'Attachments':>12} | {'Excel Saved':>12} | {'Skipped':>8}")
+print("-" * 85)
+for row in summary:
+    print(f"{row[0]:50} | {row[1]:12} | {row[2]:12} | {row[3]:8}")
+print("============================================================")
+print("🎯 Extraction complete. All Excel attachments saved successfully.")
