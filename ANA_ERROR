@@ -1,5 +1,6 @@
 import dataiku
 import pandas as pd
+import tempfile
 from datetime import datetime
 
 # ----------------------------------------------------------
@@ -29,15 +30,23 @@ input_files = input_folder.list_paths_in_partition()
 if not input_files:
     raise FileNotFoundError("❌ No files found in input folder!")
 
-excel_file_path = input_files[0]  # take the only file
+excel_file_info = input_files[0]
 
 # ----------------------------------------------------------
-# Step 2: Load Excel file and iterate sheets
+# Step 2: Download the Excel file to a temporary path
 # ----------------------------------------------------------
-xls = pd.ExcelFile(excel_file_path)
+with input_folder.get_download_stream(excel_file_info) as stream:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+        tmp.write(stream.read())
+        tmp_path = tmp.name
+
+# ----------------------------------------------------------
+# Step 3: Load Excel file and iterate sheets
+# ----------------------------------------------------------
+xls = pd.ExcelFile(tmp_path)
 for sheet_name in xls.sheet_names:
     # Read sheet without header
-    df_raw = pd.read_excel(excel_file_path, sheet_name=sheet_name, header=None)
+    df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None)
 
     # Detect header rows with date
     header_rows = [i for i in range(len(df_raw)) if any(looks_like_date(cell) for cell in df_raw.iloc[i])]
@@ -74,9 +83,15 @@ for sheet_name in xls.sheet_names:
     final_df = pd.concat(all_tables, ignore_index=True)
 
     # ------------------------------------------------------
-    # Step 3: Save CSV to Dataiku output folder
+    # Step 4: Save CSV to Dataiku output folder
     # ------------------------------------------------------
     with output_folder.get_writer(f"{sheet_name}.csv") as writer:
         final_df.to_csv(writer, index=False)
 
     print(f"✅ Sheet '{sheet_name}' saved as CSV: {sheet_name}.csv")
+
+# ----------------------------------------------------------
+# Step 5: Cleanup temp file
+# ----------------------------------------------------------
+import os
+os.remove(tmp_path)
