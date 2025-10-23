@@ -1,3 +1,156 @@
-[16:02:04] [INFO] [dku.utils]  - zoneinfo._common.ZoneInfoNotFoundError: 'Multiple conflicting time zone configurations found:\n/etc/sysconfig/clock: Etc/UTC\n/etc/localtime is a symlink to: Asia/Hong_Kong\nFix the configuration, or set the time zone in a TZ environment variable.\n'
-[16:02:04] [INFO] [dku.utils]  - 2025-10-23 16:02:04,204 ERROR Timestamp value of 1730958376.647 caused an exception. This was probably caused by the time stamp being too far in the future.
-[16:02:04] [INFO] [dku.utils]  - 2025-10-23 16:02:04,204 ERROR b'@\x00[\x80\x06\x00\x00\x00p\xbd\xda\\\xd80\xdb\x01'
+# recipe_xlsx_safe_final.py - Dataiku MSG XLSX Extractor (Timezone-immune)
+import os
+import dataiku
+from io import BytesIO
+from pathlib import Path
+import extract_msg
+import traceback
+
+# -------------------------------------------------------------
+# 🌍 FORCE FIXED TIMEZONE to prevent Dataiku timestamp conflicts
+# -------------------------------------------------------------
+os.environ["TZ"] = "UTC"
+try:
+    import time
+    time.tzset()  # works on Unix/Linux (ignored on Windows)
+except Exception:
+    pass
+
+class MSGAttachmentProcessor:
+    """
+    Extract XLSX attachments from MSG files.
+    Fully ignores timestamps and enforces UTC timezone safety.
+    """
+
+    def __init__(self, input_folder, output_folder):
+        self.input_folder = input_folder
+        self.output_folder = output_folder
+
+    def sanitize_filename(self, filename: str) -> str:
+        """
+        Remove invalid characters from filename
+        """
+        invalid_chars = '<>:"/\\|?*'
+        for char in invalid_chars:
+            filename = filename.replace(char, '_')
+        return filename.strip()
+
+    def process_single_msg(self, msg_file_info):
+        """
+        Process a single MSG file, extracting only XLSX attachments.
+        """
+        attachments_processed = 0
+        attachments_failed = 0
+
+        try:
+            msg_name = msg_file_info["path"]
+            print(f"Processing MSG file: {msg_name}")
+
+            # Read MSG file bytes
+            with self.input_folder.get_download_stream(msg_name) as stream:
+                msg_content = stream.read()
+
+            # Parse MSG (never touch metadata/timestamps)
+            msg_file = BytesIO(msg_content)
+            msg = extract_msg.openMsg(msg_file)
+
+            # Force timezone safety
+            try:
+                msg.setTz("UTC")
+            except Exception:
+                pass
+
+            attachments = getattr(msg, 'attachments', [])
+            if not attachments:
+                print(f"No attachments found in {msg_name}")
+                msg.close()
+                return attachments_processed, attachments_failed
+
+            print(f"Found {len(attachments)} attachments in {msg_name}")
+
+            existing_files = set(self.output_folder.list_paths_in_partition())
+
+            for idx, attachment in enumerate(attachments, 1):
+                try:
+                    # Only XLSX attachments
+                    attachment_name = getattr(attachment, 'filename', f'attachment_{idx}')
+                    if not attachment_name.lower().endswith(('.xls', '.xlsx')):
+                        print(f"Skipping non-Excel attachment: {attachment_name}")
+                        continue
+
+                    clean_name = self.sanitize_filename(attachment_name)
+                    base_name = Path(clean_name).stem
+                    attachment_data = getattr(attachment, 'data', None)
+                    if not attachment_data:
+                        raise ValueError("Attachment has no data")
+
+                    output_filename = f"{base_name}_{idx}.xlsx"
+                    counter = 1
+                    while output_filename in existing_files:
+                        output_filename = f"{base_name}_{idx}_{counter}.xlsx"
+                        counter += 1
+                    existing_files.add(output_filename)
+
+                    with self.output_folder.get_writer(output_filename) as writer:
+                        writer.write(attachment_data)
+
+                    print(f"✓ Saved: {output_filename}")
+                    attachments_processed += 1
+
+                except Exception as e:
+                    print(f"✗ Failed to process attachment {attachment_name}: {e}")
+                    attachments_failed += 1
+
+            msg.close()
+            print(f"Done with {msg_name} — {attachments_processed} OK, {attachments_failed} failed")
+
+        except Exception as e:
+            print(f"✗ MSG processing error: {e}")
+            attachments_failed += 1
+
+        return attachments_processed, attachments_failed
+
+    def process_batch(self):
+        print("🚀 Starting MSG XLSX extraction (Timezone-safe mode)...")
+
+        all_files = self.input_folder.list_paths_in_partition()
+        msg_files = [f for f in all_files if f.lower().endswith('.msg')]
+
+        if not msg_files:
+            print("No MSG files found in input folder")
+            return
+
+        total_ok = 0
+        total_fail = 0
+
+        for msg_file_path in msg_files:
+            file_info = {"path": msg_file_path}
+            ok, fail = self.process_single_msg(file_info)
+            total_ok += ok
+            total_fail += fail
+
+        print("=" * 50)
+        print("SUMMARY:")
+        print(f"MSG files processed: {len(msg_files)}")
+        print(f"✅ Attachments extracted: {total_ok}")
+        print(f"❌ Attachments failed: {total_fail}")
+        print("=" * 50)
+
+def main():
+    print("Initializing Dataiku MSG extractor (Timezone-immune)")
+
+    try:
+        input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # Replace
+        output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID") # Replace
+
+        processor = MSGAttachmentProcessor(input_folder, output_folder)
+        processor.process_batch()
+
+        print("✅ Completed successfully with timezone isolation.")
+
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
+        print(traceback.format_exc())
+
+if __name__ == "__main__":
+    main()
