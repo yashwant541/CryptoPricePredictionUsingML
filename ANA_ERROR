@@ -52,41 +52,60 @@ def normalize_date(date_str):
         return date_str
 
 # -------------------------------
-# Helper: Extract table from HTML
+# Helper: Extract table from text content
 # -------------------------------
-def extract_table_from_html(html_content):
-    try:
-        tables = pd.read_html(html_content)
-        if tables:
-            return tables[0]
-    except Exception as e:
-        print(f"Error extracting table from HTML: {e}")
+def extract_table_from_text(text_content):
+    lines = text_content.split('\n')
+    table_data = []
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Tab-separated
+        if '\t' in line:
+            row = [c.strip() for c in line.split('\t') if c.strip()]
+        # Comma-separated
+        elif ',' in line and len(line.split(',')) > 1:
+            row = [c.strip() for c in line.split(',') if c.strip()]
+        # Space-separated (2+ spaces)
+        else:
+            row = [c.strip() for c in re.split(r'\s{2,}', line) if c.strip()]
+        if len(row) > 1:
+            table_data.append(row)
+
+    if len(table_data) > 1:
+        try:
+            df = pd.DataFrame(table_data[1:], columns=table_data[0])
+            return df
+        except Exception as e:
+            print(f"Error creating DataFrame from text: {e}")
     return None
 
 # -------------------------------
-# Process all HTML files
+# Process all TXT files
 # -------------------------------
-html_files_found = False
+txt_files_found = False
 
 for file_info in all_files:
-    # Case-insensitive check for HTML/HTM files
-    if not (file_info.lower().endswith(".htm") or file_info.lower().endswith(".html")):
+    # Case-insensitive check for TXT files
+    if not file_info.lower().endswith(".txt"):
         continue
 
-    html_files_found = True
+    txt_files_found = True
 
     try:
-        # Read HTML bytes
+        # Read TXT content
         with input_folder.get_download_stream(file_info) as f:
-            html_bytes = f.read()
-            html_content = html_bytes.decode('utf-8', errors='ignore')
+            txt_bytes = f.read()
+            txt_content = txt_bytes.decode('utf-8', errors='ignore')
 
         # Extract date from filename
         match = date_pattern.search(file_info)
         file_date = normalize_date(match.group(0)) if match else "UnknownDate"
 
-        # Extract table from HTML content
-        table_df = extract_table_from_html(html_content)
+        # Extract table from TXT content
+        table_df = extract_table_from_text(txt_content)
 
         # Save table if found using upload stream
         if table_df is not None:
@@ -100,5 +119,5 @@ for file_info in all_files:
     except Exception as e:
         print(f"Failed to process {file_info}: {e}")
 
-if not html_files_found:
-    print("No HTML/HTM files found in the input folder.")
+if not txt_files_found:
+    print("No TXT files found in the input folder.")
