@@ -1,131 +1,126 @@
-import dataiku
 import re
-import io
-import os
 import pandas as pd
+from extract_msg import Message
 from datetime import datetime
-from dateutil import parser
+import dataiku
+import os
+import tempfile
 
-# -------------------------------
-# 🔧 Global variables (changeable)
-# -------------------------------
-START_TEXT = "VALUES"   # First cell of table; included
-END_TEXT   = "Maker User No:"   # Marks end of table; excluded
+# -----------------------------
+# Configuration for Dataiku
+# -----------------------------
+# Input folder (Dataiku managed folder)
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")  # replace with actual ID
 
-INPUT_FOLDER_ID = "INPUT_FOLDER_ID"   # Replace with your input folder ID
-OUTPUT_FOLDER_ID = "OUTPUT_FOLDER_ID" # Replace with your output folder ID
+# Output folder (Dataiku managed folder)
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")  # replace with actual ID
 
-# -------------------------------
-# Dataiku folders
-# -------------------------------
-input_folder = dataiku.Folder(INPUT_FOLDER_ID)
-output_folder = dataiku.Folder(OUTPUT_FOLDER_ID)
+# -----------------------------
+# Utility functions
+# -----------------------------
+def extract_date_from_filename(filename):
+    name_without_ext = os.path.splitext(filename)[0]
+    patterns = [
+        r'(\d{1,2}-[A-Za-z]{3}-\d{4})',
+        r'(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4})',
+        r'(\d{4}-\d{1,2}-\d{1,2})',
+        r'(\d{1,2}-\d{1,2}-\d{4})'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, name_without_ext)
+        if match:
+            date_str = re.sub(r'(st|nd|rd|th)', '', match.group(1))
+            for fmt in ['%d-%b-%Y', '%d %B %Y', '%Y-%m-%d', '%d-%m-%Y']:
+                try:
+                    dt = datetime.strptime(date_str.strip(), fmt)
+                    return dt.strftime('%Y-%m-%d')
+                except ValueError:
+                    continue
+    return "unknown_date"
 
-# -------------------------------
-# Regex to match dates in filename
-# -------------------------------
-date_pattern = re.compile(
-    r'(\d{1,2}(?:st|nd|rd|th)?[- ]?[A-Za-z]{3,9}[- ]\d{4}|\b\d{6}\b)',
-    re.IGNORECASE
-)
-
-# -------------------------------
-# Normalize date
-# -------------------------------
-def normalize_date(date_str):
+def extract_table_from_html(html_content):
     try:
-        date_str = re.sub(r'(st|nd|rd|th)', '', date_str, flags=re.IGNORECASE)
-        dt = parser.parse(date_str, dayfirst=True)
-        return dt.strftime("%d-%b-%Y")
-    except Exception:
-        return date_str
+        tables = pd.read_html(html_content)
+        if tables:
+            return tables[0]
+    except:
+        return None
+    return None
 
-# -------------------------------
-# Extract table from text content
-# -------------------------------
 def extract_table_from_text(text_content):
-    # Split by lines and remove empty lines
-    lines = [line.rstrip() for line in text_content.splitlines() if line.strip()]
-    
-    # Find start and end indices
-    start_idx = None
-    end_idx = None
-    for i, line in enumerate(lines):
-        if START_TEXT in line and start_idx is None:
-            start_idx = i
-        if END_TEXT in line and start_idx is not None:
-            end_idx = i
-            break
-    if start_idx is None:
-        return None
-    end_idx = end_idx if end_idx is not None else len(lines)
-    
-    # Extract table lines
-    table_lines = lines[start_idx:end_idx]
-    
-    # Split lines into cells (tabs or multiple spaces)
-    parsed_lines = []
-    for line in table_lines:
-        row = re.split(r'\t+|\s{2,}', line)
-        parsed_lines.append([cell.strip() for cell in row if cell.strip()])
-    
-    # Minimum 2 lines required
-    if len(parsed_lines) < 2:
-        return None
-    
-    # Handle multi-row header (first 2 rows)
-    headers = []
-    if len(parsed_lines) >= 2:
-        # If lengths mismatch, extend shorter row with empty strings
-        row1, row2 = parsed_lines[0], parsed_lines[1]
-        max_len = max(len(row1), len(row2))
-        row1 += [""] * (max_len - len(row1))
-        row2 += [""] * (max_len - len(row2))
-        headers = [f"{c1} {c2}".strip() if c2 else c1 for c1, c2 in zip(row1, row2)]
-        data_rows = parsed_lines[2:]
-    else:
-        headers = parsed_lines[0]
-        data_rows = parsed_lines[1:]
-    
-    # Create DataFrame
-    df = pd.DataFrame(data_rows, columns=headers)
-    return df
-
-# -------------------------------
-# Process TXT files
-# -------------------------------
-all_files = input_folder.list_paths_in_partition()
-txt_files_found = False
-
-for file_info in all_files:
-    if not file_info.lower().endswith(".txt"):
-        continue
-
-    txt_files_found = True
-    try:
-        # Read TXT content
-        with input_folder.get_download_stream(file_info) as f:
-            txt_bytes = f.read()
-            txt_content = txt_bytes.decode('utf-8', errors='ignore')
-
-        # Extract date from filename
-        match = date_pattern.search(file_info)
-        file_date = normalize_date(match.group(0)) if match else "UnknownDate"
-
-        # Extract table
-        table_df = extract_table_from_text(txt_content)
-
-        # Save table as CSV
-        if table_df is not None:
-            table_name = f"{file_date}_table.csv"
-            with output_folder.get_upload_stream(table_name) as out_f:
-                out_f.write(table_df.to_csv(index=False).encode('utf-8'))
-            print(f"Saved table {table_name} from {file_info}")
+    lines = text_content.split('\n')
+    table_data = []
+    for line in lines:
+        line = line.strip()
+        if not line: continue
+        if '\t' in line:
+            row = [cell.strip() for cell in line.split('\t') if cell.strip()]
+        elif ',' in line and len(line.split(',')) > 2:
+            row = [cell.strip() for cell in line.split(',') if cell.strip()]
         else:
-            print(f"No table found in {file_info}")
+            row = [cell.strip() for cell in re.split(r'\s{2,}', line) if cell.strip()]
+        if len(row) > 1:
+            table_data.append(row)
+    if len(table_data) > 1:
+        try:
+            df = pd.DataFrame(table_data[1:], columns=table_data[0])
+            return df
+        except:
+            return None
+    return None
 
+# -----------------------------
+# Core processing
+# -----------------------------
+def process_msg_file(msg_path, filename):
+    try:
+        msg = Message(msg_path)
+        date_str = extract_date_from_filename(filename)
+
+        table_df = None
+        if msg.htmlBody:
+            table_df = extract_table_from_html(msg.htmlBody)
+        if table_df is None and msg.body:
+            table_df = extract_table_from_text(msg.body)
+
+        # Save output to Dataiku folder
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            if table_df is not None:
+                temp_file = os.path.join(tmp_dir, f"{date_str}_table.csv")
+                table_df.to_csv(temp_file, index=False)
+            else:
+                temp_file = os.path.join(tmp_dir, f"{date_str}_raw.txt")
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    f.write(msg.body or "")
+
+            output_folder.upload_file(temp_file, os.path.basename(temp_file))
+        return True
     except Exception as e:
-        print(f"Failed to process {file_info}: {e}")
+        print(f"Error processing {filename}: {e}")
+        return False
 
-if not txt_files_found:
-    print("No TXT files found in the input folder.")
+def process_all_msg_files():
+    files_info = input_folder.list_paths_in_partition()
+    msg_files = [f for f in files_info if f.lower().endswith(".msg")]
+    if not msg_files:
+        print("No MSG files found in input folder.")
+        return
+
+    success_count = 0
+    for i, file_path in enumerate(msg_files, 1):
+        print(f"[{i}/{len(msg_files)}] Processing {file_path}...")
+        with input_folder.get_download_stream(file_path) as f:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".msg") as tmp_msg:
+                tmp_msg.write(f.read())
+                tmp_msg_path = tmp_msg.name
+        if process_msg_file(tmp_msg_path, os.path.basename(file_path)):
+            success_count += 1
+        os.remove(tmp_msg_path)
+
+    print(f"Processing complete! Successfully processed {success_count} of {len(msg_files)} MSG files.")
+
+# -----------------------------
+# Run
+# -----------------------------
+if __name__ == "__main__":
+    process_all_msg_files()
