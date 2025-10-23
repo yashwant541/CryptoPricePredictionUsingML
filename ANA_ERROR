@@ -1,15 +1,14 @@
 import dataiku
 import tempfile
 import os
-import extract_msg
+from msg_parser import MsOxMessage
 
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")      # 📥 Input folder containing .msg files
-output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")    # 📤 Output folder for attachments
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")
 
-# Allowed tabular attachment types
 TABULAR_EXTENSIONS = ('.xls', '.xlsx', '.xlsm', '.xlsb', '.csv', '.txt')
 
 # ------------------------------------------------------
@@ -23,24 +22,21 @@ def main():
     for msg_file_info in input_files:
         file_name = os.path.basename(msg_file_info)
 
-        # Download .msg file to temporary location
+        # Download .msg file
         with input_folder.get_download_stream(msg_file_info) as stream:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".msg") as tmp_msg:
                 tmp_msg.write(stream.read())
                 tmp_msg_path = tmp_msg.name
 
-        # Load the .msg file
-        msg = extract_msg.Message(tmp_msg_path)
+        # Parse .msg file safely
+        msg = MsOxMessage(tmp_msg_path)
 
-        # Loop through attachments
-        for attachment in msg.attachments:
-            attach_name = attachment.longFilename
+        for attach in msg.attachments:
+            attach_name = attach.long_fname
+            attach_bytes = attach.data
 
-            # Only process tabular attachments
             if attach_name.lower().endswith(TABULAR_EXTENSIONS):
-                attach_bytes = attachment.data
-
-                # Save attachment to temporary file
+                # Save temporary file
                 with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
                     tmp_file.write(attach_bytes)
                     tmp_file_path = tmp_file.name
@@ -55,10 +51,8 @@ def main():
             else:
                 print(f"⏩ Skipping non-tabular attachment: {attach_name}")
 
-        # Cleanup temporary .msg
         os.remove(tmp_msg_path)
         print(f"✅ Processed .msg file: {file_name}")
 
-# ------------------------------------------------------
 if __name__ == "__main__":
     main()
