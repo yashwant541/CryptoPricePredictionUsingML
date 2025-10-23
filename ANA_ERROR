@@ -3,34 +3,33 @@ import extract_msg
 import os
 
 # -----------------------------
-# 🔧 Configuration
-input_folder_name = "input_msg_folder"   # Dataiku input folder
-output_folder_name = "output_txt_folder" # Dataiku output folder
+input_folder_name = "input_msg_folder"
+output_folder_name = "output_txt_folder"
 
-# -----------------------------
-# Get Dataiku folders
+# Get folders
 input_folder = dataiku.Folder(input_folder_name)
 output_folder = dataiku.Folder(output_folder_name)
 
-# List all files in the input folder
-input_files_info = input_folder.list_paths_in_partition()  # Relative paths
+# List files in input folder
+input_files_info = input_folder.list_paths_in_partition()
+print("Files found in input folder:", input_files_info)
 
-# Process each .msg file
+# Process .msg files
 for file_rel_path in input_files_info:
     if file_rel_path.lower().endswith(".msg"):
-        # Read the .msg file as a stream
+        print(f"Processing: {file_rel_path}")
         with input_folder.get_download_stream(file_rel_path) as f:
             msg = extract_msg.Message(f)
-            msg_body = msg.body  # Entire email body
+            msg_body = msg.body
 
         # Prepare output filename
         base_name = os.path.splitext(os.path.basename(file_rel_path))[0]
         output_filename = f"{base_name}.txt"
 
-        # Write the email body to Dataiku output folder using upload_stream
+        # Write using upload_stream
         with output_folder.upload_stream(output_filename) as out_f:
-            out_f.write(msg_body.encode("utf-8"))  # upload_stream expects bytes
+            out_f.write(msg_body.encode("utf-8"))
 
-        print(f"Saved: {output_filename}")
+        print(f"Saved: {output_filename} to output folder")
 
-print("All emails have been processed using upload_stream.")
+print("Processing complete.")
