@@ -22,6 +22,18 @@ except Exception:
 input_folder = dataiku.Folder("INPUT_FOLDER_ID")   # Replace with your input folder ID
 output_folder = dataiku.Folder("OUTPUT_FOLDER_ID") # Replace with your output folder ID
 
+# -------------------------------
+# Print all files in input folder
+# -------------------------------
+all_files = input_folder.list_paths_in_partition()
+if not all_files:
+    print("No files found in the input folder.")
+else:
+    print(f"Found {len(all_files)} files in the input folder:\n")
+    for f in all_files:
+        print(f)
+print("="*50)
+
 # Regex to match dates in filename (ordinals or 6-digit numbers)
 date_pattern = re.compile(
     r'(\d{1,2}(?:st|nd|rd|th)?[- ]?[A-Za-z]{3,9}[- ]\d{4}|\b\d{6}\b)',
@@ -82,7 +94,7 @@ def extract_table_from_text(text_content):
 # -------------------------------
 msg_files_found = False
 
-for file_info in input_folder.list_paths_in_partition():
+for file_info in all_files:
     if not file_info.lower().endswith(".msg"):
         continue
 
@@ -106,11 +118,11 @@ for file_info in input_folder.list_paths_in_partition():
         if table_df is None and msg.body:
             table_df = extract_table_from_text(msg.body)
 
-        # Save table if found
+        # Save table if found using upload stream
         if table_df is not None:
             table_name = f"{file_date}_table.csv"
-            with output_folder.get_writer(table_name) as writer:
-                table_df.to_csv(writer, index=False)
+            with output_folder.get_upload_stream(table_name) as out_f:
+                out_f.write(table_df.to_csv(index=False).encode('utf-8'))
             print(f"Saved table {table_name} from {file_info}")
         else:
             print(f"No table found in {file_info}")
