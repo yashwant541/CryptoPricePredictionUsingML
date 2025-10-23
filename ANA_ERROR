@@ -1,362 +1,277 @@
 import dataiku
 import tempfile
 import os
-from msg_parser import MsOxMessage
 import re
 from datetime import datetime
 import logging
-import traceback
 
 # ------------------------------------------------------
 # 🔧 Configuration
 # ------------------------------------------------------
-input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")
-output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")
+INPUT_FOLDER = dataiku.Folder("YOUR_INPUT_FOLDER_ID")
+OUTPUT_FOLDER = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ------------------------------------------------------
-# 🚀 File Type Detection & Extension Mapping
-# ------------------------------------------------------
-FILE_SIGNATURES = {
-    '504B0304': ('xlsx', 'Excel Workbook'),
-    '504B0506': ('xlsx', 'Excel Workbook'),  # ZIP empty archive
-    '504B0708': ('xlsx', 'Excel Workbook'),  # ZIP spanned archive
-    'D0CF11E0': ('xls', 'Excel 97-2003 Workbook'),
-    '504B34': ('msg', 'Outlook MSG File'),
-    '4D534700': ('msg', 'Outlook MSG File'),
-    '89504E47': ('png', 'PNG Image'),
-    'FFD8FF': ('jpg', 'JPEG Image'),
-    '25504446': ('pdf', 'PDF Document'),
-    '504B030414': ('xlsx', 'Excel Workbook'),  # Longer signature for better detection
-    '504B030414000600': ('xlsx', 'Excel Workbook'),
-}
+def extract_attachments_from_msg(msg_file_path):
+    """
+    Extract all attachments from an MSG file using a fresh approach
+    """
+    try:
+        # Import here to avoid dependency issues
+        from msg_parser import MsOxMessage
+        
+        # Parse the MSG file
+        msg = MsOxMessage(msg_file_path)
+        attachments = []
+        
+        # Extract all attachments with their data
+        for i, attachment in enumerate(msg.attachments):
+            attachment_info = {
+                'index': i + 1,
+                'name': None,
+                'data': None,
+                'size': 0
+            }
+            
+            # Get attachment name - try multiple possible attributes
+            for attr in ['long_fname', 'filename', 'attach_long_filename']:
+                if hasattr(attachment, attr):
+                    name = getattr(attachment, attr)
+                    if name and name.strip():
+                        attachment_info['name'] = name.strip()
+                        break
+            
+            # If no name found, create a generic one
+            if not attachment_info['name']:
+                attachment_info['name'] = f"attachment_{i+1}"
+            
+            # Get attachment data - try multiple possible attributes
+            for attr in ['data', 'payload', '_get_stream_data']:
+                if hasattr(attachment, attr):
+                    try:
+                        data = getattr(attachment, attr)
+                        if callable(data):
+                            data = data()
+                        
+                        if data and len(data) > 0:
+                            attachment_info['data'] = data
+                            attachment_info['size'] = len(data)
+                            break
+                    except:
+                        continue
+            
+            if attachment_info['data']:
+                attachments.append(attachment_info)
+                logger.debug(f"Found attachment: {attachment_info['name']} ({attachment_info['size']} bytes)")
+        
+        return attachments
+        
+    except Exception as e:
+        logger.error(f"Error parsing MSG file: {e}")
+        return []
 
-EXTENSION_MAPPING = {
-    'xlsx': 'xlsx',
-    'xls': 'xls', 
-    'msg': 'msg',
-    'pdf': 'pdf',
-    'jpg': 'jpg',
-    'jpeg': 'jpg',
-    'png': 'png',
-    'doc': 'doc',
-    'docx': 'docx',
-    'ppt': 'ppt',
-    'pptx': 'pptx',
-    'txt': 'txt',
-    'csv': 'csv'
-}
+def get_file_extension(filename, file_data):
+    """
+    Determine the correct file extension
+    """
+    # First, try to get extension from filename
+    original_ext = os.path.splitext(filename)[1].lower()
+    if original_ext and len(original_ext) > 1:
+        return original_ext[1:]  # Remove the dot
+    
+    # If no extension in filename, detect from file content
+    if file_data and len(file_data) >= 8:
+        file_signature = file_data[:8].hex().upper()
+        
+        # Common file signatures
+        signatures = {
+            '504B0304': 'xlsx',  # ZIP (Excel, Word, etc)
+            '504B0506': 'xlsx',  # ZIP empty
+            '504B0708': 'xlsx',  # ZIP spanned
+            'D0CF11E0': 'xls',   # Older Office formats
+            '25504446': 'pdf',   # PDF
+            '89504E47': 'png',   # PNG
+            'FFD8FF': 'jpg',     # JPEG
+            '504B34': 'msg',     # MSG file
+        }
+        
+        for sig, ext in signatures.items():
+            if file_signature.startswith(sig):
+                return ext
+    
+    return 'bin'  # Default extension
 
-# ------------------------------------------------------
-# 🚀 Helper Functions
-# ------------------------------------------------------
+def clean_filename(filename):
+    """
+    Clean filename by removing invalid characters and normalizing
+    """
+    # Remove invalid characters
+    invalid_chars = '<>:"/\\|?*'
+    for char in invalid_chars:
+        filename = filename.replace(char, '_')
+    
+    # Remove extra spaces and dots
+    filename = re.sub(r'\s+', ' ', filename).strip()
+    filename = re.sub(r'\.+', '.', filename)
+    
+    return filename
+
 def extract_date_from_filename(filename):
     """
-    Extract first date in format DD-MMM-YYYY (like 23-Sep-2024) from filename.
-    Returns date string if found, else uses current date.
+    Extract date from filename in format DD-MMM-YYYY
     """
     pattern = r'(\d{1,2}-[A-Za-z]{3}-\d{4})'
-    match = re.search(pattern, filename)
+    match = re.search(pattern, filename, re.IGNORECASE)
     if match:
         return match.group(1)
     return datetime.now().strftime("%d-%b-%Y")
 
-def sanitize_filename(filename):
+def process_all_msg_files():
     """
-    Remove or replace characters that might be problematic in filenames.
+    Main function to process all MSG files in the input folder
     """
-    invalid_chars = '<>:"/\\|?*'
-    for char in invalid_chars:
-        filename = filename.replace(char, '_')
-    return filename
-
-def get_attachment_name(attachment, index):
-    """
-    Safely extract attachment name with fallbacks.
-    """
-    attach_name = (getattr(attachment, "long_fname", None) or 
-                   getattr(attachment, "filename", None) or 
-                   f"attachment_{index}")
-    return sanitize_filename(attach_name)
-
-def detect_file_type_from_bytes(file_bytes):
-    """
-    Detect file type from byte signature and return proper extension.
-    """
-    if not file_bytes or len(file_bytes) < 4:
-        return "dat", "Unknown"
+    logger.info("Starting MSG attachment extraction process")
     
-    hex_signature = file_bytes[:8].hex().upper()
-    
-    # Check for exact matches first
-    for signature, (ext, description) in FILE_SIGNATURES.items():
-        if hex_signature.startswith(signature):
-            return ext, description
-    
-    # Check for partial matches
-    for signature, (ext, description) in FILE_SIGNATURES.items():
-        if signature.startswith(hex_signature) or hex_signature.startswith(signature):
-            return ext, description
-    
-    return "dat", "Unknown Binary"
-
-def get_proper_extension(attachment_name, file_bytes):
-    """
-    Determine the proper file extension using multiple methods.
-    """
-    # Method 1: Try to get extension from original filename
-    original_ext = os.path.splitext(attachment_name)[1].lower().lstrip('.')
-    if original_ext in EXTENSION_MAPPING:
-        return EXTENSION_MAPPING[original_ext]
-    
-    # Method 2: Detect from file signature
-    detected_ext, description = detect_file_type_from_bytes(file_bytes)
-    
-    # Method 3: If it's a ZIP file (Excel), check if we should use xlsx
-    if detected_ext == 'xlsx' and original_ext in ['xls', 'xlsx']:
-        return original_ext
-    
-    return detected_ext if detected_ext != "dat" else "bin"
-
-def extract_attachment_data(attachment):
-    """
-    Enhanced attachment data extraction with multiple fallback methods.
-    """
-    # Method 1: Try payload first
-    attach_bytes = getattr(attachment, "payload", None)
-    if attach_bytes and len(attach_bytes) > 0:
-        return attach_bytes
-    
-    # Method 2: Try _get_stream_data method
-    if hasattr(attachment, '_get_stream_data'):
-        try:
-            stream_data = attachment._get_stream_data()
-            if stream_data and len(stream_data) > 0:
-                return stream_data
-        except:
-            pass
-    
-    # Method 3: Try data property
-    attach_bytes = getattr(attachment, "data", None)
-    if attach_bytes and len(attach_bytes) > 0:
-        return attach_bytes
-    
-    # Method 4: Try _get_string_stream for text
-    if hasattr(attachment, '_get_string_stream'):
-        try:
-            string_data = attachment._get_string_stream()
-            if string_data:
-                return string_data.encode('utf-8')
-        except:
-            pass
-    
-    return None
-
-def diagnose_issues():
-    """
-    Run comprehensive diagnostics to identify problems.
-    """
-    print("🔍 RUNNING ENHANCED DIAGNOSTICS 🔍")
-    
+    # Get all files from input folder
     try:
-        input_files = input_folder.list_paths_in_partition()
-        print(f"✅ Input folder accessible - {len(input_files)} files found")
+        all_files = INPUT_FOLDER.list_paths_in_partition()
+        if not all_files:
+            logger.warning("No files found in input folder")
+            return 0, 0
         
-        msg_files = [f for f in input_files if f.lower().endswith('.msg')]
-        print(f"📧 .msg files found: {len(msg_files)}")
+        # Filter for .msg files
+        msg_files = [f for f in all_files if f.lower().endswith('.msg')]
+        logger.info(f"Found {len(msg_files)} MSG files to process")
         
         if not msg_files:
-            print("❌ No .msg files found!")
-            return False
-        
-        # Test first file
-        first_file = msg_files[0]
-        print(f"\n🔮 Testing: {first_file}")
-        
-        with input_folder.get_download_stream(first_file) as stream:
-            content = stream.read()
-            print(f"✅ Downloaded: {len(content)} bytes")
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".msg") as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
-        
-        try:
-            msg = MsOxMessage(tmp_path)
-            attachments = list(msg.attachments)
-            print(f"✅ Parsed successfully: {len(attachments)} attachments")
-            
-            for i, attach in enumerate(attachments):
-                attach_name = get_attachment_name(attach, i+1)
-                original_ext = os.path.splitext(attach_name)[1].lower().lstrip('.') or "none"
-                print(f"\n📎 Attachment {i+1}:")
-                print(f"   Name: {attach_name}")
-                print(f"   Original extension: {original_ext}")
-                
-                attach_bytes = extract_attachment_data(attach)
-                
-                if attach_bytes:
-                    print(f"   Data extracted: {len(attach_bytes)} bytes")
-                    
-                    # Detect file type
-                    hex_sig = attach_bytes[:8].hex().upper()
-                    detected_ext, file_type = detect_file_type_from_bytes(attach_bytes)
-                    proper_ext = get_proper_extension(attach_name, attach_bytes)
-                    
-                    print(f"   File signature: {hex_sig}")
-                    print(f"   Detected type: {file_type} ({detected_ext})")
-                    print(f"   Final extension: {proper_ext}")
-                    
-                    # Show available attributes
-                    attrs = [attr for attr in dir(attach) if not attr.startswith('_') and not callable(getattr(attach, attr))]
-                    print(f"   Available attributes: {attrs}")
-                    
-                else:
-                    print(f"   ❌ No data extracted")
-                    
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        
-        return True
+            logger.warning("No .msg files found in input folder")
+            return 0, 0
         
     except Exception as e:
-        print(f"❌ Diagnostics failed: {e}")
-        traceback.print_exc()
-        return False
-
-# ------------------------------------------------------
-# 🚀 Main Processing Function
-# ------------------------------------------------------
-def process_msg_files():
-    """
-    Main function to process all .msg files and extract attachments with proper extensions.
-    """
-    try:
-        input_files = input_folder.list_paths_in_partition()
-        if not input_files:
-            logger.warning("⚠️ No files found in input folder!")
-            return 0, 0
-
-        msg_files = [f for f in input_files if f.lower().endswith('.msg')]
-        if not msg_files:
-            logger.warning("⚠️ No .msg files found!")
-            return 0, 0
-
-        logger.info(f"📧 Found {len(msg_files)} .msg files to process")
-        processed_count = 0
-        total_attachments = 0
-
-        for msg_file_path in msg_files:
+        logger.error(f"Error accessing input folder: {e}")
+        return 0, 0
+    
+    total_files_processed = 0
+    total_attachments_saved = 0
+    
+    # Process each MSG file
+    for msg_file_path in msg_files:
+        try:
             msg_filename = os.path.basename(msg_file_path)
+            logger.info(f"Processing: {msg_filename}")
+            
+            # Extract date from filename for organization
             email_date = extract_date_from_filename(msg_filename)
             
-            logger.info(f"🔍 Processing: {msg_filename}")
-
-            # Download .msg file
-            with input_folder.get_download_stream(msg_file_path) as stream:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".msg") as tmp_msg:
-                    tmp_msg.write(stream.read())
-                    tmp_msg_path = tmp_msg.name
-
+            # Download MSG file to temporary location
+            with INPUT_FOLDER.get_download_stream(msg_file_path) as stream:
+                msg_content = stream.read()
+            
+            if not msg_content:
+                logger.warning(f"Empty file: {msg_filename}")
+                continue
+            
+            # Save to temporary file for parsing
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.msg') as temp_msg_file:
+                temp_msg_file.write(msg_content)
+                temp_msg_path = temp_msg_file.name
+            
             try:
-                msg = MsOxMessage(tmp_msg_path)
+                # Extract attachments from the MSG file
+                attachments = extract_attachments_from_msg(temp_msg_path)
                 
-                if not msg.attachments:
-                    logger.info(f"📭 No attachments found in {msg_filename}")
+                if not attachments:
+                    logger.info(f"No attachments found in {msg_filename}")
                     continue
-
-                logger.info(f"📎 Found {len(msg.attachments)} attachments")
-                file_attachment_count = 0
-
-                for i, attachment in enumerate(msg.attachments, start=1):
-                    attach_name = get_attachment_name(attachment, i)
-                    attach_bytes = extract_attachment_data(attachment)
-
-                    if not attach_bytes or len(attach_bytes) == 0:
-                        logger.warning(f"⏩ Skipping empty attachment {i}: {attach_name}")
-                        continue
-
-                    # Get proper file extension
-                    original_ext = os.path.splitext(attach_name)[1].lower().lstrip('.')
-                    proper_ext = get_proper_extension(attach_name, attach_bytes)
-                    
-                    # Get base name without extension
-                    base_name = os.path.splitext(attach_name)[0]
-                    if not base_name or base_name == attach_name:
-                        base_name = f"attachment_{i}"
-                    
-                    # Create final filename
-                    safe_base_name = sanitize_filename(base_name)
-                    output_file_name = f"{email_date}_{safe_base_name}_{i}.{proper_ext}"
-
-                    # Save and upload
-                    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                        tmp_file.write(attach_bytes)
-                        tmp_file_path_attach = tmp_file.name
-
+                
+                logger.info(f"Found {len(attachments)} attachments in {msg_filename}")
+                
+                # Process each attachment
+                for attachment in attachments:
                     try:
-                        with open(tmp_file_path_attach, "rb") as f:
-                            output_folder.upload_stream(output_file_name, f)
+                        # Clean the attachment name
+                        clean_name = clean_filename(attachment['name'])
                         
-                        # Log file type info
-                        hex_sig = attach_bytes[:8].hex().upper()
-                        detected_ext, file_type = detect_file_type_from_bytes(attach_bytes)
+                        # Get proper file extension
+                        file_extension = get_file_extension(clean_name, attachment['data'])
                         
-                        logger.info(f"✅ Saved: {output_file_name}")
-                        logger.info(f"   📊 Type: {file_type}, Size: {len(attach_bytes)} bytes, Signature: {hex_sig}")
+                        # Remove any existing extension and add the correct one
+                        base_name = os.path.splitext(clean_name)[0]
                         
-                        file_attachment_count += 1
-                        total_attachments += 1
+                        # Create output filename with date prefix
+                        output_filename = f"{email_date}_{base_name}.{file_extension}"
                         
-                    except Exception as upload_error:
-                        logger.error(f"❌ Upload failed for {output_file_name}: {upload_error}")
-                    finally:
-                        if os.path.exists(tmp_file_path_attach):
-                            os.remove(tmp_file_path_attach)
-
-                logger.info(f"🎉 {msg_filename}: {file_attachment_count} attachments extracted")
-                processed_count += 1
-
-            except Exception as msg_error:
-                logger.error(f"❌ Error processing {msg_filename}: {msg_error}")
-                traceback.print_exc()
+                        # Ensure filename is not too long
+                        if len(output_filename) > 100:
+                            output_filename = f"{email_date}_attachment_{attachment['index']}.{file_extension}"
+                        
+                        # Upload attachment to output folder
+                        OUTPUT_FOLDER.upload_stream(output_filename, attachment['data'])
+                        
+                        logger.info(f"Saved: {output_filename} ({attachment['size']} bytes)")
+                        total_attachments_saved += 1
+                        
+                    except Exception as attach_error:
+                        logger.error(f"Error processing attachment {attachment['name']}: {attach_error}")
+                        continue
+                
+                total_files_processed += 1
+                logger.info(f"Completed processing {msg_filename}")
+                
             finally:
-                if os.path.exists(tmp_msg_path):
-                    os.remove(tmp_msg_path)
-
-        logger.info(f"🎉 Complete! {processed_count} files processed, {total_attachments} attachments extracted")
-        return processed_count, total_attachments
-
-    except Exception as e:
-        logger.error(f"💥 Critical error: {e}")
-        traceback.print_exc()
-        return 0, 0
-
-# ------------------------------------------------------
-# 🎯 Main Execution
-# ------------------------------------------------------
-if __name__ == "__main__":
-    print("=" * 60)
-    print("📧 SMART MSG Attachment Extractor")
-    print("=" * 60)
+                # Clean up temporary file
+                if os.path.exists(temp_msg_path):
+                    os.remove(temp_msg_path)
+            
+        except Exception as file_error:
+            logger.error(f"Error processing file {msg_file_path}: {file_error}")
+            continue
     
-    print("\n🚀 Starting diagnostics...")
-    if diagnose_issues():
-        print("\n✅ Diagnostics passed! Starting processing...")
-        print("-" * 40)
+    logger.info(f"Processing complete: {total_files_processed} files processed, {total_attachments_saved} attachments saved")
+    return total_files_processed, total_attachments_saved
+
+def main():
+    """
+    Main execution function with error handling
+    """
+    try:
+        print("=" * 60)
+        print("MSG Attachment Extractor")
+        print("=" * 60)
         
-        processed_count, total_attachments = process_msg_files()
+        # Test folder access
+        try:
+            test_files = INPUT_FOLDER.list_paths_in_partition()
+            print(f"📁 Input folder accessible - {len(test_files)} files found")
+            
+            msg_files = [f for f in test_files if f.lower().endswith('.msg')]
+            print(f"📧 MSG files found: {len(msg_files)}")
+            
+            if not msg_files:
+                print("❌ No .msg files found. Please check your input folder.")
+                return
+                
+        except Exception as e:
+            print(f"❌ Cannot access input folder: {e}")
+            return
         
-        print("-" * 40)
-        if processed_count > 0:
-            print(f"🎊 Success! Processed {processed_count} files, extracted {total_attachments} attachments")
+        # Process files
+        print("\n🚀 Starting attachment extraction...")
+        files_processed, attachments_saved = process_all_msg_files()
+        
+        print("\n" + "=" * 60)
+        if files_processed > 0:
+            print(f"✅ SUCCESS: Processed {files_processed} files, extracted {attachments_saved} attachments")
         else:
-            print("❌ Processing failed")
-    else:
-        print("\n❌ Diagnostics failed!")
-    
-    print("=" * 60)
+            print("❌ No files were processed successfully")
+        print("=" * 60)
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in main execution: {e}")
+        print(f"💥 Critical error: {e}")
+
+if __name__ == "__main__":
+    main()
