@@ -1,10 +1,131 @@
-Date :
-06-Jun-2025	 	Session Time :
-12:29 - 18:00 	
-VALUES 
-(in %)	 1 WEEK	 1 MONTH	 3 MONTHS	 6 MONTHS	 12 MONTHS	 
-Bid	 Ask	 Bid	 Ask 	Bid	 Ask	 Bid	 Ask 	Bid	 Ask	 
-AVERAGE ATM VOL	 4	 5	 6	 7.8	 4	 6	 4	 5.6	 4.4	 2.5 
-25D_RR	 0.5	 0.44	 0.11	 0.44	 0.55	 
-25D_STR	 0.4	 0.22	 0.22	 0.33	 0.11	 
-Maker User No:XXXX	 	Checker User No:XXXXX	
+import dataiku
+import re
+import io
+import os
+import pandas as pd
+from datetime import datetime
+from dateutil import parser
+
+# -------------------------------
+# 🔧 Global variables (changeable)
+# -------------------------------
+START_TEXT = "VALUES"   # First cell of table; included
+END_TEXT   = "Maker User No:"   # Marks end of table; excluded
+
+INPUT_FOLDER_ID = "INPUT_FOLDER_ID"   # Replace with your input folder ID
+OUTPUT_FOLDER_ID = "OUTPUT_FOLDER_ID" # Replace with your output folder ID
+
+# -------------------------------
+# Dataiku folders
+# -------------------------------
+input_folder = dataiku.Folder(INPUT_FOLDER_ID)
+output_folder = dataiku.Folder(OUTPUT_FOLDER_ID)
+
+# -------------------------------
+# Regex to match dates in filename
+# -------------------------------
+date_pattern = re.compile(
+    r'(\d{1,2}(?:st|nd|rd|th)?[- ]?[A-Za-z]{3,9}[- ]\d{4}|\b\d{6}\b)',
+    re.IGNORECASE
+)
+
+# -------------------------------
+# Normalize date
+# -------------------------------
+def normalize_date(date_str):
+    try:
+        date_str = re.sub(r'(st|nd|rd|th)', '', date_str, flags=re.IGNORECASE)
+        dt = parser.parse(date_str, dayfirst=True)
+        return dt.strftime("%d-%b-%Y")
+    except Exception:
+        return date_str
+
+# -------------------------------
+# Extract table from text content
+# -------------------------------
+def extract_table_from_text(text_content):
+    # Split by lines and remove empty lines
+    lines = [line.rstrip() for line in text_content.splitlines() if line.strip()]
+    
+    # Find start and end indices
+    start_idx = None
+    end_idx = None
+    for i, line in enumerate(lines):
+        if START_TEXT in line and start_idx is None:
+            start_idx = i
+        if END_TEXT in line and start_idx is not None:
+            end_idx = i
+            break
+    if start_idx is None:
+        return None
+    end_idx = end_idx if end_idx is not None else len(lines)
+    
+    # Extract table lines
+    table_lines = lines[start_idx:end_idx]
+    
+    # Split lines into cells (tabs or multiple spaces)
+    parsed_lines = []
+    for line in table_lines:
+        row = re.split(r'\t+|\s{2,}', line)
+        parsed_lines.append([cell.strip() for cell in row if cell.strip()])
+    
+    # Minimum 2 lines required
+    if len(parsed_lines) < 2:
+        return None
+    
+    # Handle multi-row header (first 2 rows)
+    headers = []
+    if len(parsed_lines) >= 2:
+        # If lengths mismatch, extend shorter row with empty strings
+        row1, row2 = parsed_lines[0], parsed_lines[1]
+        max_len = max(len(row1), len(row2))
+        row1 += [""] * (max_len - len(row1))
+        row2 += [""] * (max_len - len(row2))
+        headers = [f"{c1} {c2}".strip() if c2 else c1 for c1, c2 in zip(row1, row2)]
+        data_rows = parsed_lines[2:]
+    else:
+        headers = parsed_lines[0]
+        data_rows = parsed_lines[1:]
+    
+    # Create DataFrame
+    df = pd.DataFrame(data_rows, columns=headers)
+    return df
+
+# -------------------------------
+# Process TXT files
+# -------------------------------
+all_files = input_folder.list_paths_in_partition()
+txt_files_found = False
+
+for file_info in all_files:
+    if not file_info.lower().endswith(".txt"):
+        continue
+
+    txt_files_found = True
+    try:
+        # Read TXT content
+        with input_folder.get_download_stream(file_info) as f:
+            txt_bytes = f.read()
+            txt_content = txt_bytes.decode('utf-8', errors='ignore')
+
+        # Extract date from filename
+        match = date_pattern.search(file_info)
+        file_date = normalize_date(match.group(0)) if match else "UnknownDate"
+
+        # Extract table
+        table_df = extract_table_from_text(txt_content)
+
+        # Save table as CSV
+        if table_df is not None:
+            table_name = f"{file_date}_table.csv"
+            with output_folder.get_upload_stream(table_name) as out_f:
+                out_f.write(table_df.to_csv(index=False).encode('utf-8'))
+            print(f"Saved table {table_name} from {file_info}")
+        else:
+            print(f"No table found in {file_info}")
+
+    except Exception as e:
+        print(f"Failed to process {file_info}: {e}")
+
+if not txt_files_found:
+    print("No TXT files found in the input folder.")
