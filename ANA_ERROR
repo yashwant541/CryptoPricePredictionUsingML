@@ -51,6 +51,40 @@ def get_attachment_name(attachment, index):
                    f"attachment_{index}")
     return sanitize_filename(attach_name)
 
+def extract_attachment_data(attachment):
+    """
+    Enhanced attachment data extraction with multiple fallback methods.
+    """
+    # Method 1: Try payload first
+    attach_bytes = getattr(attachment, "payload", None)
+    if attach_bytes and len(attach_bytes) > 0:
+        return attach_bytes
+    
+    # Method 2: Try _get_stream_data method (common in msg_parser)
+    if hasattr(attachment, '_get_stream_data'):
+        try:
+            stream_data = attachment._get_stream_data()
+            if stream_data and len(stream_data) > 0:
+                return stream_data
+        except:
+            pass
+    
+    # Method 3: Try data property
+    attach_bytes = getattr(attachment, "data", None)
+    if attach_bytes and len(attach_bytes) > 0:
+        return attach_bytes
+    
+    # Method 4: Try _get_string_stream method for text content
+    if hasattr(attachment, '_get_string_stream'):
+        try:
+            string_data = attachment._get_string_stream()
+            if string_data:
+                return string_data.encode('utf-8')
+        except:
+            pass
+    
+    return None
+
 def diagnose_issues():
     """
     Run comprehensive diagnostics to identify problems.
@@ -63,7 +97,7 @@ def diagnose_issues():
         input_files = input_folder.list_paths_in_partition()
         print(f"   ✅ Input folder accessible")
         print(f"   📊 Files found: {len(input_files)}")
-        for i, file_path in enumerate(input_files[:5]):  # Show first 5 files
+        for i, file_path in enumerate(input_files[:5]):
             print(f"      {i+1}. {file_path}")
         if len(input_files) > 5:
             print(f"      ... and {len(input_files) - 5} more files")
@@ -78,20 +112,17 @@ def diagnose_issues():
     
     if not msg_files:
         print("   ❌ No .msg files found!")
-        # Show all file extensions for debugging
         all_extensions = set(os.path.splitext(f)[1].lower() for f in input_files if os.path.splitext(f)[1])
         print(f"   📊 All file extensions in folder: {all_extensions}")
         return False
     
-    # Show .msg files
     for i, msg_file in enumerate(msg_files):
         print(f"      {i+1}. {msg_file}")
     
-    # 3. Test first .msg file
-    print("\n3. 🔮 Testing first .msg file...")
+    # 3. Test first .msg file with detailed attachment analysis
+    print("\n3. 🔮 Testing first .msg file with attachment analysis...")
     first_file = msg_files[0]
     try:
-        # Test download
         with input_folder.get_download_stream(first_file) as stream:
             content = stream.read()
             print(f"   ✅ File downloaded: {len(content)} bytes")
@@ -100,7 +131,6 @@ def diagnose_issues():
             print("   ❌ File is empty!")
             return False
             
-        # Test parsing
         with tempfile.NamedTemporaryFile(delete=False, suffix=".msg") as tmp:
             tmp.write(content)
             tmp_path = tmp.name
@@ -110,17 +140,51 @@ def diagnose_issues():
             attachments = list(msg.attachments)
             print(f"   ✅ Parsing successful: {len(attachments)} attachments found")
             
-            # Show attachment details
-            for i, attach in enumerate(attachments[:3]):  # Show first 3 attachments
+            # Detailed attachment analysis
+            for i, attach in enumerate(attachments):
                 attach_name = get_attachment_name(attach, i+1)
-                attach_size = len(getattr(attach, "payload", b""))
-                print(f"      📎 Attachment {i+1}: {attach_name} ({attach_size} bytes)")
-            
-            if len(attachments) > 3:
-                print(f"      ... and {len(attachments) - 3} more attachments")
+                print(f"\n      📎 Attachment {i+1}: {attach_name}")
+                
+                # Check all available attributes
+                print(f"         Available attributes: {[attr for attr in dir(attach) if not attr.startswith('_')]}")
+                
+                # Try multiple extraction methods
+                attach_bytes = extract_attachment_data(attach)
+                
+                if attach_bytes:
+                    print(f"         ✅ Data extracted: {len(attach_bytes)} bytes")
+                    # Check file signature
+                    if len(attach_bytes) >= 4:
+                        file_sig = attach_bytes[:4].hex().upper()
+                        print(f"         🔍 File signature: {file_sig}")
+                        
+                        # Common file signatures
+                        signatures = {
+                            '504B0304': 'ZIP (Excel, Word, etc)',
+                            'D0CF11E0': 'Microsoft Office (older)',
+                            '504B34': 'MSG file',
+                            '4D534700': 'MSG file alternative',
+                            '89504E47': 'PNG image',
+                            'FFD8FF': 'JPEG image',
+                            '25504446': 'PDF file'
+                        }
+                        
+                        for sig, file_type in signatures.items():
+                            if file_sig.startswith(sig.lower()) or file_sig.startswith(sig.upper()):
+                                print(f"         📄 File type detected: {file_type}")
+                                break
+                else:
+                    print(f"         ❌ No data could be extracted")
+                    
+                # Check specific properties
+                for prop in ['size', 'get_size', 'data_size']:
+                    if hasattr(attach, prop):
+                        size_val = getattr(attach, prop)
+                        print(f"         {prop}: {size_val}")
                 
         except Exception as parse_error:
             print(f"   ❌ MSG parsing failed: {parse_error}")
+            traceback.print_exc()
             return False
         finally:
             if os.path.exists(tmp_path):
@@ -156,6 +220,7 @@ def process_msg_files():
 
         logger.info(f"📧 Found {len(msg_files)} .msg files to process")
         processed_count = 0
+        total_attachments_extracted = 0
 
         for msg_file_path in msg_files:
             msg_filename = os.path.basename(msg_file_path)
@@ -181,11 +246,20 @@ def process_msg_files():
                 attachment_count = 0
 
                 for i, attachment in enumerate(msg.attachments, start=1):
-                    attach_bytes = getattr(attachment, "payload", None)
                     attach_name = get_attachment_name(attachment, i)
+                    
+                    # Enhanced attachment data extraction
+                    attach_bytes = extract_attachment_data(attachment)
 
                     if not attach_bytes:
                         logger.warning(f"⏩ Skipping empty attachment {i}: {attach_name}")
+                        # Debug info for empty attachments
+                        if hasattr(attachment, 'size'):
+                            logger.debug(f"    Attachment size property: {attachment.size}")
+                        continue
+
+                    if len(attach_bytes) == 0:
+                        logger.warning(f"⏩ Skipping zero-byte attachment {i}: {attach_name}")
                         continue
 
                     # Get file extension
@@ -205,8 +279,9 @@ def process_msg_files():
                     try:
                         with open(tmp_file_path_attach, "rb") as f:
                             output_folder.upload_stream(output_file_name, f)
-                        logger.info(f"✅ Saved: {output_file_name}")
+                        logger.info(f"✅ Saved: {output_file_name} ({len(attach_bytes)} bytes)")
                         attachment_count += 1
+                        total_attachments_extracted += 1
                     except Exception as upload_error:
                         logger.error(f"❌ Failed to upload {output_file_name}: {upload_error}")
                     finally:
@@ -214,7 +289,7 @@ def process_msg_files():
                         if os.path.exists(tmp_file_path_attach):
                             os.remove(tmp_file_path_attach)
 
-                logger.info(f"🎉 Processed {msg_filename}: {attachment_count} attachments extracted")
+                logger.info(f"🎉 Processed {msg_filename}: {attachment_count}/{len(msg.attachments)} attachments extracted")
                 processed_count += 1
 
             except Exception as msg_error:
@@ -225,7 +300,7 @@ def process_msg_files():
                 if os.path.exists(tmp_msg_path):
                     os.remove(tmp_msg_path)
 
-        logger.info(f"🎉 Processing complete! {processed_count}/{len(msg_files)} .msg files processed successfully!")
+        logger.info(f"🎉 Processing complete! {processed_count}/{len(msg_files)} .msg files processed, {total_attachments_extracted} total attachments extracted!")
         return processed_count
 
     except Exception as e:
@@ -238,11 +313,11 @@ def process_msg_files():
 # ------------------------------------------------------
 if __name__ == "__main__":
     print("=" * 60)
-    print("📧 MSG Attachment Extractor - Dataiku")
+    print("📧 MSG Attachment Extractor - Enhanced Version")
     print("=" * 60)
     
     # Step 1: Run diagnostics
-    print("\n🚀 Starting diagnostics...")
+    print("\n🚀 Starting enhanced diagnostics...")
     diagnostic_passed = diagnose_issues()
     
     if diagnostic_passed:
