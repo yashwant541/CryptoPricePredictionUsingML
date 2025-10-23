@@ -1,35 +1,104 @@
 import dataiku
-import extract_msg
+import re
+import io
 import os
+from datetime import datetime
+import pandas as pd
 
-# -----------------------------
-input_folder_name = "input_msg_folder"
-output_folder_name = "output_txt_folder"
+# ------------------------------------------------------------
+# 🕒 Force UTC timezone to avoid timestamp/timezone conflicts
+# ------------------------------------------------------------
+os.environ["TZ"] = "UTC"
+try:
+    import time
+    time.tzset()
+except Exception:
+    pass
 
-# Get folders
-input_folder = dataiku.Folder(input_folder_name)
-output_folder = dataiku.Folder(output_folder_name)
+# -------------------------------
+# 🔧 Configuration: Dataiku folders
+# -------------------------------
+input_folder = dataiku.Folder("INPUT_FOLDER_ID")   # Replace with your input folder ID
+output_folder = dataiku.Folder("OUTPUT_FOLDER_ID") # Replace with your output folder ID
 
-# List files in input folder
-input_files_info = input_folder.list_paths_in_partition()
-print("Files found in input folder:", input_files_info)
+# -------------------------------
+# Print all files in input folder
+# -------------------------------
+all_files = input_folder.list_paths_in_partition()
+if not all_files:
+    print("No files found in the input folder!")
+else:
+    print(f"Found {len(all_files)} files in the input folder:\n")
+    for f in all_files:
+        print(f)
+print("="*50)
 
-# Process .msg files
-for file_rel_path in input_files_info:
-    if file_rel_path.lower().endswith(".msg"):
-        print(f"Processing: {file_rel_path}")
-        with input_folder.get_download_stream(file_rel_path) as f:
-            msg = extract_msg.Message(f)
-            msg_body = msg.body
+# Regex to match dates in filename (ordinals or 6-digit numbers)
+date_pattern = re.compile(
+    r'(\d{1,2}(?:st|nd|rd|th)?[- ]?[A-Za-z]{3,9}[- ]\d{4}|\b\d{6}\b)',
+    re.IGNORECASE
+)
 
-        # Prepare output filename
-        base_name = os.path.splitext(os.path.basename(file_rel_path))[0]
-        output_filename = f"{base_name}.txt"
+# -------------------------------
+# Helper: Normalize date string
+# -------------------------------
+def normalize_date(date_str):
+    if re.fullmatch(r'\d{6}', date_str):
+        dt = datetime.strptime(date_str, "%d%m%y")
+        return dt.strftime("%d-%b-%Y")
+    else:
+        date_str = re.sub(r'(st|nd|rd|th)', '', date_str, flags=re.IGNORECASE)
+        date_str = date_str.replace(' ', '-')
+        return date_str
 
-        # Write using upload_stream
-        with output_folder.upload_stream(output_filename) as out_f:
-            out_f.write(msg_body.encode("utf-8"))
+# -------------------------------
+# Helper: Extract table from HTML
+# -------------------------------
+def extract_table_from_html(html_content):
+    try:
+        tables = pd.read_html(html_content)
+        if tables:
+            return tables[0]
+    except Exception as e:
+        print(f"Error extracting table from HTML: {e}")
+    return None
 
-        print(f"Saved: {output_filename} to output folder")
+# -------------------------------
+# Process all HTML files
+# -------------------------------
+html_files_found = False
 
-print("Processing complete.")
+for file_info in all_files:
+    # Case-insensitive check for HTML/HTM files
+    if not (file_info.lower().endswith(".htm") or file_info.lower().endswith(".html")):
+        continue
+
+    html_files_found = True
+
+    try:
+        # Read HTML bytes
+        with input_folder.get_download_stream(file_info) as f:
+            html_bytes = f.read()
+            html_content = html_bytes.decode('utf-8', errors='ignore')
+
+        # Extract date from filename
+        match = date_pattern.search(file_info)
+        file_date = normalize_date(match.group(0)) if match else "UnknownDate"
+
+        # Extract table from HTML content
+        table_df = extract_table_from_html(html_content)
+
+        # Save table if found using upload stream
+        if table_df is not None:
+            table_name = f"{file_date}_table.csv"
+            with output_folder.get_upload_stream(table_name) as out_f:
+                out_f.write(table_df.to_csv(index=False).encode('utf-8'))
+            print(f"Saved table {table_name} from {file_info}")
+        else:
+            print(f"No table found in {file_info}")
+
+    except Exception as e:
+        print(f"Failed to process {file_info}: {e}")
+
+if not html_files_found:
+    print("No HTML/HTM files found in the input folder.")
