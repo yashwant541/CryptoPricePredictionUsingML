@@ -1,184 +1,183 @@
-# ============================================================
-# recipe_xlsx_safe_final.py — Safe MSG Excel Extractor for Dataiku
-# ============================================================
-
-import os
-import dataiku
-from io import BytesIO
-from pathlib import Path
-import extract_msg
-import traceback
-import time
-
-# ------------------------------------------------------------
-# 🕒 Force UTC timezone to avoid timestamp/timezone conflicts
-# ------------------------------------------------------------
-os.environ["TZ"] = "UTC"
-try:
-    time.tzset()
-except Exception:
-    pass
-
-
-class MSGAttachmentProcessor:
-    """
-    Safely extracts only Excel (.xls, .xlsx) attachments from .msg files
-    without touching any timestamp or timezone metadata.
-    """
-
-    def __init__(self, input_folder, output_folder):
-        self.input_folder = input_folder
-        self.output_folder = output_folder
-
-    def sanitize_filename(self, filename: str) -> str:
-        """Replace invalid filename characters."""
-        invalid_chars = '<>:"/\\|?*'
-        for ch in invalid_chars:
-            filename = filename.replace(ch, "_")
-        return filename.strip()
-
-    def process_single_msg(self, msg_file_info):
-        """Process one MSG file, list attachments, and extract only Excel ones."""
-        attachments_processed = 0
-        attachments_failed = 0
-
-        msg_name = msg_file_info["path"]
-        print(f"\n📩 Processing MSG file: {msg_name}")
-
-        try:
-            # --- Read the MSG file from Dataiku ---
-            with self.input_folder.get_download_stream(msg_name) as stream:
-                msg_content = stream.read()
-
-            # --- Parse MSG safely (no timestamps used) ---
-            msg_file = BytesIO(msg_content)
-            msg = extract_msg.openMsg(msg_file)
-
-            try:
-                msg.setTz("UTC")  # optional, just in case extract_msg uses timezones
-            except Exception:
-                pass
-
-            attachments = getattr(msg, "attachments", [])
-            if not attachments:
-                print("⚠️ No attachments found.")
-                msg.close()
-                return 0, 0
-
-            # --- Log all attachments ---
-            print(f"📎 Found {len(attachments)} attachment(s):")
-            for att in attachments:
-                att_name = getattr(att, "filename", "Unnamed attachment")
-                if att_name.lower().endswith((".xls", ".xlsx")):
-                    print(f"   ✅ Excel file detected: {att_name}")
-                else:
-                    print(f"   ❌ Non-Excel file (will skip): {att_name}")
-
-            # --- Process Excel attachments only ---
-            existing_files = set(self.output_folder.list_paths_in_partition())
-
-            for idx, attachment in enumerate(attachments, 1):
-                try:
-                    attachment_name = getattr(attachment, "filename", f"attachment_{idx}")
-                    if not attachment_name.lower().endswith((".xls", ".xlsx")):
-                        continue  # skip non-excel files
-
-                    clean_name = self.sanitize_filename(attachment_name)
-                    base_name = Path(clean_name).stem
-
-                    attachment_data = getattr(attachment, "data", None)
-                    if not attachment_data:
-                        raise ValueError("Attachment has no data")
-
-                    # force output to .xlsx
-                    output_filename = f"{base_name}_{idx}.xlsx"
-
-                    # avoid overwriting
-                    counter = 1
-                    while output_filename in existing_files:
-                        output_filename = f"{base_name}_{idx}_{counter}.xlsx"
-                        counter += 1
-                    existing_files.add(output_filename)
-
-                    # --- Save attachment to output folder ---
-                    with self.output_folder.get_writer(output_filename) as writer:
-                        writer.write(attachment_data)
-
-                    print(f"   💾 Saved Excel file: {output_filename} ({len(attachment_data)} bytes)")
-                    attachments_processed += 1
-
-                except Exception as e:
-                    print(f"   ❌ Failed to process attachment {attachment_name}: {str(e)}")
-                    attachments_failed += 1
-
-            msg.close()
-
-        except Exception as e:
-            print(f"❌ Error processing MSG file {msg_name}: {str(e)}")
-            print(traceback.format_exc())
-            attachments_failed += 1
-
-        print(f"✅ Done {msg_name}: {attachments_processed} Excel saved, {attachments_failed} failed.")
-        return attachments_processed, attachments_failed
-
-    def process_batch(self):
-        """Process all MSG files in input folder."""
-        print("🚀 Starting batch processing of MSG files...")
-
-        all_files = self.input_folder.list_paths_in_partition()
-        msg_files = [f for f in all_files if f.lower().endswith(".msg")]
-
-        if not msg_files:
-            print("No MSG files found in input folder.")
-            return
-
-        print(f"📂 Found {len(msg_files)} MSG files to process.")
-
-        total_ok = 0
-        total_fail = 0
-
-        for msg_file_path in msg_files:
-            file_info = {"path": msg_file_path}
-            ok, fail = self.process_single_msg(file_info)
-            total_ok += ok
-            total_fail += fail
-
-        print("\n" + "=" * 60)
-        print("📊 PROCESSING SUMMARY")
-        print("=" * 60)
-        print(f"Total MSG files processed: {len(msg_files)}")
-        print(f"Total Excel attachments saved: {total_ok}")
-        print(f"Total failed attachments: {total_fail}")
-        if total_ok + total_fail > 0:
-            success_rate = (total_ok / (total_ok + total_fail)) * 100
-            print(f"Success rate: {success_rate:.1f}%")
-        print("=" * 60)
-
-
-# ------------------------------------------------------------
-# 🔧 Main Entry Point (Dataiku-Compatible)
-# ------------------------------------------------------------
-def main():
-    print("🚀 Starting Safe MSG Excel Attachment Extraction...")
-
-    try:
-        # Replace these with your Dataiku folder IDs or use recipe inputs
-        input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")
-        output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")
-
-        print(f"📁 Input folder ID: {input_folder.get_id()}")
-        print(f"📁 Output folder ID: {output_folder.get_id()}")
-
-        processor = MSGAttachmentProcessor(input_folder, output_folder)
-        processor.process_batch()
-
-        print("✅ All done! Excel files extracted successfully.")
-
-    except Exception as e:
-        print(f"❌ Processing failed: {str(e)}")
-        print(traceback.format_exc())
-        raise
-
-
-if __name__ == "__main__":
-    main()
+[16:12:47] [INFO] [dku.utils]  - 🚀 Starting Safe MSG Excel Attachment Extraction...
+[16:12:47] [INFO] [dku.utils]  - 📁 Input folder ID: O6cNhxMz
+[16:12:47] [INFO] [dku.utils]  - 📁 Output folder ID: UeSjIQkY
+[16:12:47] [INFO] [dku.utils]  - 🚀 Starting batch processing of MSG files...
+[16:12:47] [INFO] [dku.utils]  - 📂 Found 12 MSG files to process.
+[16:12:47] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 18th March 2025.msg
+[16:12:48] [INFO] [dku.utils]  - 2025-10-23 08:12:48,814 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:48] [INFO] [dku.utils]  - 2025-10-23 08:12:48,815 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:48] [INFO] [dku.utils]  - 2025-10-23 08:12:48,822 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:48] [INFO] [dku.utils]  - 2025-10-23 08:12:48,822 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:48] [INFO] [dku.utils]  - 2025-10-23 08:12:48,823 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:49] [INFO] [dku.utils]  - 2025-10-23 08:12:49,142 INFO Stream "__attach_version1.0_#00000002/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:49] [INFO] [dku.utils]  - 2025-10-23 08:12:49,142 INFO Stream "__attach_version1.0_#00000002/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:49] [INFO] [dku.utils]  - 2025-10-23 08:12:49,142 INFO Stream "__attach_version1.0_#00000002/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:49] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:49] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:49] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:49] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:49] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 18th March 2025.msg: 0 Excel saved, 0 failed.
+[16:12:49] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 07th April 2025.msg
+[16:12:50] [INFO] [dku.utils]  - 2025-10-23 08:12:50,071 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:50] [INFO] [dku.utils]  - 2025-10-23 08:12:50,071 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:50] [INFO] [dku.utils]  - 2025-10-23 08:12:50,079 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:50] [INFO] [dku.utils]  - 2025-10-23 08:12:50,079 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:50] [INFO] [dku.utils]  - 2025-10-23 08:12:50,079 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:50] [INFO] [dku.utils]  - 2025-10-23 08:12:50,441 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:50] [INFO] [dku.utils]  - 2025-10-23 08:12:50,441 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:50] [INFO] [dku.utils]  - 2025-10-23 08:12:50,441 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:50] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:50] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:50] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:50] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:50] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 07th April 2025.msg: 0 Excel saved, 0 failed.
+[16:12:50] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 17-Feb-2025.msg
+[16:12:51] [INFO] [dku.utils]  - 2025-10-23 08:12:51,141 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:51] [INFO] [dku.utils]  - 2025-10-23 08:12:51,141 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:51] [INFO] [dku.utils]  - 2025-10-23 08:12:51,214 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:51] [INFO] [dku.utils]  - 2025-10-23 08:12:51,215 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:51] [INFO] [dku.utils]  - 2025-10-23 08:12:51,215 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:51] [INFO] [dku.utils]  - 2025-10-23 08:12:51,421 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:51] [INFO] [dku.utils]  - 2025-10-23 08:12:51,422 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:51] [INFO] [dku.utils]  - 2025-10-23 08:12:51,422 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:51] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:51] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:51] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:51] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:51] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 17-Feb-2025.msg: 0 Excel saved, 0 failed.
+[16:12:51] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 23rd July 2025.msg
+[16:12:52] [INFO] [dku.utils]  - 2025-10-23 08:12:52,154 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:52] [INFO] [dku.utils]  - 2025-10-23 08:12:52,155 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:52] [INFO] [dku.utils]  - 2025-10-23 08:12:52,163 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:52] [INFO] [dku.utils]  - 2025-10-23 08:12:52,163 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:52] [INFO] [dku.utils]  - 2025-10-23 08:12:52,163 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:52] [INFO] [dku.utils]  - 2025-10-23 08:12:52,401 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:52] [INFO] [dku.utils]  - 2025-10-23 08:12:52,401 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:52] [INFO] [dku.utils]  - 2025-10-23 08:12:52,401 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:52] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:52] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:52] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:52] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:52] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 23rd July 2025.msg: 0 Excel saved, 0 failed.
+[16:12:52] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 25th August 2025.msg
+[16:12:53] [INFO] [dku.utils]  - 2025-10-23 08:12:53,009 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:53] [INFO] [dku.utils]  - 2025-10-23 08:12:53,009 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:53] [INFO] [dku.utils]  - 2025-10-23 08:12:53,014 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:53] [INFO] [dku.utils]  - 2025-10-23 08:12:53,014 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:53] [INFO] [dku.utils]  - 2025-10-23 08:12:53,014 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:53] [INFO] [dku.utils]  - 2025-10-23 08:12:53,268 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:53] [INFO] [dku.utils]  - 2025-10-23 08:12:53,268 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:53] [INFO] [dku.utils]  - 2025-10-23 08:12:53,268 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:53] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:53] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:53] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:53] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:53] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 25th August 2025.msg: 0 Excel saved, 0 failed.
+[16:12:53] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 02-Dec-2024.msg
+[16:12:53] [INFO] [dku.utils]  - 2025-10-23 08:12:53,917 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:53] [INFO] [dku.utils]  - 2025-10-23 08:12:53,918 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:53] [INFO] [dku.utils]  - 2025-10-23 08:12:53,918 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:54] [INFO] [dku.utils]  - 2025-10-23 08:12:54,242 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:54] [INFO] [dku.utils]  - 2025-10-23 08:12:54,242 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:54] [INFO] [dku.utils]  - 2025-10-23 08:12:54,248 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:54] [INFO] [dku.utils]  - 2025-10-23 08:12:54,248 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:54] [INFO] [dku.utils]  - 2025-10-23 08:12:54,248 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:54] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:54] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:54] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:54] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:54] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 02-Dec-2024.msg: 0 Excel saved, 0 failed.
+[16:12:54] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 17-Sep-2024.msg
+[16:12:54] [INFO] [dku.utils]  - 2025-10-23 08:12:54,861 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:54] [INFO] [dku.utils]  - 2025-10-23 08:12:54,861 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:54] [INFO] [dku.utils]  - 2025-10-23 08:12:54,861 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,040 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,040 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,043 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,044 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,044 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:55] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:55] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:55] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:55] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:55] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 17-Sep-2024.msg: 0 Excel saved, 0 failed.
+[16:12:55] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 30-Oct-2024.msg
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,523 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,523 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,523 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,724 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,724 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,729 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,729 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:55] [INFO] [dku.utils]  - 2025-10-23 08:12:55,729 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:56] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:56] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:56] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:56] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:56] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 30-Oct-2024.msg: 0 Excel saved, 0 failed.
+[16:12:56] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 10-Jan-2025.msg
+[16:12:56] [INFO] [dku.utils]  - 2025-10-23 08:12:56,313 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:56] [INFO] [dku.utils]  - 2025-10-23 08:12:56,313 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:56] [INFO] [dku.utils]  - 2025-10-23 08:12:56,317 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:56] [INFO] [dku.utils]  - 2025-10-23 08:12:56,317 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:56] [INFO] [dku.utils]  - 2025-10-23 08:12:56,317 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:56] [INFO] [dku.utils]  - 2025-10-23 08:12:56,513 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:56] [INFO] [dku.utils]  - 2025-10-23 08:12:56,513 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:56] [INFO] [dku.utils]  - 2025-10-23 08:12:56,513 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:56] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:56] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:56] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:56] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:56] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 10-Jan-2025.msg: 0 Excel saved, 0 failed.
+[16:12:56] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 19th May 2025.msg
+[16:12:57] [INFO] [dku.utils]  - 2025-10-23 08:12:57,280 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:57] [INFO] [dku.utils]  - 2025-10-23 08:12:57,281 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:57] [INFO] [dku.utils]  - 2025-10-23 08:12:57,281 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:57] [INFO] [dku.utils]  - 2025-10-23 08:12:57,489 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:57] [INFO] [dku.utils]  - 2025-10-23 08:12:57,489 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:57] [INFO] [dku.utils]  - 2025-10-23 08:12:57,495 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:57] [INFO] [dku.utils]  - 2025-10-23 08:12:57,495 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:57] [INFO] [dku.utils]  - 2025-10-23 08:12:57,495 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:57] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:57] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:57] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:57] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:57] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 19th May 2025.msg: 0 Excel saved, 0 failed.
+[16:12:57] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 16th June 2025.msg
+[16:12:58] [INFO] [dku.utils]  - 2025-10-23 08:12:58,081 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:58] [INFO] [dku.utils]  - 2025-10-23 08:12:58,081 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:58] [INFO] [dku.utils]  - 2025-10-23 08:12:58,085 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:58] [INFO] [dku.utils]  - 2025-10-23 08:12:58,085 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:58] [INFO] [dku.utils]  - 2025-10-23 08:12:58,085 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:58] [INFO] [dku.utils]  - 2025-10-23 08:12:58,407 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:58] [INFO] [dku.utils]  - 2025-10-23 08:12:58,407 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:58] [INFO] [dku.utils]  - 2025-10-23 08:12:58,407 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:58] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:58] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:58] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:58] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:58] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 16th June 2025.msg: 0 Excel saved, 0 failed.
+[16:12:58] [INFO] [dku.utils]  - 📩 Processing MSG file: /MIBOR Submission_ 07-Nov-2024.msg
+[16:12:58] [INFO] [dku.utils]  - 2025-10-23 08:12:58,922 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:58] [INFO] [dku.utils]  - 2025-10-23 08:12:58,922 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:58] [INFO] [dku.utils]  - 2025-10-23 08:12:58,923 INFO Stream "__attach_version1.0_#00000000/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:59] [INFO] [dku.utils]  - 2025-10-23 08:12:59,129 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__substg1.0_007D001F" was requested but could not be found. Returning `None`.
+[16:12:59] [INFO] [dku.utils]  - 2025-10-23 08:12:59,129 INFO Header is empty or was not found. Header will be generated from other streams.
+[16:12:59] [INFO] [dku.utils]  - 2025-10-23 08:12:59,134 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00020102" was requested but could not be found. Returning `None`.
+[16:12:59] [INFO] [dku.utils]  - 2025-10-23 08:12:59,134 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00030102" was requested but could not be found. Returning `None`.
+[16:12:59] [INFO] [dku.utils]  - 2025-10-23 08:12:59,134 INFO Stream "__attach_version1.0_#00000001/__substg1.0_3701000D/__nameid_version1.0/__substg1.0_00040102" was requested but could not be found. Returning `None`.
+[16:12:59] [INFO] [dku.utils]  - 📎 Found 3 attachment(s):
+[16:12:59] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:59] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:59] [INFO] [dku.utils]  -    ❌ Non-Excel file (will skip): Unnamed attachment
+[16:12:59] [INFO] [dku.utils]  - ✅ Done /MIBOR Submission_ 07-Nov-2024.msg: 0 Excel saved, 0 failed.
+[16:12:59] [INFO] [dku.utils]  - ============================================================
+[16:12:59] [INFO] [dku.utils]  - 📊 PROCESSING SUMMARY
+[16:12:59] [INFO] [dku.utils]  - 2025-10-23 08:12:59,496 INFO Check if spark is available
+[16:12:59] [INFO] [dku.utils]  - ============================================================
+[16:12:59] [INFO] [dku.utils]  - Total MSG files processed: 12
+[16:12:59] [INFO] [dku.utils]  - Total Excel attachments saved: 0
+[16:12:59] [INFO] [dku.utils]  - Total failed attachments: 0
+[16:12:59] [INFO] [dku.utils]  - ============================================================
+[16:12:59] [INFO] [dku.utils]  - 2025-10-23 08:12:59,497 INFO Not stopping a spark context: No module named 'pyspark'
+[16:12:59] [INFO] [dku.utils]  - ✅ All done! Excel files extracted successfully.
