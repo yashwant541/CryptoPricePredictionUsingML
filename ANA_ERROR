@@ -32,7 +32,7 @@ def main():
         # Load the .msg file
         msg = extract_msg.Message(tmp_msg_path)
 
-        # Loop through all attachments
+        # Loop through attachments
         for attachment in msg.attachments:
             attach_name = attachment.longFilename
 
@@ -40,7 +40,7 @@ def main():
             if attach_name.lower().endswith(TABULAR_EXTENSIONS):
                 attach_bytes = attachment.data
 
-                # Save attachment to a temporary file
+                # Save attachment to temporary file
                 with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
                     tmp_file.write(attach_bytes)
                     tmp_file_path = tmp_file.name
@@ -51,7 +51,7 @@ def main():
                     output_folder.upload_stream(output_file_name, f)
 
                 os.remove(tmp_file_path)
-                print(f"✅ Saved tabular attachment: {output_file_name}")
+                print(f"✅ Saved attachment: {output_file_name}")
             else:
                 print(f"⏩ Skipping non-tabular attachment: {attach_name}")
 
