@@ -4,206 +4,371 @@ import pandas as pd
 from extract_msg import Message
 import glob
 from datetime import datetime
+import logging
+from typing import Optional, List, Tuple
+import dataiku
 
-def extract_date_from_filename(filename):
-    """
-    Extract date from filename in format like 04-Apr-2025
-    """
-    # Remove file extension
-    name_without_ext = os.path.splitext(filename)[0]
-    
-    # Pattern for dates like 04-Apr-2025, 4-Apr-2025, 04-Apr-2025, etc.
-    pattern = r'(\d{1,2}-[A-Za-z]{3}-\d{4})'
-    
-    match = re.search(pattern, name_without_ext)
-    if match:
-        date_str = match.group(1)
-        try:
-            # Convert to datetime object to standardize format
-            dt = datetime.strptime(date_str, '%d-%b-%Y')
-            return dt.strftime('%Y-%m-%d')  # Standardize to YYYY-MM-DD
-        except ValueError:
-            print(f"Warning: Could not parse date: {date_str}")
-    
-    # Alternative patterns if the main one fails
-    alternative_patterns = [
-        r'(\d{4}-\d{1,2}-\d{1,2})',  # YYYY-MM-DD
-        r'(\d{1,2}-\d{1,2}-\d{4})',  # MM-DD-YYYY
-    ]
-    
-    for pattern in alternative_patterns:
-        match = re.search(pattern, name_without_ext)
-        if match:
-            date_str = match.group(1)
-            print(f"Found alternative date format: {date_str}")
-            return date_str
-    
-    print(f"Warning: Could not extract date from filename: {filename}")
-    return "unknown_date"
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-def extract_table_from_html(html_content):
-    """
-    Extract table data from HTML content
-    """
-    try:
-        # Use pandas to read HTML tables
-        tables = pd.read_html(html_content)
-        if tables:
-            return tables[0]  # Return first table found
-    except Exception as e:
-        print(f"Error extracting table from HTML: {e}")
-    
-    return None
-
-def extract_table_from_text(text_content):
-    """
-    Extract table data from plain text content
-    """
-    lines = text_content.split('\n')
-    table_data = []
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-            
-        # Look for lines that might be table rows
-        if re.search(r'\t', line):  # Tab-separated
-            row = [cell.strip() for cell in line.split('\t') if cell.strip()]
-        elif re.search(r',\s*\w', line) and len(line.split(',')) > 2:  # Comma-separated with multiple columns
-            row = [cell.strip() for cell in line.split(',') if cell.strip()]
-        else:
-            # Space-separated (split on 2+ spaces)
-            cells = re.split(r'\s{2,}', line)
-            row = [cell.strip() for cell in cells if cell.strip()]
+class DataikuMSGTableExtractor:
+    def __init__(self, input_folder: str, output_folder: str):
+        """
+        Initialize with Dataiku folder connections
         
-        if len(row) > 1:  # Consider it a table row if it has multiple cells
-            table_data.append(row)
-    
-    if len(table_data) > 1:  # At least header and one data row
+        Args:
+            input_folder: Dataiku folder ID for input MSG files
+            output_folder: Dataiku folder ID for output CSV files
+        """
+        self.input_folder = dataiku.Folder(input_folder)
+        self.output_folder = dataiku.Folder(output_folder)
+        
+        # Local temporary paths
+        self.local_input_path = self.input_folder.get_path()
+        self.local_output_path = self.output_folder.get_path()
+        
+        logger.info(f"Input folder path: {self.local_input_path}")
+        logger.info(f"Output folder path: {self.local_output_path}")
+
+    def extract_date_from_filename(self, filename: str) -> str:
+        """
+        Extract date from filename with multiple format support
+        """
+        name_without_ext = os.path.splitext(filename)[0]
+        
+        date_patterns = [
+            (r'(\d{1,2}-[A-Za-z]{3}-\d{4})', '%d-%b-%Y'),  # 04-Apr-2025
+            (r'(\d{4}-\d{1,2}-\d{1,2})', '%Y-%m-%d'),      # 2025-04-04
+            (r'(\d{1,2}-\d{1,2}-\d{4})', '%m-%d-%Y'),      # 04-04-2025
+            (r'(\d{1,2}/\d{1,2}/\d{4})', '%m/%d/%Y'),      # 04/04/2025
+            (r'(\d{4}[A-Za-z]{3}\d{1,2})', '%Y%b%d'),      # 2025Apr04
+        ]
+        
+        for pattern, date_format in date_patterns:
+            match = re.search(pattern, name_without_ext)
+            if match:
+                date_str = match.group(1)
+                try:
+                    dt = datetime.strptime(date_str, date_format)
+                    return dt.strftime('%Y-%m-%d')
+                except ValueError:
+                    continue
+        
+        logger.warning(f"Could not extract date from filename: {filename}")
+        return "unknown_date"
+
+    def extract_table_from_html(self, html_content: str) -> Optional[pd.DataFrame]:
+        """
+        Extract table data from HTML content with multiple fallbacks
+        """
         try:
-            # Use first row as header, rest as data
-            df = pd.DataFrame(table_data[1:], columns=table_data[0])
-            return df
+            tables = pd.read_html(html_content)
+            if tables:
+                # Return the largest table (most likely to be the main data)
+                return max(tables, key=lambda x: x.shape[0])
         except Exception as e:
-            print(f"Error creating DataFrame from text: {e}")
-    
-    return None
+            logger.debug(f"HTML table extraction failed: {e}")
+        
+        return None
 
-def process_msg_file(msg_path):
-    """
-    Process a single MSG file and extract tables
-    """
-    try:
-        # Open the MSG file
-        msg = Message(msg_path)
+    def extract_table_from_text(self, text_content: str) -> Optional[pd.DataFrame]:
+        """
+        Advanced table extraction from plain text
+        """
+        lines = [line.strip() for line in text_content.split('\n') if line.strip()]
+        potential_tables = []
+        current_table = []
         
-        # Get filename for date extraction
-        filename = os.path.basename(msg_path)
-        date_str = extract_date_from_filename(filename)
+        for line in lines:
+            # Check if line looks like table data
+            if self._is_table_row(line):
+                current_table.append(self._parse_table_row(line))
+            else:
+                if len(current_table) >= 2:  # At least header + one data row
+                    potential_tables.append(current_table.copy())
+                current_table = []
         
-        print(f"Processing: {filename}")
-        print(f"Extracted date: {date_str}")
+        # Don't forget the last table
+        if len(current_table) >= 2:
+            potential_tables.append(current_table)
         
-        # Try to extract table from HTML body first (most common)
-        table_df = None
-        if msg.htmlBody:
-            print("Found HTML body, extracting tables...")
-            table_df = extract_table_from_html(msg.htmlBody)
+        # Return the most promising table
+        for table_data in potential_tables:
+            try:
+                df = pd.DataFrame(table_data[1:], columns=table_data[0])
+                if self._is_valid_table(df):
+                    return df
+            except Exception as e:
+                logger.debug(f"Failed to create DataFrame: {e}")
+                continue
         
-        # If no table found in HTML, try plain text
-        if table_df is None and msg.body:
-            print("Trying plain text extraction...")
-            table_df = extract_table_from_text(msg.body)
-        
-        # Save table if found
-        if table_df is not None:
-            output_filename = f"{date_str}_table.csv"
-            table_df.to_csv(output_filename, index=False)
-            print(f"✓ Table saved as: {output_filename}")
-            print(f"  Table shape: {table_df.shape}")
-            print(f"  Columns: {list(table_df.columns)}")
+        return None
+
+    def _is_table_row(self, line: str) -> bool:
+        """Check if a line looks like a table row"""
+        # Check for tab-separated
+        if '\t' in line and len(line.split('\t')) > 1:
             return True
-        else:
-            print(f"✗ No table found in: {filename}")
-            # Print a sample of the body for debugging
-            if msg.body and len(msg.body) > 200:
-                print(f"  Body sample: {msg.body[:200]}...")
-            return False
+        
+        # Check for comma-separated (but not sentence)
+        if ',' in line and len(line.split(',')) > 2 and len(line) < 500:
+            return True
+        
+        # Check for multiple spaces separating columns
+        if len(re.split(r'\s{2,}', line)) > 1:
+            return True
             
-    except Exception as e:
-        print(f"Error processing {msg_path}: {e}")
         return False
 
-def process_all_msg_files(folder_path):
-    """
-    Process all MSG files in a folder
-    """
-    # Find all MSG files in the folder
-    msg_files = glob.glob(os.path.join(folder_path, "*.msg"))
-    
-    if not msg_files:
-        print(f"No MSG files found in: {folder_path}")
-        return
-    
-    print(f"Found {len(msg_files)} MSG files")
-    print("=" * 50)
-    
-    successful_extractions = 0
-    
-    for i, msg_file in enumerate(msg_files, 1):
-        print(f"\n[{i}/{len(msg_files)}] ", end="")
-        if process_msg_file(msg_file):
-            successful_extractions += 1
-    
-    print("\n" + "=" * 50)
-    print(f"Processing complete!")
-    print(f"Successfully extracted tables from {successful_extractions} out of {len(msg_files)} files")
+    def _parse_table_row(self, line: str) -> List[str]:
+        """Parse a table row into cells"""
+        if '\t' in line:
+            return [cell.strip() for cell in line.split('\t')]
+        elif ',' in line and len(line.split(',')) > 2:
+            return [cell.strip() for cell in line.split(',')]
+        else:
+            return [cell.strip() for cell in re.split(r'\s{2,}', line) if cell.strip()]
 
-# Enhanced version with better debugging
-def debug_msg_content(msg_path):
-    """
-    Debug function to see what's in the MSG file
-    """
-    try:
-        msg = Message(msg_path)
-        filename = os.path.basename(msg_path)
-        date_str = extract_date_from_filename(filename)
+    def _is_valid_table(self, df: pd.DataFrame) -> bool:
+        """Check if DataFrame looks like a valid table"""
+        if df.empty or df.shape[1] < 2:
+            return False
         
-        print(f"\nDebugging: {filename}")
-        print(f"Date: {date_str}")
-        print(f"Has HTML body: {bool(msg.htmlBody)}")
-        print(f"Has text body: {bool(msg.body)}")
+        # Check for numeric data in at least one column
+        numeric_columns = df.select_dtypes(include=['number']).shape[1]
+        if numeric_columns > 0:
+            return True
         
-        if msg.body:
-            print(f"Body length: {len(msg.body)}")
-            # Show first 500 characters of body
-            print(f"Body preview: {msg.body[:500]}...")
-        
-        return True
-    except Exception as e:
-        print(f"Debug error: {e}")
-        return False
+        # Check if column names look like table headers
+        header_indicators = sum(1 for col in df.columns 
+                              if re.search(r'\b(date|time|amount|price|total|rate)\b', str(col).lower(), re.IGNORECASE))
+        return header_indicators >= 2
 
-# Test with a single file first
-def test_single_file(msg_path):
+    def get_msg_files_list(self) -> List[str]:
+        """
+        Get list of all MSG files in the input folder
+        """
+        all_files = self.input_folder.list_paths_in_partition()
+        msg_files = [f for f in all_files if f.lower().endswith('.msg')]
+        
+        logger.info(f"Found {len(msg_files)} MSG files in input folder")
+        return msg_files
+
+    def process_msg_file(self, msg_file_path: str, save_attachments: bool = False) -> dict:
+        """
+        Process a single MSG file and return extraction results
+        """
+        result = {
+            'filename': os.path.basename(msg_file_path),
+            'success': False,
+            'table_found': False,
+            'attachments_saved': 0,
+            'error': None
+        }
+        
+        try:
+            # Use local path for extract_msg processing
+            local_msg_path = os.path.join(self.local_input_path, msg_file_path.lstrip('/'))
+            msg = Message(local_msg_path)
+            
+            filename = result['filename']
+            date_str = self.extract_date_from_filename(filename)
+            output_prefix = date_str
+            
+            logger.info(f"Processing: {filename} (Date: {date_str})")
+            
+            # Extract table from HTML or text
+            table_df = None
+            extraction_source = None
+            
+            if msg.htmlBody:
+                table_df = self.extract_table_from_html(msg.htmlBody)
+                if table_df is not None:
+                    extraction_source = "HTML"
+            
+            if table_df is None and msg.body:
+                table_df = self.extract_table_from_text(msg.body)
+                if table_df is not None:
+                    extraction_source = "Text"
+            
+            # Save table if found
+            if table_df is not None:
+                output_filename = f"{output_prefix}_table.csv"
+                output_path = os.path.join(self.local_output_path, output_filename)
+                table_df.to_csv(output_path, index=False)
+                
+                result['table_found'] = True
+                result['table_file'] = output_filename
+                result['table_shape'] = table_df.shape
+                result['table_columns'] = list(table_df.columns)
+                result['extraction_source'] = extraction_source
+                
+                logger.info(f"✓ Table saved: {output_filename} "
+                          f"({table_df.shape[0]} rows, {table_df.shape[1]} columns)")
+            
+            result['success'] = True
+            result['has_html'] = bool(msg.htmlBody)
+            result['has_text'] = bool(msg.body)
+            result['body_length'] = len(msg.body) if msg.body else 0
+            
+        except Exception as e:
+            result['error'] = str(e)
+            logger.error(f"Error processing {msg_file_path}: {e}")
+        
+        return result
+
+    def process_all_msg_files(self, save_attachments: bool = False) -> pd.DataFrame:
+        """
+        Process all MSG files in the input folder and return summary
+        """
+        msg_files = self.get_msg_files_list()
+        
+        if not msg_files:
+            logger.warning("No MSG files found in input folder")
+            return pd.DataFrame()
+        
+        logger.info(f"Processing {len(msg_files)} MSG files")
+        
+        results = []
+        successful_extractions = 0
+        
+        for i, msg_file in enumerate(msg_files, 1):
+            logger.info(f"[{i}/{len(msg_files)}] Processing {os.path.basename(msg_file)}")
+            
+            result = self.process_msg_file(msg_file, save_attachments)
+            results.append(result)
+            
+            if result['table_found']:
+                successful_extractions += 1
+        
+        # Create summary
+        summary_df = pd.DataFrame(results)
+        
+        logger.info("\n" + "="*50)
+        logger.info("Processing Complete!")
+        logger.info(f"Successfully processed: {len([r for r in results if r['success']])}/{len(msg_files)}")
+        logger.info(f"Tables extracted: {successful_extractions}/{len(msg_files)}")
+        
+        # Save summary report to output folder
+        if not summary_df.empty:
+            summary_path = os.path.join(self.local_output_path, "extraction_summary.csv")
+            summary_df.to_csv(summary_path, index=False)
+            logger.info(f"Summary saved: {summary_path}")
+        
+        return summary_df
+
+    def get_processing_summary(self) -> dict:
+        """
+        Get a quick summary of processing results without reprocessing
+        """
+        output_files = self.output_folder.list_paths_in_partition()
+        table_files = [f for f in output_files if f.endswith('_table.csv')]
+        summary_file = [f for f in output_files if f.endswith('extraction_summary.csv')]
+        
+        return {
+            'total_table_files': len(table_files),
+            'table_files': table_files,
+            'has_summary': len(summary_file) > 0,
+            'output_files_count': len(output_files)
+        }
+
+# Dataiku-specific recipe function
+def process_msg_files(input_folder_id: str, output_folder_id: str) -> dict:
     """
-    Test extraction on a single file with detailed output
-    """
-    print("Testing single file extraction...")
-    success = process_msg_file(msg_path)
+    Main function to be called from Dataiku recipe
     
-    if not success:
-        print("\nRunning debug mode...")
-        debug_msg_content(msg_path)
+    Args:
+        input_folder_id: ID of the input folder containing MSG files
+        output_folder_id: ID of the output folder for extracted tables
+    
+    Returns:
+        Dictionary with processing results
+    """
+    logger.info("Starting MSG file processing in Dataiku...")
+    
+    # Initialize extractor
+    extractor = DataikuMSGTableExtractor(input_folder_id, output_folder_id)
+    
+    # Process all files
+    summary_df = extractor.process_all_msg_files(save_attachments=False)
+    
+    # Return results for Dataiku
+    if not summary_df.empty:
+        total_files = len(summary_df)
+        successful = len(summary_df[summary_df['success'] == True])
+        tables_found = len(summary_df[summary_df['table_found'] == True])
+        
+        results = {
+            'status': 'COMPLETED',
+            'total_files_processed': total_files,
+            'successfully_processed': successful,
+            'tables_extracted': tables_found,
+            'success_rate': f"{(successful/total_files)*100:.1f}%" if total_files > 0 else "0%",
+            'extraction_rate': f"{(tables_found/total_files)*100:.1f}%" if total_files > 0 else "0%"
+        }
+    else:
+        results = {
+            'status': 'FAILED',
+            'error': 'No files processed or no MSG files found'
+        }
+    
+    logger.info(f"Processing results: {results}")
+    return results
 
-# Usage example
+# Alternative function that returns a DataFrame for Dataiku dataset
+def process_msg_files_to_dataframe(input_folder_id: str) -> pd.DataFrame:
+    """
+    Process MSG files and return a combined DataFrame of all extracted tables
+    
+    Args:
+        input_folder_id: ID of the input folder containing MSG files
+    
+    Returns:
+        Combined DataFrame of all extracted tables
+    """
+    # Create a temporary output folder
+    output_folder_id = "temp_output"
+    
+    # Initialize extractor
+    extractor = DataikuMSGTableExtractor(input_folder_id, output_folder_id)
+    
+    # Process files
+    extractor.process_all_msg_files()
+    
+    # Read all extracted tables and combine them
+    all_tables = []
+    output_files = extractor.output_folder.list_paths_in_partition()
+    table_files = [f for f in output_files if f.endswith('_table.csv')]
+    
+    for table_file in table_files:
+        try:
+            local_path = os.path.join(extractor.local_output_path, table_file.lstrip('/'))
+            df = pd.read_csv(local_path)
+            df['source_file'] = table_file
+            all_tables.append(df)
+        except Exception as e:
+            logger.error(f"Error reading {table_file}: {e}")
+    
+    if all_tables:
+        combined_df = pd.concat(all_tables, ignore_index=True)
+        logger.info(f"Combined {len(all_tables)} tables into DataFrame with shape {combined_df.shape}")
+        return combined_df
+    else:
+        logger.warning("No tables were extracted")
+        return pd.DataFrame()
+
+# Usage in Dataiku recipe
 if __name__ == "__main__":
-    # Specify your folder containing MSG files
-    folder_path = r"C:\Users\2011747\Desktop\Benchmark HKIN\New Inputs\Independent Sources - RFI\FXO_CCIL\FXO_CCIL"  # Update this path
+    # This section is for testing within Dataiku
     
-    # Option 1: Process all files
-    process_all_msg_files(folder_path)
+    # Example 1: Basic processing with folder input/output
+    input_folder = "input_msg_files"  # Dataiku folder ID
+    output_folder = "output_tables"   # Dataiku folder ID
     
-    # Option 2: Test with a single file first
-    # test_single_file("path/to/specific/file_04-Apr-2025.msg")
+    results = process_msg_files(input_folder, output_folder)
+    print("Processing completed:", results)
+    
+    # Example 2: Process and get combined DataFrame
+    # combined_data = process_msg_files_to_dataframe(input_folder)
+    # dataiku.Dataset("output_dataset").write_with_schema(combined_data)
