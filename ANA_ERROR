@@ -1,35 +1,48 @@
+import dataiku
+import extract_msg
 import re
-import pandas as pd
-from extract_msg import Message
 import io
 import os
-import dataiku
 from datetime import datetime
+import pandas as pd
+
+# ------------------------------------------------------------
+# 🕒 Force UTC timezone to avoid timestamp/timezone conflicts
+# ------------------------------------------------------------
+os.environ["TZ"] = "UTC"
+try:
+    import time
+    time.tzset()
+except Exception:
+    pass
 
 # -------------------------------
-# 📂 Dataiku folders
+# 🔧 Configuration: Dataiku folders
 # -------------------------------
-INPUT_FOLDER_NAME = "msg_input_folder"     # Replace with your input folder name
-OUTPUT_FOLDER_NAME = "table_output_folder" # Replace with your output folder name
+input_folder = dataiku.Folder("INPUT_FOLDER_ID")   # Replace with your input folder ID
+output_folder = dataiku.Folder("OUTPUT_FOLDER_ID") # Replace with your output folder ID
 
-input_folder = dataiku.Folder(INPUT_FOLDER_NAME)
-output_folder = dataiku.Folder(OUTPUT_FOLDER_NAME)
+# Regex to match dates in filename (ordinals or 6-digit numbers)
+date_pattern = re.compile(
+    r'(\d{1,2}(?:st|nd|rd|th)?[- ]?[A-Za-z]{3,9}[- ]\d{4}|\b\d{6}\b)',
+    re.IGNORECASE
+)
 
 # -------------------------------
-# 🔧 Helper functions
+# Helper: Normalize date string
 # -------------------------------
+def normalize_date(date_str):
+    if re.fullmatch(r'\d{6}', date_str):
+        dt = datetime.strptime(date_str, "%d%m%y")
+        return dt.strftime("%d-%b-%Y")
+    else:
+        date_str = re.sub(r'(st|nd|rd|th)', '', date_str, flags=re.IGNORECASE)
+        date_str = date_str.replace(' ', '-')
+        return date_str
 
-def extract_date_from_filename(filename):
-    """
-    Extract date from filename (handles formats like 04-Apr-2025, 16th June 2025, 2nd July 2024)
-    """
-    import dateparser
-    name_without_ext = os.path.splitext(filename)[0]
-    date = dateparser.parse(name_without_ext, settings={'DATE_ORDER': 'DMY'})
-    if date:
-        return date.strftime('%Y-%m-%d')
-    return "unknown_date"
-
+# -------------------------------
+# Helper: Extract table from email body
+# -------------------------------
 def extract_table_from_html(html_content):
     try:
         tables = pd.read_html(html_content)
@@ -47,7 +60,6 @@ def extract_table_from_text(text_content):
         line = line.strip()
         if not line:
             continue
-        # Tab, comma, or space-separated
         if '\t' in line:
             row = [c.strip() for c in line.split('\t') if c.strip()]
         elif ',' in line and len(line.split(',')) > 1:
@@ -65,70 +77,46 @@ def extract_table_from_text(text_content):
             print(f"Error creating DataFrame from text: {e}")
     return None
 
-def process_msg_file(msg_bytes, filename):
-    """
-    Process a single MSG file from bytes and extract table
-    """
-    try:
-        msg = Message(io.BytesIO(msg_bytes))
-        date_str = extract_date_from_filename(filename)
+# -------------------------------
+# Process all MSG files
+# -------------------------------
+msg_files_found = False
 
-        # Extract table from HTML first
+for file_info in input_folder.list_paths_in_partition():
+    if not file_info.lower().endswith(".msg"):
+        continue
+
+    msg_files_found = True
+
+    try:
+        # Read MSG bytes
+        with input_folder.get_download_stream(file_info) as f:
+            file_bytes = io.BytesIO(f.read())
+
+        msg = extract_msg.Message(file_bytes)
+
+        # Extract date from filename
+        match = date_pattern.search(file_info)
+        file_date = normalize_date(match.group(0)) if match else "UnknownDate"
+
+        # Extract table from email body
         table_df = None
         if msg.htmlBody:
             table_df = extract_table_from_html(msg.htmlBody)
-
-        # If no table, try plain text
         if table_df is None and msg.body:
             table_df = extract_table_from_text(msg.body)
 
-        # Save table to Dataiku output folder
+        # Save table if found
         if table_df is not None:
-            output_name = f"{date_str}_table.csv"
-            with output_folder.get_writer(output_name) as writer:
+            table_name = f"{file_date}_table.csv"
+            with output_folder.get_writer(table_name) as writer:
                 table_df.to_csv(writer, index=False)
-            print(f"✓ Table saved: {output_name} | Shape: {table_df.shape}")
-            return True
+            print(f"Saved table {table_name} from {file_info}")
         else:
-            print(f"✗ No table found in: {filename}")
-            return False
+            print(f"No table found in {file_info}")
 
     except Exception as e:
-        print(f"Error processing {filename}: {e}")
-        return False
+        print(f"Failed to process {file_info}: {e}")
 
-# -------------------------------
-# 🔄 Process all MSG files
-# -------------------------------
-def process_all_msg_files():
-    # List all files in input folder
-    all_files = input_folder.list_paths_in_partition()
-    if not all_files:
-        print("No files found in input folder.")
-        return
-
-    # Detect MSG files (handles uppercase, whitespace)
-    msg_files = [f.strip() for f in all_files if f.strip().lower().endswith('.msg')]
-
-    if not msg_files:
-        print("No MSG files found in the input folder.")
-        print("Files present:", all_files)
-        return
-
-    print(f"Found {len(msg_files)} MSG files: {msg_files}")
-    successful = 0
-
-    for i, path in enumerate(msg_files, 1):
-        print(f"\n[{i}/{len(msg_files)}] Processing {path} ...")
-        msg_bytes = input_folder.get_download_stream(path).read()
-        if process_msg_file(msg_bytes, path):
-            successful += 1
-
-    print("\n" + "="*50)
-    print(f"Processing complete! Successfully extracted tables from {successful}/{len(msg_files)} files")
-
-# -------------------------------
-# 🚀 Run script
-# -------------------------------
-if __name__ == "__main__":
-    process_all_msg_files()
+if not msg_files_found:
+    print("No MSG files found in the input folder.")
