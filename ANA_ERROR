@@ -1,7 +1,7 @@
 import pandas as pd
 import dataiku
-import os
 import tempfile
+import os
 from datetime import datetime
 
 # ------------------------------------------------------
@@ -11,90 +11,88 @@ input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")      # 📥 Input folder
 output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")    # 📤 Output folder
 
 # ------------------------------------------------------
-# 📂 Function to check if a value looks like a date
+# 🧠 Helper Functions
 # ------------------------------------------------------
 def looks_like_date(val):
     if isinstance(val, (pd.Timestamp, datetime)):
         return True
     if isinstance(val, str):
-        try:
-            datetime.strptime(val.strip(), "%d-%b-%y")
-            return True
-        except:
-            return False
+        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d"):
+            try:
+                datetime.strptime(val.strip(), fmt)
+                return True
+            except:
+                continue
     return False
 
-# ------------------------------------------------------
-# Step 1: Get the only Excel file from the input folder
-# ------------------------------------------------------
-input_files = input_folder.list_paths_in_partition()
-if not input_files:
-    raise FileNotFoundError("❌ No files found in input folder!")
-
-excel_file_info = input_files[0]
-file_name = os.path.basename(excel_file_info)
+def read_excel_safe(file_path):
+    """Read Excel using openpyxl engine for .xlsx"""
+    return pd.ExcelFile(file_path, engine="openpyxl")
 
 # ------------------------------------------------------
-# Step 2: Download Excel file to a temporary path
+# 🚀 Main Execution
 # ------------------------------------------------------
-with input_folder.get_download_stream(excel_file_info) as stream:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-        tmp.write(stream.read())
-        tmp_path = tmp.name
+def main():
+    input_files = input_folder.list_paths_in_partition()
+    if not input_files:
+        raise FileNotFoundError("❌ No files found in input folder!")
 
-# ------------------------------------------------------
-# Step 3: Load Excel file and process each sheet
-# ------------------------------------------------------
-xls = pd.ExcelFile(tmp_path, engine="openpyxl")
+    excel_file_info = input_files[0]
+    file_name = os.path.basename(excel_file_info)
 
-for sheet_name in xls.sheet_names:
-    # Read sheet without header
-    df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
+    with input_folder.get_download_stream(excel_file_info) as stream:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            tmp.write(stream.read())
+            tmp_path = tmp.name
 
-    # Detect header rows (rows containing a date)
-    header_rows = [i for i in range(len(df_raw)) if any(looks_like_date(cell) for cell in df_raw.iloc[i])]
-    if not header_rows:
-        print(f"⚠️ No tables found in sheet '{sheet_name}', skipping...")
-        continue
+    xls = read_excel_safe(tmp_path)
+    for sheet_name in xls.sheet_names:
+        df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
 
-    all_tables = []
-    for idx, header_row in enumerate(header_rows):
-        header = df_raw.iloc[header_row].tolist()
-        date_in_header = next((cell for cell in header if looks_like_date(cell)), None)
-        next_header = header_rows[idx + 1] if idx + 1 < len(header_rows) else len(df_raw)
-
-        data_block = df_raw.iloc[header_row + 1:next_header].dropna(how='all')
-        if data_block.empty:
+        # Detect header rows by presence of date
+        header_rows = [i for i in range(len(df_raw)) if any(looks_like_date(cell) for cell in df_raw.iloc[i])]
+        if not header_rows:
+            print(f"⚠️ No tables found in sheet '{sheet_name}', skipping...")
             continue
 
-        # Keep only columns matching header length
-        data_block = data_block.iloc[:, :len(header)]
+        all_tables = []
+        for idx, header_row in enumerate(header_rows):
+            header = df_raw.iloc[header_row].tolist()
+            # Find the date in header
+            date_in_header = next((cell for cell in header if looks_like_date(cell)), None)
+            # Replace that header with 'Fixing Rate'
+            header = ["Fixing Rate" if looks_like_date(cell) else cell for cell in header]
 
-        # Assign header
-        data_block.columns = header
+            next_header = header_rows[idx + 1] if idx + 1 < len(header_rows) else len(df_raw)
+            data_block = df_raw.iloc[header_row + 1:next_header].dropna(how='all')
+            if data_block.empty:
+                continue
 
-        # Add Date column
-        data_block["Date"] = date_in_header
+            data_block = data_block.iloc[:, :len(header)]
+            data_block.columns = header
+            # Add new 'Date' column
+            data_block["Date"] = date_in_header
+            all_tables.append(data_block)
 
-        all_tables.append(data_block)
+        if not all_tables:
+            print(f"⚠️ No tables extracted from sheet '{sheet_name}'")
+            continue
 
-    if not all_tables:
-        print(f"⚠️ No tables extracted from sheet '{sheet_name}'")
-        continue
+        final_df = pd.concat(all_tables, ignore_index=True)
 
-    # Combine all tables for this sheet
-    final_df = pd.concat(all_tables, ignore_index=True)
+        # Save sheet CSV to Dataiku output folder
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+            final_df.to_csv(tmp_file.name, index=False)
+            with open(tmp_file.name, "rb") as f:
+                output_folder.upload_stream(f"{sheet_name}.csv", f)
+            os.remove(tmp_file.name)
 
-    # ------------------------------------------------------
-    # Step 4: Save CSV to Dataiku output folder
-    # ------------------------------------------------------
-    output_csv_name = f"{sheet_name}.csv"
-    with output_folder.get_writer(output_csv_name) as writer:
-        final_df.to_csv(writer, index=False)
+        print(f"✅ Sheet '{sheet_name}' saved as CSV: {sheet_name}.csv")
 
-    print(f"✅ Sheet '{sheet_name}' saved as CSV: {output_csv_name}")
+    os.remove(tmp_path)
+    print(f"✅ Processing complete for file: {file_name}")
 
 # ------------------------------------------------------
-# Step 5: Cleanup temp file
-# ------------------------------------------------------
-os.remove(tmp_path)
+if __name__ == "__main__":
+    main()
+
