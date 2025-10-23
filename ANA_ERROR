@@ -31,9 +31,14 @@ def main():
         # Parse .msg file safely
         msg = MsOxMessage(tmp_msg_path)
 
-        for attach in msg.attachments:
-            attach_name = attach.filename  # Correct attribute
-            attach_bytes = attach.payload  # Correct attribute
+        for i, attach in enumerate(msg.attachments, start=1):
+            # Use filename if available, otherwise generate one
+            attach_name = getattr(attach, "filename", f"attachment_{i}")
+            attach_bytes = getattr(attach, "payload", None)
+
+            if not attach_bytes:
+                print(f"⏩ Skipping attachment {attach_name} (no payload)")
+                continue
 
             if attach_name.lower().endswith(TABULAR_EXTENSIONS):
                 # Save temporary file
