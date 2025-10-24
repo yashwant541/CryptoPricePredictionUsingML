@@ -4,26 +4,18 @@ import pandas as pd
 from extract_msg import Message
 from datetime import datetime
 
-# ============================================================
-# 🔧 CONFIGURATION
-# ============================================================
-USE_DATAIKU = False  # 🔄 Set True for Dataiku, False for local run
-
+# ------------------ CONFIG ------------------
+USE_DATAIKU = False  # True for Dataiku, False for local
 if USE_DATAIKU:
     import dataiku
-    INPUT_FOLDER = "input_folder_name"      # <-- Dataiku managed input folder name
-    OUTPUT_FOLDER = "output_folder_name"    # <-- Dataiku managed output folder name
+    INPUT_FOLDER = "input_folder_name"
+    OUTPUT_FOLDER = "output_folder_name"
 else:
-    INPUT_FOLDER = r"C:\Users\Yashwant\Desktop\MIBOR_TM\Input"   # <-- Local input folder path
-    OUTPUT_FOLDER = r"C:\Users\Yashwant\Desktop\MIBOR_TM\Output"  # <-- Local output folder path
-
-# ============================================================
-
+    INPUT_FOLDER = r"C:\Users\Yashwant\Desktop\MIBOR_TM\Input"
+    OUTPUT_FOLDER = r"C:\Users\Yashwant\Desktop\MIBOR_TM\Output"
+# --------------------------------------------
 
 def extract_date_from_filename(filename):
-    """
-    Extracts date from filename (e.g. '06-Jun-2025', '16th-June-2025', etc.)
-    """
     date_pattern = re.compile(r"(\d{1,2}(?:st|nd|rd|th)?[-_ ]?[A-Za-z]{3,9}[-_ ]?\d{2,4})")
     match = date_pattern.search(filename)
     if match:
@@ -33,25 +25,23 @@ def extract_date_from_filename(filename):
             try:
                 parsed_date = datetime.strptime(date_str, fmt)
                 return parsed_date.strftime("%d-%b-%Y")
-            except Exception:
+            except:
                 continue
     return "UnknownDate"
 
-
 def extract_table_by_headers(text):
     """
-    Detects and extracts table-like sections by looking for header lines.
-    Works with plain text or HTML bodies.
+    Detects table by looking for two-row header structure.
+    Returns dataframe, header_found (bool), footer_found (bool), raw_text_between (str)
     """
-    # Clean and normalize
+    # Normalize text
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
 
-    # Split into lines
     raw_lines = re.split(r"[\r\n]+", text)
     lines = [l.strip() for l in raw_lines if len(l.strip()) > 5]
 
-    # Find header line containing time period markers
+    # Detect first header line (tenor row)
     header_pattern = re.compile(r"\b(1\s*WEEK|1\s*MONTH|3\s*MONTHS|6\s*MONTHS|12\s*MONTHS)\b", re.IGNORECASE)
     header_index = None
     for i, line in enumerate(lines):
@@ -59,37 +49,47 @@ def extract_table_by_headers(text):
             header_index = i
             break
 
-    if header_index is None:
-        return None
-
-    # Extract table rows
-    header_line = lines[header_index]
-    headers = re.split(r"\s{2,}|\t| (?=Bid|Ask)", header_line.strip())
-    headers = [h.strip() for h in headers if h.strip()]
-
+    header_found = header_index is not None
+    footer_found = False
     data_rows = []
-    for line in lines[header_index + 1:]:
-        if re.search(r"Maker\s+User|Checker\s+User|End\s+of\s+Report", line, re.IGNORECASE):
-            break
-        if len(line.strip()) < 5:
-            continue
-        parts = re.split(r"\s{2,}|\t| (?=\d)", line.strip())
-        if len(parts) >= 3:
-            data_rows.append(parts)
+    raw_text_between = ""
 
-    if not data_rows:
-        return None
+    if header_found:
+        # Check second row (Bid/Ask row)
+        if header_index + 1 < len(lines):
+            second_row = lines[header_index + 1]
+            second_header_found = bool(re.search(r"\bBid\b.*\bAsk\b", second_row, re.IGNORECASE))
+        else:
+            second_header_found = False
 
-    df = pd.DataFrame(data_rows)
-    df.columns = ["Column_" + str(i + 1) for i in range(len(df.columns))]
-    return df
+        # Extract rows until footer
+        for line in lines[header_index + 2:]:
+            if re.search(r"Maker\s+User|Checker\s+User", line, re.IGNORECASE):
+                footer_found = True
+                break
+            if len(line.strip()) < 5:
+                continue
+            parts = re.split(r"\s{2,}|\t| (?=\d)", line.strip())
+            if len(parts) >= 3:
+                data_rows.append(parts)
 
+        # Collect raw text if table not recognized
+        if not data_rows:
+            raw_text_between = " ".join(lines[header_index:header_index + 2])
+            # Include all lines until footer
+            for line in lines[header_index + 2:]:
+                if re.search(r"Maker\s+User|Checker\s+User", line, re.IGNORECASE):
+                    break
+                raw_text_between += "\n" + line
+
+    df = None
+    if data_rows:
+        df = pd.DataFrame(data_rows)
+        df.columns = ["Column_" + str(i + 1) for i in range(len(df.columns))]
+
+    return df, header_found and second_header_found, footer_found, raw_text_between
 
 def process_msg_files():
-    """
-    Processes MSG files based on the USE_DATAIKU flag.
-    Extracts table sections and saves them as CSV files.
-    """
     if USE_DATAIKU:
         input_folder = dataiku.Folder(INPUT_FOLDER)
         output_folder = dataiku.Folder(OUTPUT_FOLDER)
@@ -105,7 +105,6 @@ def process_msg_files():
         if not file_path.lower().endswith(".msg"):
             continue
 
-        # Read MSG file
         local_temp = "/tmp/temp_msg.msg"
         if USE_DATAIKU:
             with input_folder.get_download_stream(file_path) as f:
@@ -125,23 +124,43 @@ def process_msg_files():
             print(f"⚠️ No email body found in {file_path}")
             continue
 
-        df = extract_table_by_headers(body)
+        df, header_matched, footer_found, raw_text = extract_table_by_headers(body)
+
+        # Print status per file
+        print(f"\nFile: {os.path.basename(file_path)}")
+        print(f"Header matched (two-row): {'✅' if header_matched else '❌'}")
+        print(f"Maker/Checker text found: {'✅' if footer_found else '❌'}")
+
+        date_str = extract_date_from_filename(os.path.basename(file_path))
+
         if df is not None:
-            date_str = extract_date_from_filename(os.path.basename(file_path))
+            # Table recognized -> save CSV
             output_filename = f"{date_str}_table.csv"
             temp_output = os.path.join("/tmp", output_filename)
             df.to_csv(temp_output, index=False)
-
             if USE_DATAIKU:
                 with open(temp_output, "rb") as out:
                     output_folder.upload_stream(output_filename, out)
             else:
                 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
                 df.to_csv(os.path.join(OUTPUT_FOLDER, output_filename), index=False)
-
-            print(f"✅ Table extracted successfully: {output_filename}")
+            print(f"Table extracted and saved: {output_filename}")
+        elif header_matched and footer_found and raw_text:
+            # Header & footer found but table not recognized -> save raw text as .txt
+            output_filename = f"{date_str}_raw_table.txt"
+            temp_output = os.path.join("/tmp", output_filename)
+            with open(temp_output, "w", encoding="utf-8") as f:
+                f.write(raw_text)
+            if USE_DATAIKU:
+                with open(temp_output, "rb") as out:
+                    output_folder.upload_stream(output_filename, out)
+            else:
+                os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+                with open(os.path.join(OUTPUT_FOLDER, output_filename), "w", encoding="utf-8") as f:
+                    f.write(raw_text)
+            print(f"Header/Footer found but table not recognized -> saved as text: {output_filename}")
         else:
-            print(f"⚠️ No recognizable table found in {file_path}")
+            print("No table or raw text extracted.")
 
 
 if __name__ == "__main__":
