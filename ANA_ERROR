@@ -2,13 +2,12 @@ import os
 import re
 import pandas as pd
 from extract_msg import Message
-from io import StringIO
+from datetime import datetime
 
 # ---------------------------------------------------------------------
 # CONFIGURATION
 # ---------------------------------------------------------------------
-# If using Dataiku:
-USE_DATAIKU = True
+USE_DATAIKU = True  # Set to False for local testing
 
 if USE_DATAIKU:
     import dataiku
@@ -23,89 +22,126 @@ start_text = "VALUES (in %)"
 end_text = "Maker User No:"
 
 # ---------------------------------------------------------------------
-# FUNCTION DEFINITIONS
+# HELPER FUNCTIONS
 # ---------------------------------------------------------------------
-def extract_table_from_text(text, start_marker, end_marker):
-    """Extracts and parses the table between given markers."""
-    # Normalize spaces
-    text = re.sub(r'\s+', ' ', text)
-
-    # Extract text between start and end markers
-    pattern = re.escape(start_marker) + r'(.*?)' + re.escape(end_marker)
+def extract_between_markers(text, start_marker, end_marker):
+    """
+    Extracts section including start_marker and excluding end_marker.
+    """
+    pattern = re.escape(start_marker) + r"(.*?)" + re.escape(end_marker)
     match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-
-    if not match:
-        return None
-
-    table_text = match.group(1).strip()
-
-    # Split into logical lines using keywords
-    lines = re.split(r'(?<=\d)\s(?=[A-Za-z])|(?<=[A-Za-z])\s(?=[A-Za-z])', table_text)
-    table_lines = re.split(r'(?<=\d)\s(?=[A-Za-z])|(?<=[A-Za-z])\s(?=\d)|(?<=%)\s', table_text)
-
-    # Split the table text into lines based on likely rows
-    # The table typically uses double spaces or "Bid Ask" patterns
-    rows = re.split(r'(?<=\d)\s{2,}|(?<=Ask)\s', table_text)
-    if len(rows) < 3:
-        # Fallback split if needed
-        rows = re.split(r'(?i)(?<=VOL)|(?<=RR)|(?<=STR)', table_text)
-
-    # Split each line into columns
-    data = []
-    for line in rows:
-        parts = re.split(r'\s{2,}|\t+', line.strip())
-        if len(parts) > 1:
-            data.append(parts)
-
-    if not data:
-        return None
-
-    # Convert to DataFrame
-    df = pd.DataFrame(data)
-    return df
+    if match:
+        return start_marker + match.group(1).strip()
+    return None
 
 
-def process_msg_file(file_path_or_stream, file_name):
-    """Extract the email body and parse table."""
-    msg = Message(file_path_or_stream)
+def extract_date_from_text_or_filename(text, filename):
+    """Extract date like 06-Jun-2025 or 16th June 2025 from email or filename."""
+    patterns = [
+        r"\b\d{1,2}[-_/](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-_/]\d{4}\b",
+        r"\b\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b"
+    ]
+    for pat in patterns:
+        match = re.search(pat, text, re.IGNORECASE)
+        if match:
+            date_str = re.sub(r"(st|nd|rd|th)", "", match.group(0))
+            for fmt in ("%d %b %Y", "%d-%b-%Y"):
+                try:
+                    return datetime.strptime(date_str.strip(), fmt).strftime("%d-%b-%Y")
+                except ValueError:
+                    pass
+    # fallback to filename
+    for pat in patterns:
+        match = re.search(pat, filename, re.IGNORECASE)
+        if match:
+            return re.sub(r"[ /]", "-", match.group(0))
+    return None
+
+
+def build_table_from_text(raw_text):
+    """
+    Attempts to rebuild a DataFrame from plain text table layout.
+    """
+    lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+    text = re.sub(r"\s+", " ", " ".join(lines))
+
+    # Identify known row patterns
+    row_labels = ["AVERAGE ATM VOL", "25D_RR", "25D_STR"]
+    rows = []
+    for label in row_labels:
+        match = re.search(label + r"(.*?)((?=" + "|".join(row_labels) + r"|$))", text)
+        if match:
+            values = re.split(r"\s+", match.group(1).strip())
+            rows.append([label] + values)
+
+    # Find headers
+    header_match = re.search(r"1 WEEK.*?12 MONTHS", text)
+    if header_match:
+        header_text = header_match.group(0)
+        parts = re.split(r"\s+", header_text)
+        expanded_headers = []
+        for part in parts:
+            if part.upper() in ["BID", "ASK"]:
+                continue
+            expanded_headers.extend([part + " Bid", part + " Ask"])
+    else:
+        expanded_headers = []
+
+    if rows:
+        df = pd.DataFrame(rows)
+        if expanded_headers and len(expanded_headers) + 1 == len(df.columns):
+            df.columns = ["Metric"] + expanded_headers
+        else:
+            df.columns = ["Metric"] + [f"Col_{i}" for i in range(1, len(df.columns))]
+        return df
+    else:
+        # fallback: generic splitting
+        data = [re.split(r"\s{2,}", l) for l in lines if len(l.split()) > 1]
+        if not data:
+            return None
+        return pd.DataFrame(data)
+
+
+def process_msg_file(file_source, file_name):
+    msg = Message(file_source)
     body = msg.body or msg.htmlBody or ""
     if not body:
-        return None
+        return None, None
 
-    df = extract_table_from_text(body, start_text, end_text)
+    extracted_text = extract_between_markers(body, start_text, end_text)
+    if not extracted_text:
+        print(f"⚠️ No table section found in {file_name}")
+        return None, None
+
+    df = build_table_from_text(extracted_text)
+    date_str = extract_date_from_text_or_filename(body, file_name)
     if df is not None:
         df.insert(0, "Source_File", file_name)
-    return df
+    return df, date_str
 
 
 # ---------------------------------------------------------------------
 # MAIN EXECUTION
 # ---------------------------------------------------------------------
-all_tables = []
-
 if USE_DATAIKU:
-    for f in input_folder.list_paths_in_partition():
-        if f.lower().endswith(".msg"):
-            with input_folder.get_download_stream(f) as stream:
-                df = process_msg_file(stream, os.path.basename(f))
+    for path in input_folder.list_paths_in_partition():
+        if path.lower().endswith(".msg"):
+            with input_folder.get_download_stream(path) as stream:
+                df, date_str = process_msg_file(stream, os.path.basename(path))
                 if df is not None:
-                    all_tables.append(df)
+                    date_part = date_str or os.path.splitext(os.path.basename(path))[0]
+                    output_name = f"extracted_table_{date_part}.csv"
+                    with output_folder.get_writer(output_name) as writer:
+                        df.to_csv(writer, index=False)
 else:
+    os.makedirs(output_folder, exist_ok=True)
     for file in os.listdir(input_folder):
         if file.lower().endswith(".msg"):
-            file_path = os.path.join(input_folder, file)
-            df = process_msg_file(file_path, file)
+            df, date_str = process_msg_file(os.path.join(input_folder, file), file)
             if df is not None:
-                all_tables.append(df)
+                date_part = date_str or os.path.splitext(file)[0]
+                output_path = os.path.join(output_folder, f"extracted_table_{date_part}.csv")
+                df.to_csv(output_path, index=False)
+                print(f"✅ Saved: {output_path}")
 
-# Combine all tables and save output
-if all_tables:
-    final_df = pd.concat(all_tables, ignore_index=True)
-    if USE_DATAIKU:
-        with output_folder.get_writer("extracted_table.csv") as writer:
-            final_df.to_csv(writer, index=False)
-    else:
-        output_path = os.path.join(output_folder, "extracted_table.csv")
-        final_df.to_csv(output_path, index=False)
-else:
-    print("⚠️ No tables found between the given markers.")
+print("✅ Extraction complete.")
