@@ -1,6 +1,5 @@
 import pandas as pd
 import os
-import glob
 import tempfile
 from datetime import datetime
 
@@ -81,12 +80,12 @@ def process_file(file_path, output_folder_obj=None, use_dataiku=False):
 
         print(f"✅ Processed and saved in Dataiku: {base_name}")
     else:
-        os.makedirs(output_folder, exist_ok=True)
+        os.makedirs(local_output_folder, exist_ok=True)
         # Wide
-        wide_output_path = os.path.join(output_folder, f"{base_name}.xlsx")
+        wide_output_path = os.path.join(local_output_folder, f"{base_name}.xlsx")
         df_processed.to_excel(wide_output_path, index=False)
         # Long
-        long_output_path = os.path.join(output_folder, f"{base_name}_long.xlsx")
+        long_output_path = os.path.join(local_output_folder, f"{base_name}_long.xlsx")
         df_long.to_excel(long_output_path, index=False)
         print(f"✅ Processed and saved locally: {base_name}")
 
@@ -111,11 +110,16 @@ def main():
             if not file_path.lower().endswith(".xlsx"):
                 continue
             try:
+                # Download file to temp file
                 with input_folder_obj.get_download_stream(file_path) as stream:
-                    with tempfile.NamedTemporaryFile(mode="wb", delete=False) as tmp_file:
+                    with tempfile.NamedTemporaryFile(mode="wb", suffix=".xlsx", delete=False) as tmp_file:
                         tmp_file.write(stream.read())
                         tmp_file_path = tmp_file.name
+
+                # Process the temp file
                 process_file(tmp_file_path, output_folder_obj, use_dataiku=True)
+
+                # Delete temp file
                 os.remove(tmp_file_path)
             except Exception as e:
                 print(f"❌ Error processing {file_path}: {e}")
