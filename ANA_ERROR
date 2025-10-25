@@ -1,145 +1,19 @@
-import pandas as pd
-import os
-import tempfile
-import re
-from datetime import datetime
-
-# Try importing Dataiku (skip if running locally)
-try:
-    import dataiku
-except ImportError:
-    dataiku = None
-
-# =====================================================
-# ⚙️ CONFIGURATION
-# =====================================================
-USE_DATAIKU = True  # Toggle: True = Dataiku, False = Local
-
-# --- Local paths (used if USE_DATAIKU = False)
-local_input_folder = r"C:\Users\YourName\Desktop\Input"
-local_output_folder = r"C:\Users\YourName\Desktop\Output"
-
-# --- Dataiku folder IDs
-DATAIKU_INPUT_FOLDER_ID = "input_folder_id_here"
-DATAIKU_OUTPUT_FOLDER_ID = "output_folder_id_here"
-
-# --- Tenure mapping
-tenure_mapping = {
-    '1 Week': ['Val1', 'Val2'],
-    '1 Month': ['Val3', 'Val4'],
-    '3 Months': ['Val5', 'Val6'],
-    '6 Months': ['Val7', 'Val8'],
-    '1 Year': ['Val9', 'Val10']
-}
-
-# =====================================================
-# 🧠 Helper Functions
-# =====================================================
 def extract_date_from_filename(filename):
-    """Extract date in DD-MMM-YYYY format from filename."""
-    match = re.search(r'(\d{1,2}-[A-Za-z]{3}-\d{4})', filename)
-    return match.group(1) if match else None
+    """
+    Extracts date in DD-MMM-YYYY format from filename and returns a datetime object.
+    Handles extra spaces, multiple hyphens, or other characters.
+    """
+    # Remove extension
+    name_only = filename.rsplit('.', 1)[0]
 
-def process_row(row):
-    """Process a row: average first row, keep others as first non-empty in each pair."""
-    if row.name == 0:  # First row
-        new_row = {'Keyword': row['Keyword']}
-        for tenure, vals in tenure_mapping.items():
-            nums = pd.to_numeric(row[vals], errors='coerce')
-            new_row[tenure] = nums.mean()
-        return pd.Series(new_row)
-    else:
-        new_row = {'Keyword': row['Keyword']}
-        for tenure, vals in tenure_mapping.items():
-            for val in vals:
-                if row[val] not in ['', None]:
-                    new_row[tenure] = row[val]
-                    break
-        return pd.Series(new_row)
-
-def process_file(file_path):
-    """Process a single Excel file into long format with date column."""
-    df = pd.read_excel(file_path, engine="openpyxl")
-    df_processed = df.apply(process_row, axis=1)
-    df_long = df_processed.melt(id_vars='Keyword', var_name='Tenure', value_name='Value')
-
-    # Extract date from filename
-    file_date = extract_date_from_filename(os.path.basename(file_path))
-    df_long['Date'] = file_date
-    return df_long
-
-# =====================================================
-# 🚀 Main Execution
-# =====================================================
-def main():
-    start_time = datetime.now()
-    print(f"🚀 Starting Excel → Consolidated Tenure Table at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-
-    combined_long = []
-
-    if USE_DATAIKU:
-        print("📦 Running in Dataiku mode...")
-        input_folder_obj = dataiku.Folder(DATAIKU_INPUT_FOLDER_ID)
-        output_folder_obj = dataiku.Folder(DATAIKU_OUTPUT_FOLDER_ID)
-        input_files = [f for f in input_folder_obj.list_paths_in_partition() if f.lower().endswith(".xlsx")]
-
-        if not input_files:
-            print("⚠️ No Excel files found in Dataiku input folder.")
-            return
-
-        for file_path in input_files:
-            try:
-                # Download file to temp file
-                with input_folder_obj.get_download_stream(file_path) as stream:
-                    with tempfile.NamedTemporaryFile(mode="wb", suffix=".xlsx", delete=False) as tmp_file:
-                        tmp_file.write(stream.read())
-                        tmp_file_path = tmp_file.name
-
-                # Process temp file and append
-                df_long = process_file(tmp_file_path)
-                combined_long.append(df_long)
-
-                os.remove(tmp_file_path)
-            except Exception as e:
-                print(f"❌ Error processing {file_path}: {e}")
-
-        # Save consolidated CSV
-        if combined_long:
-            consolidated_df = pd.concat(combined_long, ignore_index=True)
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as tmp_csv:
-                consolidated_df.to_csv(tmp_csv.name, index=False)
-                tmp_csv_path = tmp_csv.name
-            output_folder_obj.upload_stream("date_table.csv", open(tmp_csv_path, "rb"))
-            os.remove(tmp_csv_path)
-            print("✅ Consolidated date_table.csv saved in Dataiku.")
-
-    else:
-        print("💻 Running in Local mode...")
-        input_files = [f for f in os.listdir(local_input_folder) if f.lower().endswith(".xlsx")]
-        if not input_files:
-            print("⚠️ No Excel files found in local input folder.")
-            return
-
-        for filename in input_files:
-            try:
-                file_path = os.path.join(local_input_folder, filename)
-                df_long = process_file(file_path)
-                combined_long.append(df_long)
-            except Exception as e:
-                print(f"❌ Error processing {filename}: {e}")
-
-        # Save consolidated CSV
-        if combined_long:
-            consolidated_df = pd.concat(combined_long, ignore_index=True)
-            os.makedirs(local_output_folder, exist_ok=True)
-            consolidated_output_path = os.path.join(local_output_folder, "date_table.csv")
-            consolidated_df.to_csv(consolidated_output_path, index=False)
-            print(f"✅ Consolidated date_table.csv saved locally at {consolidated_output_path}")
-
-    print(f"🎉 Processing completed in {(datetime.now() - start_time).total_seconds():.2f}s")
-
-# =====================================================
-# 🕒 Run Script
-# =====================================================
-if __name__ == "__main__":
-    main()
+    # Search for date pattern: 1-2 digits, hyphen, 3-letter month, hyphen, 4-digit year
+    match = re.search(r'(\d{1,2})[- ]([A-Za-z]{3})[- ](\d{4})', name_only)
+    if match:
+        day, month_str, year = match.groups()
+        try:
+            # Convert to datetime object
+            date_obj = datetime.strptime(f"{day}-{month_str}-{year}", "%d-%b-%Y")
+            return date_obj.strftime("%d-%b-%Y")  # Keep format as string
+        except ValueError:
+            return None
+    return None
