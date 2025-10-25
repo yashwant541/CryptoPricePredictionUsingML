@@ -67,14 +67,18 @@ def process_row(row):
                     break
         return pd.Series(new_row)
 
-def process_file(file_path):
-    """Process a single Excel file into long format with date column."""
+def process_file(file_path, original_filename=None):
+    """
+    Process a single Excel file into long format with Date column.
+    original_filename: filename with date info (for Dataiku temp files)
+    """
     df = pd.read_excel(file_path, engine="openpyxl")
     df_processed = df.apply(process_row, axis=1)
     df_long = df_processed.melt(id_vars='Keyword', var_name='Tenure', value_name='Value')
 
-    # Extract date from filename
-    file_date = extract_date_from_filename(os.path.basename(file_path))
+    # Use original filename for date extraction if provided
+    filename_for_date = original_filename if original_filename else file_path
+    file_date = extract_date_from_filename(os.path.basename(filename_for_date))
     df_long['Date'] = file_date
     return df_long
 
@@ -105,8 +109,8 @@ def main():
                         tmp_file.write(stream.read())
                         tmp_file_path = tmp_file.name
 
-                # Process temp file and append
-                df_long = process_file(tmp_file_path)
+                # Pass original filename for date extraction
+                df_long = process_file(tmp_file_path, original_filename=file_path)
                 combined_long.append(df_long)
 
                 os.remove(tmp_file_path)
@@ -133,7 +137,7 @@ def main():
         for filename in input_files:
             try:
                 file_path = os.path.join(local_input_folder, filename)
-                df_long = process_file(file_path)
+                df_long = process_file(file_path, original_filename=filename)
                 combined_long.append(df_long)
             except Exception as e:
                 print(f"❌ Error processing {filename}: {e}")
