@@ -36,10 +36,7 @@ tenure_mapping = {
 # 🧠 Helper Functions
 # =====================================================
 def extract_date_from_filename(filename):
-    """
-    Extract date from filename located between 'on' and 'of'.
-    Returns date as DD-MMM-YYYY string or None if not found.
-    """
+    """Extract date from filename between 'on' and 'of'."""
     print(f"🔹 Processing filename: {filename}")
     match = re.search(r'on\s+(\d{1,2}-[A-Za-z]{3}-\d{4})\s+of', filename, re.IGNORECASE)
     if match:
@@ -50,33 +47,33 @@ def extract_date_from_filename(filename):
         print("⚠️ Date not found in filename.")
         return None
 
-def process_row(row):
-    """Process a row: average first row, keep others as first non-empty in each pair."""
-    if row.name == 0:  # First row
+def transform_table(df):
+    """Transform table to Tenure columns with averaging for first row only."""
+    new_rows = []
+    for idx, row in df.iterrows():
         new_row = {'Keyword': row['Keyword']}
-        for tenure, vals in tenure_mapping.items():
-            nums = pd.to_numeric(row[vals], errors='coerce')
-            new_row[tenure] = nums.mean()
-        return pd.Series(new_row)
-    else:
-        new_row = {'Keyword': row['Keyword']}
-        for tenure, vals in tenure_mapping.items():
-            for val in vals:
-                if row[val] not in ['', None]:
-                    new_row[tenure] = row[val]
-                    break
-        return pd.Series(new_row)
+        if row['Keyword'] == 'AVERAGE ATM VOL':
+            # Take average of pairs
+            for tenure, vals in tenure_mapping.items():
+                nums = pd.to_numeric(row[vals], errors='coerce')
+                new_row[tenure] = nums.mean()
+        else:
+            # Map first 5 columns Val1–Val5 → Tenures
+            new_row['1 Week'] = row.get('Val1', None)
+            new_row['1 Month'] = row.get('Val2', None)
+            new_row['3 Months'] = row.get('Val3', None)
+            new_row['6 Months'] = row.get('Val4', None)
+            new_row['1 Year'] = row.get('Val5', None)
+        new_rows.append(new_row)
+    return pd.DataFrame(new_rows)
 
 def process_file(file_path, original_filename=None):
-    """
-    Process a single Excel file into long format with Date column.
-    original_filename: filename with date info (for Dataiku temp files)
-    """
+    """Process Excel file → transformed → long format → add Date column."""
     df = pd.read_excel(file_path, engine="openpyxl")
-    df_processed = df.apply(process_row, axis=1)
-    df_long = df_processed.melt(id_vars='Keyword', var_name='Tenure', value_name='Value')
+    df_transformed = transform_table(df)
+    df_long = df_transformed.melt(id_vars='Keyword', var_name='Tenure', value_name='Value')
 
-    # Use original filename for date extraction if provided
+    # Use original filename for date extraction
     filename_for_date = original_filename if original_filename else file_path
     file_date = extract_date_from_filename(os.path.basename(filename_for_date))
     df_long['Date'] = file_date
@@ -103,7 +100,7 @@ def main():
 
         for file_path in input_files:
             try:
-                # Download file to temp file
+                # Download to temporary file
                 with input_folder_obj.get_download_stream(file_path) as stream:
                     with tempfile.NamedTemporaryFile(mode="wb", suffix=".xlsx", delete=False) as tmp_file:
                         tmp_file.write(stream.read())
@@ -112,7 +109,6 @@ def main():
                 # Pass original filename for date extraction
                 df_long = process_file(tmp_file_path, original_filename=file_path)
                 combined_long.append(df_long)
-
                 os.remove(tmp_file_path)
             except Exception as e:
                 print(f"❌ Error processing {file_path}: {e}")
