@@ -1,8 +1,8 @@
 import pandas as pd
 import os
 import tempfile
-from datetime import datetime
 import re
+from datetime import datetime
 
 # Try importing Dataiku (skip if running locally)
 try:
@@ -13,13 +13,13 @@ except ImportError:
 # =====================================================
 # ⚙️ CONFIGURATION
 # =====================================================
-USE_DATAIKU = True  # 🔁 Toggle between Dataiku (True) or Local (False)
+USE_DATAIKU = True  # Toggle: True = Dataiku, False = Local
 
 # --- Local paths (used if USE_DATAIKU = False)
 local_input_folder = r"C:\Users\YourName\Desktop\Input"
 local_output_folder = r"C:\Users\YourName\Desktop\Output"
 
-# --- Dataiku folder IDs (used if USE_DATAIKU = True)
+# --- Dataiku folder IDs
 DATAIKU_INPUT_FOLDER_ID = "input_folder_id_here"
 DATAIKU_OUTPUT_FOLDER_ID = "output_folder_id_here"
 
@@ -36,13 +36,9 @@ tenure_mapping = {
 # 🧠 Helper Functions
 # =====================================================
 def extract_date_from_filename(filename):
-    """Extract date from filename in format DD-MMM-YYYY or similar."""
-    # Match patterns like 06-Jun-2025 or 6-Jun-2025
+    """Extract date in DD-MMM-YYYY format from filename."""
     match = re.search(r'(\d{1,2}-[A-Za-z]{3}-\d{4})', filename)
-    if match:
-        return match.group(1)
-    else:
-        return None
+    return match.group(1) if match else None
 
 def process_row(row):
     """Process a row: average first row, keep others as first non-empty in each pair."""
@@ -61,9 +57,8 @@ def process_row(row):
                     break
         return pd.Series(new_row)
 
-def process_file(file_path, output_folder_obj=None, use_dataiku=False):
-    """Process a single Excel file into wide and long format, then save."""
-    # Force openpyxl for reading xlsx
+def process_file(file_path):
+    """Process a single Excel file into long format with date column."""
     df = pd.read_excel(file_path, engine="openpyxl")
     df_processed = df.apply(process_row, axis=1)
     df_long = df_processed.melt(id_vars='Keyword', var_name='Tenure', value_name='Value')
@@ -71,48 +66,14 @@ def process_file(file_path, output_folder_obj=None, use_dataiku=False):
     # Extract date from filename
     file_date = extract_date_from_filename(os.path.basename(file_path))
     df_long['Date'] = file_date
-
-    base_name = os.path.splitext(os.path.basename(file_path))[0]
-
-    if use_dataiku:
-        # --- Wide
-        wide_name = f"{base_name}.xlsx"
-        with tempfile.NamedTemporaryFile(mode="wb", suffix=".xlsx", delete=False) as tmp_file:
-            df_processed.to_excel(tmp_file.name, index=False, engine="openpyxl")
-            tmp_file_path = tmp_file.name
-        with open(tmp_file_path, "rb") as f:
-            output_folder_obj.upload_stream(wide_name, f)
-        os.remove(tmp_file_path)
-
-        # --- Long
-        long_name = f"{base_name}_long.xlsx"
-        with tempfile.NamedTemporaryFile(mode="wb", suffix=".xlsx", delete=False) as tmp_file:
-            df_long.to_excel(tmp_file.name, index=False, engine="openpyxl")
-            tmp_file_path = tmp_file.name
-        with open(tmp_file_path, "rb") as f:
-            output_folder_obj.upload_stream(long_name, f)
-        os.remove(tmp_file_path)
-
-        print(f"✅ Processed and saved in Dataiku: {base_name}")
-        return df_long
-
-    else:
-        os.makedirs(local_output_folder, exist_ok=True)
-        # Wide
-        wide_output_path = os.path.join(local_output_folder, f"{base_name}.xlsx")
-        df_processed.to_excel(wide_output_path, index=False, engine="openpyxl")
-        # Long
-        long_output_path = os.path.join(local_output_folder, f"{base_name}_long.xlsx")
-        df_long.to_excel(long_output_path, index=False, engine="openpyxl")
-        print(f"✅ Processed and saved locally: {base_name}")
-        return df_long
+    return df_long
 
 # =====================================================
 # 🚀 Main Execution
 # =====================================================
 def main():
     start_time = datetime.now()
-    print(f"🚀 Starting Excel → Tenure processing at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🚀 Starting Excel → Consolidated Tenure Table at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     combined_long = []
 
@@ -120,15 +81,13 @@ def main():
         print("📦 Running in Dataiku mode...")
         input_folder_obj = dataiku.Folder(DATAIKU_INPUT_FOLDER_ID)
         output_folder_obj = dataiku.Folder(DATAIKU_OUTPUT_FOLDER_ID)
-        input_files = input_folder_obj.list_paths_in_partition()
+        input_files = [f for f in input_folder_obj.list_paths_in_partition() if f.lower().endswith(".xlsx")]
 
         if not input_files:
-            print("⚠️ No files found in Dataiku input folder.")
+            print("⚠️ No Excel files found in Dataiku input folder.")
             return
 
         for file_path in input_files:
-            if not file_path.lower().endswith(".xlsx"):
-                continue
             try:
                 # Download file to temp file
                 with input_folder_obj.get_download_stream(file_path) as stream:
@@ -136,24 +95,23 @@ def main():
                         tmp_file.write(stream.read())
                         tmp_file_path = tmp_file.name
 
-                # Process the temp file
-                df_long = process_file(tmp_file_path, output_folder_obj, use_dataiku=True)
+                # Process temp file and append
+                df_long = process_file(tmp_file_path)
                 combined_long.append(df_long)
 
-                # Delete temp file
                 os.remove(tmp_file_path)
             except Exception as e:
                 print(f"❌ Error processing {file_path}: {e}")
 
-        # Combine all long tables into a single CSV
+        # Save consolidated CSV
         if combined_long:
-            combined_df = pd.concat(combined_long, ignore_index=True)
+            consolidated_df = pd.concat(combined_long, ignore_index=True)
             with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as tmp_csv:
-                combined_df.to_csv(tmp_csv.name, index=False)
+                consolidated_df.to_csv(tmp_csv.name, index=False)
                 tmp_csv_path = tmp_csv.name
             output_folder_obj.upload_stream("date_table.csv", open(tmp_csv_path, "rb"))
             os.remove(tmp_csv_path)
-            print("✅ Combined date_table.csv saved in Dataiku.")
+            print("✅ Consolidated date_table.csv saved in Dataiku.")
 
     else:
         print("💻 Running in Local mode...")
@@ -165,17 +123,18 @@ def main():
         for filename in input_files:
             try:
                 file_path = os.path.join(local_input_folder, filename)
-                df_long = process_file(file_path, use_dataiku=False)
+                df_long = process_file(file_path)
                 combined_long.append(df_long)
             except Exception as e:
                 print(f"❌ Error processing {filename}: {e}")
 
-        # Combine all long tables into a single CSV
+        # Save consolidated CSV
         if combined_long:
-            combined_df = pd.concat(combined_long, ignore_index=True)
-            combined_output_path = os.path.join(local_output_folder, "date_table.csv")
-            combined_df.to_csv(combined_output_path, index=False)
-            print(f"✅ Combined date_table.csv saved locally at {combined_output_path}")
+            consolidated_df = pd.concat(combined_long, ignore_index=True)
+            os.makedirs(local_output_folder, exist_ok=True)
+            consolidated_output_path = os.path.join(local_output_folder, "date_table.csv")
+            consolidated_df.to_csv(consolidated_output_path, index=False)
+            print(f"✅ Consolidated date_table.csv saved locally at {consolidated_output_path}")
 
     print(f"🎉 Processing completed in {(datetime.now() - start_time).total_seconds():.2f}s")
 
