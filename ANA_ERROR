@@ -1,167 +1,96 @@
 import os
-import re
-import pandas as pd
-from extract_msg import Message
+import io
+import extract_msg
+import dataiku  # available only in Dataiku
 from datetime import datetime
 
-# ------------------ CONFIG ------------------
-USE_DATAIKU = False  # True for Dataiku, False for local
-if USE_DATAIKU:
-    import dataiku
-    INPUT_FOLDER = "input_folder_name"
-    OUTPUT_FOLDER = "output_folder_name"
-else:
-    INPUT_FOLDER = r"C:\Users\Yashwant\Desktop\MIBOR_TM\Input"
-    OUTPUT_FOLDER = r"C:\Users\Yashwant\Desktop\MIBOR_TM\Output"
-# --------------------------------------------
+# === CONFIGURATION ===
+USE_DATAIKU = True  # 🔁 Toggle between Dataiku (True) or Local (False)
 
-def extract_date_from_filename(filename):
-    date_pattern = re.compile(r"(\d{1,2}(?:st|nd|rd|th)?[-_ ]?[A-Za-z]{3,9}[-_ ]?\d{2,4})")
-    match = date_pattern.search(filename)
-    if match:
-        date_str = re.sub(r"(st|nd|rd|th)", "", match.group(1))
-        date_str = date_str.replace("_", "-").replace(" ", "-")
-        for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%d-%b-%y", "%d-%B-%y"):
-            try:
-                parsed_date = datetime.strptime(date_str, fmt)
-                return parsed_date.strftime("%d-%b-%Y")
-            except:
-                continue
-    return "UnknownDate"
+# === LOCAL PATHS (only used if USE_DATAIKU = False) ===
+local_input_folder = r"C:\Users\YourName\Desktop\Emails\Input"
+local_output_folder = r"C:\Users\YourName\Desktop\Emails\Output"
 
-def extract_table_by_headers(text):
-    """
-    Detects table by looking for two-row header structure.
-    Returns dataframe, header_found (bool), footer_found (bool), raw_text_between (str)
-    """
-    # Normalize text
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
+# === DATAIKU FOLDER IDS (used only if USE_DATAIKU = True) ===
+DATAIKU_INPUT_FOLDER_ID = "input_folder_id_here"
+DATAIKU_OUTPUT_FOLDER_ID = "output_folder_id_here"
 
-    raw_lines = re.split(r"[\r\n]+", text)
-    lines = [l.strip() for l in raw_lines if len(l.strip()) > 5]
+# === FUNCTION TO EXTRACT EMAIL BODY ===
+def extract_email_body(file_content: bytes) -> str:
+    """Extract plain text body from .msg file bytes."""
+    with io.BytesIO(file_content) as f:
+        msg = extract_msg.Message(f)
+        body = msg.body or msg.bodyText or ""
+        return body.replace('\r', '').replace('\x00', '')
 
-    # Detect first header line (tenor row)
-    header_pattern = re.compile(r"\b(1\s*WEEK|1\s*MONTH|3\s*MONTHS|6\s*MONTHS|12\s*MONTHS)\b", re.IGNORECASE)
-    header_index = None
-    for i, line in enumerate(lines):
-        if header_pattern.search(line):
-            header_index = i
-            break
-
-    header_found = header_index is not None
-    footer_found = False
-    data_rows = []
-    raw_text_between = ""
-
-    if header_found:
-        # Check second row (Bid/Ask row)
-        if header_index + 1 < len(lines):
-            second_row = lines[header_index + 1]
-            second_header_found = bool(re.search(r"\bBid\b.*\bAsk\b", second_row, re.IGNORECASE))
-        else:
-            second_header_found = False
-
-        # Extract rows until footer
-        for line in lines[header_index + 2:]:
-            if re.search(r"Maker\s+User|Checker\s+User", line, re.IGNORECASE):
-                footer_found = True
-                break
-            if len(line.strip()) < 5:
-                continue
-            parts = re.split(r"\s{2,}|\t| (?=\d)", line.strip())
-            if len(parts) >= 3:
-                data_rows.append(parts)
-
-        # Collect raw text if table not recognized
-        if not data_rows:
-            raw_text_between = " ".join(lines[header_index:header_index + 2])
-            # Include all lines until footer
-            for line in lines[header_index + 2:]:
-                if re.search(r"Maker\s+User|Checker\s+User", line, re.IGNORECASE):
-                    break
-                raw_text_between += "\n" + line
-
-    df = None
-    if data_rows:
-        df = pd.DataFrame(data_rows)
-        df.columns = ["Column_" + str(i + 1) for i in range(len(df.columns))]
-
-    return df, header_found and second_header_found, footer_found, raw_text_between
-
-def process_msg_files():
+# === MAIN EXECUTION ===
+def process_emails():
     if USE_DATAIKU:
-        input_folder = dataiku.Folder(INPUT_FOLDER)
-        output_folder = dataiku.Folder(OUTPUT_FOLDER)
-        msg_files = input_folder.list_paths_in_partition()
+        print("📦 Running in Dataiku mode...")
+        input_folder = dataiku.Folder(DATAIKU_INPUT_FOLDER_ID)
+        output_folder = dataiku.Folder(DATAIKU_OUTPUT_FOLDER_ID)
+        file_list = input_folder.list_paths_in_partition()
+
+        if not file_list:
+            print("⚠️ No files found in Dataiku input folder.")
+            return
+
+        for file_path in file_list:
+            if not file_path.lower().endswith(".msg"):
+                continue
+
+            try:
+                # Read .msg file bytes
+                with input_folder.get_download_stream(file_path) as f:
+                    file_bytes = f.read()
+
+                # Extract body
+                msg_body = extract_email_body(file_bytes)
+
+                # Create output filename
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+                output_name = f"{base_name}.txt"
+
+                # Write to Dataiku output
+                with output_folder.upload_stream(output_name) as out:
+                    out.write(msg_body.encode("utf-8"))
+
+                print(f"✅ Saved to Dataiku: {output_name}")
+
+            except Exception as e:
+                print(f"❌ Error processing {file_path}: {e}")
+
     else:
-        msg_files = [os.path.join(INPUT_FOLDER, f) for f in os.listdir(INPUT_FOLDER) if f.lower().endswith(".msg")]
+        print("💻 Running in Local mode...")
+        os.makedirs(local_output_folder, exist_ok=True)
+        files = [f for f in os.listdir(local_input_folder) if f.lower().endswith(".msg")]
 
-    if not msg_files:
-        print("❌ No .msg files found in the input folder.")
-        return
+        if not files:
+            print("⚠️ No .msg files found in local input folder.")
+            return
 
-    for file_path in msg_files:
-        if not file_path.lower().endswith(".msg"):
-            continue
+        for filename in files:
+            try:
+                file_path = os.path.join(local_input_folder, filename)
+                msg = extract_msg.Message(file_path)
+                msg_body = msg.body or msg.bodyText or ""
+                msg_body = msg_body.replace('\r', '').replace('\x00', '')
 
-        local_temp = "/tmp/temp_msg.msg"
-        if USE_DATAIKU:
-            with input_folder.get_download_stream(file_path) as f:
-                with open(local_temp, "wb") as tmp:
-                    tmp.write(f.read())
-        else:
-            local_temp = file_path
+                output_path = os.path.join(local_output_folder, os.path.splitext(filename)[0] + ".txt")
+                with open(output_path, "w", encoding="utf-8") as f:
+                    f.write(msg_body)
 
-        try:
-            msg = Message(local_temp)
-            body = msg.body or msg.htmlBody
-        except Exception as e:
-            print(f"⚠️ Error reading {file_path}: {e}")
-            continue
+                print(f"✅ Saved locally: {os.path.basename(output_path)}")
 
-        if not body:
-            print(f"⚠️ No email body found in {file_path}")
-            continue
+            except Exception as e:
+                print(f"❌ Error processing {filename}: {e}")
 
-        df, header_matched, footer_found, raw_text = extract_table_by_headers(body)
-
-        # Print status per file
-        print(f"\nFile: {os.path.basename(file_path)}")
-        print(f"Header matched (two-row): {'✅' if header_matched else '❌'}")
-        print(f"Maker/Checker text found: {'✅' if footer_found else '❌'}")
-
-        date_str = extract_date_from_filename(os.path.basename(file_path))
-
-        if df is not None:
-            # Table recognized -> save CSV
-            output_filename = f"{date_str}_table.csv"
-            temp_output = os.path.join("/tmp", output_filename)
-            df.to_csv(temp_output, index=False)
-            if USE_DATAIKU:
-                with open(temp_output, "rb") as out:
-                    output_folder.upload_stream(output_filename, out)
-            else:
-                os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-                df.to_csv(os.path.join(OUTPUT_FOLDER, output_filename), index=False)
-            print(f"Table extracted and saved: {output_filename}")
-        elif header_matched and footer_found and raw_text:
-            # Header & footer found but table not recognized -> save raw text as .txt
-            output_filename = f"{date_str}_raw_table.txt"
-            temp_output = os.path.join("/tmp", output_filename)
-            with open(temp_output, "w", encoding="utf-8") as f:
-                f.write(raw_text)
-            if USE_DATAIKU:
-                with open(temp_output, "rb") as out:
-                    output_folder.upload_stream(output_filename, out)
-            else:
-                os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-                with open(os.path.join(OUTPUT_FOLDER, output_filename), "w", encoding="utf-8") as f:
-                    f.write(raw_text)
-            print(f"Header/Footer found but table not recognized -> saved as text: {output_filename}")
-        else:
-            print("No table or raw text extracted.")
+    print("🎉 Conversion completed!")
 
 
+# === RUN SCRIPT ===
 if __name__ == "__main__":
-    process_msg_files()
+    start_time = datetime.now()
+    print(f"🚀 Starting MSG → TXT conversion at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    process_emails()
+    print(f"⏱️ Completed in {(datetime.now() - start_time).total_seconds():.2f}s")
