@@ -2,6 +2,7 @@ import pandas as pd
 import os
 import tempfile
 from datetime import datetime
+import re
 
 # Try importing Dataiku (skip if running locally)
 try:
@@ -34,6 +35,15 @@ tenure_mapping = {
 # =====================================================
 # 🧠 Helper Functions
 # =====================================================
+def extract_date_from_filename(filename):
+    """Extract date from filename in format DD-MMM-YYYY or similar."""
+    # Match patterns like 06-Jun-2025 or 6-Jun-2025
+    match = re.search(r'(\d{1,2}-[A-Za-z]{3}-\d{4})', filename)
+    if match:
+        return match.group(1)
+    else:
+        return None
+
 def process_row(row):
     """Process a row: average first row, keep others as first non-empty in each pair."""
     if row.name == 0:  # First row
@@ -58,6 +68,10 @@ def process_file(file_path, output_folder_obj=None, use_dataiku=False):
     df_processed = df.apply(process_row, axis=1)
     df_long = df_processed.melt(id_vars='Keyword', var_name='Tenure', value_name='Value')
 
+    # Extract date from filename
+    file_date = extract_date_from_filename(os.path.basename(file_path))
+    df_long['Date'] = file_date
+
     base_name = os.path.splitext(os.path.basename(file_path))[0]
 
     if use_dataiku:
@@ -80,6 +94,8 @@ def process_file(file_path, output_folder_obj=None, use_dataiku=False):
         os.remove(tmp_file_path)
 
         print(f"✅ Processed and saved in Dataiku: {base_name}")
+        return df_long
+
     else:
         os.makedirs(local_output_folder, exist_ok=True)
         # Wide
@@ -89,6 +105,7 @@ def process_file(file_path, output_folder_obj=None, use_dataiku=False):
         long_output_path = os.path.join(local_output_folder, f"{base_name}_long.xlsx")
         df_long.to_excel(long_output_path, index=False, engine="openpyxl")
         print(f"✅ Processed and saved locally: {base_name}")
+        return df_long
 
 # =====================================================
 # 🚀 Main Execution
@@ -96,6 +113,8 @@ def process_file(file_path, output_folder_obj=None, use_dataiku=False):
 def main():
     start_time = datetime.now()
     print(f"🚀 Starting Excel → Tenure processing at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    combined_long = []
 
     if USE_DATAIKU:
         print("📦 Running in Dataiku mode...")
@@ -118,12 +137,23 @@ def main():
                         tmp_file_path = tmp_file.name
 
                 # Process the temp file
-                process_file(tmp_file_path, output_folder_obj, use_dataiku=True)
+                df_long = process_file(tmp_file_path, output_folder_obj, use_dataiku=True)
+                combined_long.append(df_long)
 
                 # Delete temp file
                 os.remove(tmp_file_path)
             except Exception as e:
                 print(f"❌ Error processing {file_path}: {e}")
+
+        # Combine all long tables into a single CSV
+        if combined_long:
+            combined_df = pd.concat(combined_long, ignore_index=True)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as tmp_csv:
+                combined_df.to_csv(tmp_csv.name, index=False)
+                tmp_csv_path = tmp_csv.name
+            output_folder_obj.upload_stream("date_table.csv", open(tmp_csv_path, "rb"))
+            os.remove(tmp_csv_path)
+            print("✅ Combined date_table.csv saved in Dataiku.")
 
     else:
         print("💻 Running in Local mode...")
@@ -135,9 +165,17 @@ def main():
         for filename in input_files:
             try:
                 file_path = os.path.join(local_input_folder, filename)
-                process_file(file_path, use_dataiku=False)
+                df_long = process_file(file_path, use_dataiku=False)
+                combined_long.append(df_long)
             except Exception as e:
                 print(f"❌ Error processing {filename}: {e}")
+
+        # Combine all long tables into a single CSV
+        if combined_long:
+            combined_df = pd.concat(combined_long, ignore_index=True)
+            combined_output_path = os.path.join(local_output_folder, "date_table.csv")
+            combined_df.to_csv(combined_output_path, index=False)
+            print(f"✅ Combined date_table.csv saved locally at {combined_output_path}")
 
     print(f"🎉 Processing completed in {(datetime.now() - start_time).total_seconds():.2f}s")
 
