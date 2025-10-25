@@ -1,21 +1,29 @@
 import pandas as pd
 import os
 import glob
+import tempfile
+from datetime import datetime
 
-# ------------------ USER CONFIG ------------------
-DATAIKU_MODE = False  # Set True if running in Dataiku
-input_folder = r"your_input_folder_path"   # Used if DATAIKU_MODE=False
-output_folder = r"your_output_folder_path" # Used if DATAIKU_MODE=False
-# -------------------------------------------------
-
-if DATAIKU_MODE:
+# Try importing Dataiku (skip if running locally)
+try:
     import dataiku
-    input_folder = dataiku.Folder("INPUT_FOLDER_ID").get_path()
-    output_folder_obj = dataiku.Folder("OUTPUT_FOLDER_ID")
-    output_folder_obj_path = output_folder_obj.get_path()
-    os.makedirs(output_folder_obj_path, exist_ok=True)
+except ImportError:
+    dataiku = None
 
-# Define mapping of tenures to Val columns
+# =====================================================
+# ⚙️ CONFIGURATION
+# =====================================================
+USE_DATAIKU = True  # 🔁 Toggle between Dataiku (True) or Local (False)
+
+# --- Local paths (used if USE_DATAIKU = False)
+local_input_folder = r"C:\Users\YourName\Desktop\Input"
+local_output_folder = r"C:\Users\YourName\Desktop\Output"
+
+# --- Dataiku folder IDs (used if USE_DATAIKU = True)
+DATAIKU_INPUT_FOLDER_ID = "input_folder_id_here"
+DATAIKU_OUTPUT_FOLDER_ID = "output_folder_id_here"
+
+# --- Tenure mapping
 tenure_mapping = {
     '1 Week': ['Val1', 'Val2'],
     '1 Month': ['Val3', 'Val4'],
@@ -24,15 +32,18 @@ tenure_mapping = {
     '1 Year': ['Val9', 'Val10']
 }
 
+# =====================================================
+# 🧠 Helper Functions
+# =====================================================
 def process_row(row):
-    if row.name == 0:  # Only first row (AVERAGE ATM VOL) is averaged
+    """Process a row: average first row, keep others as first non-empty in each pair."""
+    if row.name == 0:  # First row
         new_row = {'Keyword': row['Keyword']}
         for tenure, vals in tenure_mapping.items():
             nums = pd.to_numeric(row[vals], errors='coerce')
             new_row[tenure] = nums.mean()
         return pd.Series(new_row)
     else:
-        # For other rows, take first non-empty value in each Val pair
         new_row = {'Keyword': row['Keyword']}
         for tenure, vals in tenure_mapping.items():
             for val in vals:
@@ -41,34 +52,92 @@ def process_row(row):
                     break
         return pd.Series(new_row)
 
-# ------------------ PROCESS FILES ------------------
-for file_path in glob.glob(os.path.join(input_folder, "*.xlsx")):
-    try:
-        df = pd.read_excel(file_path)
-        df_processed = df.apply(process_row, axis=1)
-        df_long = df_processed.melt(id_vars='Keyword', var_name='Tenure', value_name='Value')
+def process_file(file_path, output_folder_obj=None, use_dataiku=False):
+    """Process a single Excel file into wide and long format, then save."""
+    df = pd.read_excel(file_path)
+    df_processed = df.apply(process_row, axis=1)
+    df_long = df_processed.melt(id_vars='Keyword', var_name='Tenure', value_name='Value')
 
-        if DATAIKU_MODE:
-            # Save wide format
-            wide_name = os.path.basename(file_path)
-            wide_file_path = os.path.join(output_folder_obj_path, wide_name)
-            df_processed.to_excel(wide_file_path, index=False)
-            output_folder_obj.upload_stream(wide_file_path, wide_name)
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
 
-            # Save long format
-            long_name = os.path.splitext(os.path.basename(file_path))[0] + "_long.xlsx"
-            long_file_path = os.path.join(output_folder_obj_path, long_name)
-            df_long.to_excel(long_file_path, index=False)
-            output_folder_obj.upload_stream(long_file_path, long_name)
+    if use_dataiku:
+        # --- Wide
+        wide_name = f"{base_name}.xlsx"
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=".xlsx", delete=False) as tmp_file:
+            df_processed.to_excel(tmp_file.name, index=False)
+            tmp_file_path = tmp_file.name
+        with open(tmp_file_path, "rb") as f:
+            output_folder_obj.upload_stream(wide_name, f)
+        os.remove(tmp_file_path)
 
-        else:
-            # Local save
-            wide_output_path = os.path.join(output_folder, os.path.basename(file_path))
-            df_processed.to_excel(wide_output_path, index=False)
+        # --- Long
+        long_name = f"{base_name}_long.xlsx"
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=".xlsx", delete=False) as tmp_file:
+            df_long.to_excel(tmp_file.name, index=False)
+            tmp_file_path = tmp_file.name
+        with open(tmp_file_path, "rb") as f:
+            output_folder_obj.upload_stream(long_name, f)
+        os.remove(tmp_file_path)
 
-            long_output_path = os.path.join(output_folder, os.path.splitext(os.path.basename(file_path))[0] + "_long.xlsx")
-            df_long.to_excel(long_output_path, index=False)
+        print(f"✅ Processed and saved in Dataiku: {base_name}")
+    else:
+        os.makedirs(output_folder, exist_ok=True)
+        # Wide
+        wide_output_path = os.path.join(output_folder, f"{base_name}.xlsx")
+        df_processed.to_excel(wide_output_path, index=False)
+        # Long
+        long_output_path = os.path.join(output_folder, f"{base_name}_long.xlsx")
+        df_long.to_excel(long_output_path, index=False)
+        print(f"✅ Processed and saved locally: {base_name}")
 
-        print(f"Processed: {os.path.basename(file_path)}")
-    except Exception as e:
-        print(f"Error processing {file_path}: {e}")
+# =====================================================
+# 🚀 Main Execution
+# =====================================================
+def main():
+    start_time = datetime.now()
+    print(f"🚀 Starting Excel → Tenure processing at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    if USE_DATAIKU:
+        print("📦 Running in Dataiku mode...")
+        input_folder_obj = dataiku.Folder(DATAIKU_INPUT_FOLDER_ID)
+        output_folder_obj = dataiku.Folder(DATAIKU_OUTPUT_FOLDER_ID)
+        input_files = input_folder_obj.list_paths_in_partition()
+
+        if not input_files:
+            print("⚠️ No files found in Dataiku input folder.")
+            return
+
+        for file_path in input_files:
+            if not file_path.lower().endswith(".xlsx"):
+                continue
+            try:
+                with input_folder_obj.get_download_stream(file_path) as stream:
+                    with tempfile.NamedTemporaryFile(mode="wb", delete=False) as tmp_file:
+                        tmp_file.write(stream.read())
+                        tmp_file_path = tmp_file.name
+                process_file(tmp_file_path, output_folder_obj, use_dataiku=True)
+                os.remove(tmp_file_path)
+            except Exception as e:
+                print(f"❌ Error processing {file_path}: {e}")
+
+    else:
+        print("💻 Running in Local mode...")
+        input_files = [f for f in os.listdir(local_input_folder) if f.lower().endswith(".xlsx")]
+        if not input_files:
+            print("⚠️ No Excel files found in local input folder.")
+            return
+
+        for filename in input_files:
+            try:
+                file_path = os.path.join(local_input_folder, filename)
+                process_file(file_path, use_dataiku=False)
+            except Exception as e:
+                print(f"❌ Error processing {filename}: {e}")
+
+    print(f"🎉 Processing completed in {(datetime.now() - start_time).total_seconds():.2f}s")
+
+# =====================================================
+# 🕒 Run Script
+# =====================================================
+if __name__ == "__main__":
+    main()
