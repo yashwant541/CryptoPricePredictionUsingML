@@ -53,7 +53,8 @@ def process_row(row):
 
 def process_file(file_path, output_folder_obj=None, use_dataiku=False):
     """Process a single Excel file into wide and long format, then save."""
-    df = pd.read_excel(file_path)
+    # Force openpyxl for reading xlsx
+    df = pd.read_excel(file_path, engine="openpyxl")
     df_processed = df.apply(process_row, axis=1)
     df_long = df_processed.melt(id_vars='Keyword', var_name='Tenure', value_name='Value')
 
@@ -63,7 +64,7 @@ def process_file(file_path, output_folder_obj=None, use_dataiku=False):
         # --- Wide
         wide_name = f"{base_name}.xlsx"
         with tempfile.NamedTemporaryFile(mode="wb", suffix=".xlsx", delete=False) as tmp_file:
-            df_processed.to_excel(tmp_file.name, index=False)
+            df_processed.to_excel(tmp_file.name, index=False, engine="openpyxl")
             tmp_file_path = tmp_file.name
         with open(tmp_file_path, "rb") as f:
             output_folder_obj.upload_stream(wide_name, f)
@@ -72,7 +73,7 @@ def process_file(file_path, output_folder_obj=None, use_dataiku=False):
         # --- Long
         long_name = f"{base_name}_long.xlsx"
         with tempfile.NamedTemporaryFile(mode="wb", suffix=".xlsx", delete=False) as tmp_file:
-            df_long.to_excel(tmp_file.name, index=False)
+            df_long.to_excel(tmp_file.name, index=False, engine="openpyxl")
             tmp_file_path = tmp_file.name
         with open(tmp_file_path, "rb") as f:
             output_folder_obj.upload_stream(long_name, f)
@@ -83,10 +84,10 @@ def process_file(file_path, output_folder_obj=None, use_dataiku=False):
         os.makedirs(local_output_folder, exist_ok=True)
         # Wide
         wide_output_path = os.path.join(local_output_folder, f"{base_name}.xlsx")
-        df_processed.to_excel(wide_output_path, index=False)
+        df_processed.to_excel(wide_output_path, index=False, engine="openpyxl")
         # Long
         long_output_path = os.path.join(local_output_folder, f"{base_name}_long.xlsx")
-        df_long.to_excel(long_output_path, index=False)
+        df_long.to_excel(long_output_path, index=False, engine="openpyxl")
         print(f"✅ Processed and saved locally: {base_name}")
 
 # =====================================================
