@@ -1,117 +1,95 @@
 import os
-import re
 import pandas as pd
-import tempfile
-from extract_msg import Message
 
-# 🔁 Switch between Dataiku and Local mode
-USE_DATAIKU = True   # Set to False for local testing
+# === USER CONFIGURATION ===
+use_dataiku = False  # True = Dataiku mode, False = local mode
 
-if USE_DATAIKU:
+# Local paths
+input_folder = r"C:\path\to\txt_files"
+output_folder = r"C:\path\to\output_folder"
+
+# Dataiku folders
+dataiku_input_name = "input_folder"
+dataiku_output_name = "output_folder"
+
+# Keywords to extract
+keywords = ["AVERAGE ATM VOL", "TEXT B", "TEXT C"]
+
+# ===========================
+
+if use_dataiku:
     import dataiku
+    input_folder_handle = dataiku.Folder(dataiku_input_name)
+    output_folder_handle = dataiku.Folder(dataiku_output_name)
 
+def extract_keyword_values_from_line(line, keyword):
+    parts = line.strip().split(keyword, 1)
+    if len(parts) > 1:
+        values_part = parts[1].strip()
+        values = [v for v in values_part.split() if v.strip()]
+        return values
+    return None
 
-# ------------------------------------------------------
-# 🔧 Configuration
-# ------------------------------------------------------
-if USE_DATAIKU:
-    input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # e.g. "pwBGEpop"
-    output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID") # e.g. "pwBGEpop"
-else:
-    input_path = r"C:\Users\2011747\Desktop\Input"
-    output_path = r"C:\Users\2011747\Desktop\Output"
-    os.makedirs(output_path, exist_ok=True)
-
-
-# ------------------------------------------------------
-# 🧠 Helper Functions
-# ------------------------------------------------------
-def extract_date_from_filename(filename):
-    """Extract date from filename like '04-Apr-2025'."""
-    name_without_ext = os.path.splitext(filename)[0]
-    match = re.search(r"(\d{1,2}[- ]?[A-Za-z]{3,9}[- ]?\d{2,4})", name_without_ext)
-    if match:
-        return match.group(1).strip()
-    return "Unknown Date"
-
-
-def extract_email_body(msg_path):
-    """Extract the body text from a .msg file."""
-    msg = Message(msg_path)
-    body = msg.body or ""
-    return re.sub(r'\r\n', '\n', body).strip()
-
-
-def save_output_file(output_filename, text):
-    """Save file locally or in Dataiku using upload_stream()."""
-    if USE_DATAIKU:
-        # ✅ Create a temporary file and upload to Dataiku
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".txt", delete=False, encoding="utf-8") as tmp_file:
-            tmp_file.write(text)
-            tmp_file.flush()
-            tmp_file.seek(0)
-            tmp_file_name = tmp_file.name
-
-        # Upload to Dataiku managed folder
-        with open(tmp_file_name, "rb") as f:
-            output_folder.upload_stream(output_filename, f)
-
-        os.remove(tmp_file_name)
-
+def process_single_file(file_path, keywords, folder_handle=None):
+    # Read file lines
+    if folder_handle:
+        with folder_handle.get_download_stream(file_path) as f:
+            lines = f.read().decode("utf-8", errors="ignore").splitlines()
     else:
-        # Local save
-        output_file_path = os.path.join(output_path, output_filename)
-        with open(output_file_path, "w", encoding="utf-8") as f:
-            f.write(text)
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+    
+    extracted_data = []
+    for keyword in keywords:
+        for line in lines:
+            if keyword in line:
+                values = extract_keyword_values_from_line(line, keyword)
+                if values:
+                    extracted_data.append([keyword] + values)
+                break
+    return extracted_data
 
-
-# ------------------------------------------------------
-# 🚀 Main Processing
-# ------------------------------------------------------
-def main():
-    if USE_DATAIKU:
-        files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith(".msg")]
-    else:
-        files = [os.path.join(input_path, f) for f in os.listdir(input_path) if f.lower().endswith(".msg")]
-
-    if not files:
-        print("⚠️ No .msg files found in input folder.")
-        return
-
-    for file_path in files:
-        try:
-            filename = os.path.basename(file_path)
-            date_text = extract_date_from_filename(filename)
-            print(f"📧 Processing: {filename} ({date_text})")
-
-            if USE_DATAIKU:
-                # Download .msg file from Dataiku into temp file
-                with input_folder.get_download_stream(file_path) as stream:
-                    tmp_msg = tempfile.NamedTemporaryFile(delete=False, suffix=".msg")
-                    tmp_msg.write(stream.read())
-                    tmp_msg.close()
-                    msg_path = tmp_msg.name
-            else:
-                msg_path = file_path
-
-            # Extract email body
-            body_text = extract_email_body(msg_path)
-
-            if USE_DATAIKU:
-                os.remove(msg_path)
-
-            if not body_text.strip():
-                print(f"⚠️ No body text found in {filename}")
-                continue
-
-            output_filename = f"{os.path.splitext(filename)[0]}_body.txt"
-            save_output_file(output_filename, body_text)
-            print(f"✅ Saved: {output_filename}")
-
-        except Exception as e:
-            print(f"❌ Error processing {file_path}: {e}")
-
-
-# ------------------------------------------------------
+# === MAIN EXECUTION ===
 if __name__ == "__main__":
-    main()
+    print("🚀 Starting keyword extraction per file...")
+
+    if use_dataiku:
+        file_list = input_folder_handle.list_paths_in_partition()
+        txt_files = [fp for fp in file_list if fp.lower().endswith(".txt")]
+        print(f"📁 Found {len(txt_files)} TXT files in Dataiku folder.")
+
+        for file_path in txt_files:
+            data = process_single_file(file_path, keywords, folder_handle=input_folder_handle)
+            if not data:
+                print(f"⚠️ No keywords found in {file_path}. Skipping.")
+                continue
+            
+            max_len = max(len(row) for row in data)
+            columns = ["Keyword"] + [f"Val{i}" for i in range(1, max_len)]
+            df = pd.DataFrame(data, columns=columns)
+
+            # Save with original file name
+            output_path = os.path.join("/tmp", os.path.basename(file_path).replace(".txt", ".xlsx"))
+            df.to_excel(output_path, index=False)
+            with open(output_path, "rb") as f:
+                output_folder_handle.upload_stream(os.path.basename(file_path).replace(".txt", ".xlsx"), f)
+            print(f"✅ Processed {file_path} -> uploaded {os.path.basename(output_path)}")
+
+    else:
+        txt_files = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.lower().endswith(".txt")]
+        print(f"📁 Found {len(txt_files)} TXT files in local folder.")
+
+        for file_path in txt_files:
+            data = process_single_file(file_path, keywords)
+            if not data:
+                print(f"⚠️ No keywords found in {file_path}. Skipping.")
+                continue
+            
+            max_len = max(len(row) for row in data)
+            columns = ["Keyword"] + [f"Val{i}" for i in range(1, max_len)]
+            df = pd.DataFrame(data, columns=columns)
+
+            # Save with original file name
+            output_file_path = os.path.join(output_folder, os.path.basename(file_path).replace(".txt", ".xlsx"))
+            df.to_excel(output_file_path, index=False)
+            print(f"✅ Processed {file_path} -> saved {output_file_path}")
