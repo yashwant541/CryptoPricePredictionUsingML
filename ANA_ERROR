@@ -1,118 +1,117 @@
 import os
-import io
+import re
+import pandas as pd
 import tempfile
-import extract_msg
-from datetime import datetime
+from extract_msg import Message
 
-# Try importing Dataiku (skip if running locally)
-try:
+# 🔁 Switch between Dataiku and Local mode
+USE_DATAIKU = True   # Set to False for local testing
+
+if USE_DATAIKU:
     import dataiku
-except ImportError:
-    dataiku = None
-
-# =====================================================
-# ⚙️ CONFIGURATION
-# =====================================================
-USE_DATAIKU = True  # 🔁 Toggle between Dataiku (True) or Local (False)
-
-# --- Local paths (used if USE_DATAIKU = False)
-local_input_folder = r"C:\Users\YourName\Desktop\Emails\Input"
-local_output_folder = r"C:\Users\YourName\Desktop\Emails\Output"
-
-# --- Dataiku folder IDs (used if USE_DATAIKU = True)
-DATAIKU_INPUT_FOLDER_ID = "input_folder_id_here"
-DATAIKU_OUTPUT_FOLDER_ID = "output_folder_id_here"
 
 
-# =====================================================
-# 🧠 Helper Function
-# =====================================================
-def extract_email_body(file_content: bytes) -> str:
-    """Extract plain text body from .msg file bytes."""
-    with io.BytesIO(file_content) as f:
-        msg = extract_msg.Message(f)
-        body = msg.body or msg.bodyText or ""
-        return body.replace("\r", "").replace("\x00", "")
+# ------------------------------------------------------
+# 🔧 Configuration
+# ------------------------------------------------------
+if USE_DATAIKU:
+    input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # e.g. "pwBGEpop"
+    output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID") # e.g. "pwBGEpop"
+else:
+    input_path = r"C:\Users\2011747\Desktop\Input"
+    output_path = r"C:\Users\2011747\Desktop\Output"
+    os.makedirs(output_path, exist_ok=True)
 
 
-# =====================================================
-# 🚀 Main Execution
-# =====================================================
-def process_emails():
+# ------------------------------------------------------
+# 🧠 Helper Functions
+# ------------------------------------------------------
+def extract_date_from_filename(filename):
+    """Extract date from filename like '04-Apr-2025'."""
+    name_without_ext = os.path.splitext(filename)[0]
+    match = re.search(r"(\d{1,2}[- ]?[A-Za-z]{3,9}[- ]?\d{2,4})", name_without_ext)
+    if match:
+        return match.group(1).strip()
+    return "Unknown Date"
+
+
+def extract_email_body(msg_path):
+    """Extract the body text from a .msg file."""
+    msg = Message(msg_path)
+    body = msg.body or ""
+    return re.sub(r'\r\n', '\n', body).strip()
+
+
+def save_output_file(output_filename, text):
+    """Save file locally or in Dataiku using upload_stream()."""
     if USE_DATAIKU:
-        print("📦 Running in Dataiku mode...")
+        # ✅ Create a temporary file and upload to Dataiku
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".txt", delete=False, encoding="utf-8") as tmp_file:
+            tmp_file.write(text)
+            tmp_file.flush()
+            tmp_file.seek(0)
+            tmp_file_name = tmp_file.name
 
-        input_folder = dataiku.Folder(DATAIKU_INPUT_FOLDER_ID)
-        output_folder = dataiku.Folder(DATAIKU_OUTPUT_FOLDER_ID)
-        file_list = input_folder.list_paths_in_partition()
+        # Upload to Dataiku managed folder
+        with open(tmp_file_name, "rb") as f:
+            output_folder.upload_stream(output_filename, f)
 
-        if not file_list:
-            print("⚠️ No files found in Dataiku input folder.")
-            return
-
-        for file_path in file_list:
-            if not file_path.lower().endswith(".msg"):
-                continue
-
-            try:
-                # Read .msg file bytes
-                with input_folder.get_download_stream(file_path) as stream:
-                    file_bytes = stream.read()
-
-                # Extract email body
-                msg_body = extract_email_body(file_bytes)
-
-                # Create output name and temp file
-                base_name = os.path.splitext(os.path.basename(file_path))[0]
-                output_name = f"{base_name}.txt"
-
-                # ✅ Correct usage: upload_stream(path=..., f=...)
-                with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as tmp_file:
-                    tmp_file.write(msg_body)
-                    tmp_file_path = tmp_file.name
-
-                with open(tmp_file_path, "rb") as f:
-                    output_folder.upload_stream(path=output_name, f=f)
-
-                os.remove(tmp_file_path)
-                print(f"✅ Saved to Dataiku: {output_name}")
-
-            except Exception as e:
-                print(f"❌ Error processing {file_path}: {e}")
+        os.remove(tmp_file_name)
 
     else:
-        print("💻 Running in Local mode...")
-        os.makedirs(local_output_folder, exist_ok=True)
-        files = [f for f in os.listdir(local_input_folder) if f.lower().endswith(".msg")]
-
-        if not files:
-            print("⚠️ No .msg files found in local input folder.")
-            return
-
-        for filename in files:
-            try:
-                file_path = os.path.join(local_input_folder, filename)
-                msg = extract_msg.Message(file_path)
-                msg_body = msg.body or msg.bodyText or ""
-                msg_body = msg_body.replace("\r", "").replace("\x00", "")
-
-                output_path = os.path.join(local_output_folder, os.path.splitext(filename)[0] + ".txt")
-                with open(output_path, "w", encoding="utf-8") as f:
-                    f.write(msg_body)
-
-                print(f"✅ Saved locally: {os.path.basename(output_path)}")
-
-            except Exception as e:
-                print(f"❌ Error processing {filename}: {e}")
-
-    print("🎉 Conversion completed!")
+        # Local save
+        output_file_path = os.path.join(output_path, output_filename)
+        with open(output_file_path, "w", encoding="utf-8") as f:
+            f.write(text)
 
 
-# =====================================================
-# 🕒 Run Script
-# =====================================================
+# ------------------------------------------------------
+# 🚀 Main Processing
+# ------------------------------------------------------
+def main():
+    if USE_DATAIKU:
+        files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith(".msg")]
+    else:
+        files = [os.path.join(input_path, f) for f in os.listdir(input_path) if f.lower().endswith(".msg")]
+
+    if not files:
+        print("⚠️ No .msg files found in input folder.")
+        return
+
+    for file_path in files:
+        try:
+            filename = os.path.basename(file_path)
+            date_text = extract_date_from_filename(filename)
+            print(f"📧 Processing: {filename} ({date_text})")
+
+            if USE_DATAIKU:
+                # Download .msg file from Dataiku into temp file
+                with input_folder.get_download_stream(file_path) as stream:
+                    tmp_msg = tempfile.NamedTemporaryFile(delete=False, suffix=".msg")
+                    tmp_msg.write(stream.read())
+                    tmp_msg.close()
+                    msg_path = tmp_msg.name
+            else:
+                msg_path = file_path
+
+            # Extract email body
+            body_text = extract_email_body(msg_path)
+
+            if USE_DATAIKU:
+                os.remove(msg_path)
+
+            if not body_text.strip():
+                print(f"⚠️ No body text found in {filename}")
+                continue
+
+            output_filename = f"{os.path.splitext(filename)[0]}_body.txt"
+            save_output_file(output_filename, body_text)
+            print(f"✅ Saved: {output_filename}")
+
+        except Exception as e:
+            print(f"❌ Error processing {file_path}: {e}")
+
+
+# ------------------------------------------------------
 if __name__ == "__main__":
-    start_time = datetime.now()
-    print(f"🚀 Starting MSG → TXT conversion at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    process_emails()
-    print(f"⏱️ Completed in {(datetime.now() - start_time).total_seconds():.2f}s")
+    main()
