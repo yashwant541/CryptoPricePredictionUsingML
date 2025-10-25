@@ -1,19 +1,25 @@
 import os
 import io
 import extract_msg
-import dataiku  # available only in Dataiku
 from datetime import datetime
+
+# Try importing Dataiku if running there
+try:
+    import dataiku
+except ImportError:
+    dataiku = None
 
 # === CONFIGURATION ===
 USE_DATAIKU = True  # 🔁 Toggle between Dataiku (True) or Local (False)
 
-# === LOCAL PATHS (only used if USE_DATAIKU = False) ===
+# === LOCAL PATHS (used if USE_DATAIKU = False) ===
 local_input_folder = r"C:\Users\YourName\Desktop\Emails\Input"
 local_output_folder = r"C:\Users\YourName\Desktop\Emails\Output"
 
-# === DATAIKU FOLDER IDS (used only if USE_DATAIKU = True) ===
+# === DATAIKU FOLDER IDS (used if USE_DATAIKU = True) ===
 DATAIKU_INPUT_FOLDER_ID = "input_folder_id_here"
 DATAIKU_OUTPUT_FOLDER_ID = "output_folder_id_here"
+
 
 # === FUNCTION TO EXTRACT EMAIL BODY ===
 def extract_email_body(file_content: bytes) -> str:
@@ -22,6 +28,7 @@ def extract_email_body(file_content: bytes) -> str:
         msg = extract_msg.Message(f)
         body = msg.body or msg.bodyText or ""
         return body.replace('\r', '').replace('\x00', '')
+
 
 # === MAIN EXECUTION ===
 def process_emails():
@@ -44,15 +51,15 @@ def process_emails():
                 with input_folder.get_download_stream(file_path) as f:
                     file_bytes = f.read()
 
-                # Extract body
+                # Extract email body
                 msg_body = extract_email_body(file_bytes)
 
                 # Create output filename
                 base_name = os.path.splitext(os.path.basename(file_path))[0]
                 output_name = f"{base_name}.txt"
 
-                # Write to Dataiku output
-                with output_folder.upload_stream(output_name) as out:
+                # ✅ FIXED: correct usage of upload_stream()
+                with output_folder.upload_stream(path=output_name) as out:
                     out.write(msg_body.encode("utf-8"))
 
                 print(f"✅ Saved to Dataiku: {output_name}")
