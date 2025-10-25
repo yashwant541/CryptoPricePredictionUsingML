@@ -1,85 +1,117 @@
-import pandas as pd
-import dataiku
-import tempfile
 import os
+import io
+import tempfile
+import extract_msg
+from datetime import datetime
 
-# ------------------------------------------------------
-# 🔧 Configuration (replace with your Dataiku folder IDs)
-# ------------------------------------------------------
-input_folder = dataiku.Folder("pwBGEpop")      # Folder containing MakerChecker_Success.csv
-output_folder = dataiku.Folder("pwBGEpop")     # Folder to save consolidated output
+# Try importing Dataiku (skip if running locally)
+try:
+    import dataiku
+except ImportError:
+    dataiku = None
 
-# ------------------------------------------------------
+# =====================================================
+# ⚙️ CONFIGURATION
+# =====================================================
+USE_DATAIKU = True  # 🔁 Toggle between Dataiku (True) or Local (False)
+
+# --- Local paths (used if USE_DATAIKU = False)
+local_input_folder = r"C:\Users\YourName\Desktop\Emails\Input"
+local_output_folder = r"C:\Users\YourName\Desktop\Emails\Output"
+
+# --- Dataiku folder IDs (used if USE_DATAIKU = True)
+DATAIKU_INPUT_FOLDER_ID = "input_folder_id_here"
+DATAIKU_OUTPUT_FOLDER_ID = "output_folder_id_here"
+
+
+# =====================================================
 # 🧠 Helper Function
-# ------------------------------------------------------
-def consolidate_maker_checker(df):
-    """
-    Consolidate maker-checker info:
-    - Maker = user with Calculated/Proposed status
-    - Checker = user with Approved/Submitted status
-    - Each row per FileName + Benchmark + Date combination
-    - Status times separated into columns
-    """
-    pivot_df = df.pivot_table(
-        index=["FileName", "FileDate", "Benchmark", "Date (in file)"],
-        columns="Status",
-        values=["USER", "Status Time"],
-        aggfunc='first'
-    )
+# =====================================================
+def extract_email_body(file_content: bytes) -> str:
+    """Extract plain text body from .msg file bytes."""
+    with io.BytesIO(file_content) as f:
+        msg = extract_msg.Message(f)
+        body = msg.body or msg.bodyText or ""
+        return body.replace("\r", "").replace("\x00", "")
 
-    pivot_df.columns = [f"{col[0]} {col[1]}".strip() for col in pivot_df.columns.values]
-    pivot_df = pivot_df.reset_index()
 
-    pivot_df['Maker'] = pivot_df['USER Calculated'].combine_first(pivot_df['USER Proposed'])
-    pivot_df['Checker'] = pivot_df['USER Approved'].combine_first(pivot_df['USER Submitted'])
-
-    pivot_df = pivot_df.rename(columns={
-        'Status Time Calculated': 'Calculated Status Time',
-        'Status Time Proposed': 'Proposed Status Time',
-        'Status Time Approved': 'Approved Status Time',
-        'Status Time Submitted': 'Submitted Status Time'
-    })
-
-    pivot_df['USER'] = ""  # Blank as in your example
-
-    # Drop individual USER columns
-    pivot_df = pivot_df.drop(columns=['USER Calculated', 'USER Proposed', 'USER Approved', 'USER Submitted'])
-
-    # Reorder columns
-    cols = [
-        'FileName', 'FileDate', 'USER', 'Benchmark', 'Date (in file)',
-        'Maker', 'Checker',
-        'Calculated Status Time', 'Proposed Status Time', 'Approved Status Time', 'Submitted Status Time'
-    ]
-    pivot_df = pivot_df[cols]
-
-    return pivot_df
-
-# ------------------------------------------------------
+# =====================================================
 # 🚀 Main Execution
-# ------------------------------------------------------
-def main():
-    print("🔍 Reading MakerChecker_Success.csv from Dataiku input folder...")
+# =====================================================
+def process_emails():
+    if USE_DATAIKU:
+        print("📦 Running in Dataiku mode...")
 
-    files = [f for f in input_folder.list_paths_in_partition() if "MakerChecker_Success" in f]
-    if not files:
-        raise Exception("❌ MakerChecker_Success.csv not found in input folder.")
-    success_path = files[0]
+        input_folder = dataiku.Folder(DATAIKU_INPUT_FOLDER_ID)
+        output_folder = dataiku.Folder(DATAIKU_OUTPUT_FOLDER_ID)
+        file_list = input_folder.list_paths_in_partition()
 
-    with input_folder.get_download_stream(success_path) as stream:
-        df_success = pd.read_csv(stream)
+        if not file_list:
+            print("⚠️ No files found in Dataiku input folder.")
+            return
 
-    df_consolidated = consolidate_maker_checker(df_success)
+        for file_path in file_list:
+            if not file_path.lower().endswith(".msg"):
+                continue
 
-    # Save consolidated output
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-        df_consolidated.to_csv(tmp_file.name, index=False)
-        with open(tmp_file.name, "rb") as f:
-            output_folder.upload_stream("MakerChecker_Success_Consolidated.csv", f)
-        os.remove(tmp_file.name)
+            try:
+                with input_folder.get_download_stream(file_path) as stream:
+                    file_bytes = stream.read()
 
-    print(f"✅ Consolidation complete: {len(df_consolidated)} rows created.")
+                # Extract the body
+                msg_body = extract_email_body(file_bytes)
 
-# ------------------------------------------------------
+                # Create output name and temp file
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+                output_name = f"{base_name}.txt"
+
+                # ✅ Use tempfile + upload_stream() correctly
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as tmp_file:
+                    tmp_file.write(msg_body)
+                    tmp_file_path = tmp_file.name
+
+                with open(tmp_file_path, "rb") as f:
+                    output_folder.upload_stream(output_name, f)
+
+                os.remove(tmp_file_path)
+                print(f"✅ Saved to Dataiku: {output_name}")
+
+            except Exception as e:
+                print(f"❌ Error processing {file_path}: {e}")
+
+    else:
+        print("💻 Running in Local mode...")
+        os.makedirs(local_output_folder, exist_ok=True)
+        files = [f for f in os.listdir(local_input_folder) if f.lower().endswith(".msg")]
+
+        if not files:
+            print("⚠️ No .msg files found in local input folder.")
+            return
+
+        for filename in files:
+            try:
+                file_path = os.path.join(local_input_folder, filename)
+                msg = extract_msg.Message(file_path)
+                msg_body = msg.body or msg.bodyText or ""
+                msg_body = msg_body.replace("\r", "").replace("\x00", "")
+
+                output_path = os.path.join(local_output_folder, os.path.splitext(filename)[0] + ".txt")
+                with open(output_path, "w", encoding="utf-8") as f:
+                    f.write(msg_body)
+
+                print(f"✅ Saved locally: {os.path.basename(output_path)}")
+
+            except Exception as e:
+                print(f"❌ Error processing {filename}: {e}")
+
+    print("🎉 Conversion completed!")
+
+
+# =====================================================
+# 🕒 Run Script
+# =====================================================
 if __name__ == "__main__":
-    main()
+    start_time = datetime.now()
+    print(f"🚀 Starting MSG → TXT conversion at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    process_emails()
+    print(f"⏱️ Completed in {(datetime.now() - start_time).total_seconds():.2f}s")
