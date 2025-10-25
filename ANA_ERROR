@@ -1,95 +1,74 @@
-import os
 import pandas as pd
+import os
+import glob
 
-# === USER CONFIGURATION ===
-use_dataiku = False  # True = Dataiku mode, False = local mode
+# ------------------ USER CONFIG ------------------
+DATAIKU_MODE = False  # Set True if running in Dataiku
+input_folder = r"your_input_folder_path"   # Used if DATAIKU_MODE=False
+output_folder = r"your_output_folder_path" # Used if DATAIKU_MODE=False
+# -------------------------------------------------
 
-# Local paths
-input_folder = r"C:\path\to\txt_files"
-output_folder = r"C:\path\to\output_folder"
-
-# Dataiku folders
-dataiku_input_name = "input_folder"
-dataiku_output_name = "output_folder"
-
-# Keywords to extract
-keywords = ["AVERAGE ATM VOL", "TEXT B", "TEXT C"]
-
-# ===========================
-
-if use_dataiku:
+if DATAIKU_MODE:
     import dataiku
-    input_folder_handle = dataiku.Folder(dataiku_input_name)
-    output_folder_handle = dataiku.Folder(dataiku_output_name)
+    input_folder = dataiku.Folder("INPUT_FOLDER_ID").get_path()
+    output_folder_obj = dataiku.Folder("OUTPUT_FOLDER_ID")
+    output_folder_obj_path = output_folder_obj.get_path()
+    os.makedirs(output_folder_obj_path, exist_ok=True)
 
-def extract_keyword_values_from_line(line, keyword):
-    parts = line.strip().split(keyword, 1)
-    if len(parts) > 1:
-        values_part = parts[1].strip()
-        values = [v for v in values_part.split() if v.strip()]
-        return values
-    return None
+# Define mapping of tenures to Val columns
+tenure_mapping = {
+    '1 Week': ['Val1', 'Val2'],
+    '1 Month': ['Val3', 'Val4'],
+    '3 Months': ['Val5', 'Val6'],
+    '6 Months': ['Val7', 'Val8'],
+    '1 Year': ['Val9', 'Val10']
+}
 
-def process_single_file(file_path, keywords, folder_handle=None):
-    # Read file lines
-    if folder_handle:
-        with folder_handle.get_download_stream(file_path) as f:
-            lines = f.read().decode("utf-8", errors="ignore").splitlines()
+def process_row(row):
+    if row.name == 0:  # Only first row (AVERAGE ATM VOL) is averaged
+        new_row = {'Keyword': row['Keyword']}
+        for tenure, vals in tenure_mapping.items():
+            nums = pd.to_numeric(row[vals], errors='coerce')
+            new_row[tenure] = nums.mean()
+        return pd.Series(new_row)
     else:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            lines = f.readlines()
-    
-    extracted_data = []
-    for keyword in keywords:
-        for line in lines:
-            if keyword in line:
-                values = extract_keyword_values_from_line(line, keyword)
-                if values:
-                    extracted_data.append([keyword] + values)
-                break
-    return extracted_data
+        # For other rows, take first non-empty value in each Val pair
+        new_row = {'Keyword': row['Keyword']}
+        for tenure, vals in tenure_mapping.items():
+            for val in vals:
+                if row[val] not in ['', None]:
+                    new_row[tenure] = row[val]
+                    break
+        return pd.Series(new_row)
 
-# === MAIN EXECUTION ===
-if __name__ == "__main__":
-    print("🚀 Starting keyword extraction per file...")
+# ------------------ PROCESS FILES ------------------
+for file_path in glob.glob(os.path.join(input_folder, "*.xlsx")):
+    try:
+        df = pd.read_excel(file_path)
+        df_processed = df.apply(process_row, axis=1)
+        df_long = df_processed.melt(id_vars='Keyword', var_name='Tenure', value_name='Value')
 
-    if use_dataiku:
-        file_list = input_folder_handle.list_paths_in_partition()
-        txt_files = [fp for fp in file_list if fp.lower().endswith(".txt")]
-        print(f"📁 Found {len(txt_files)} TXT files in Dataiku folder.")
+        if DATAIKU_MODE:
+            # Save wide format
+            wide_name = os.path.basename(file_path)
+            wide_file_path = os.path.join(output_folder_obj_path, wide_name)
+            df_processed.to_excel(wide_file_path, index=False)
+            output_folder_obj.upload_stream(wide_file_path, wide_name)
 
-        for file_path in txt_files:
-            data = process_single_file(file_path, keywords, folder_handle=input_folder_handle)
-            if not data:
-                print(f"⚠️ No keywords found in {file_path}. Skipping.")
-                continue
-            
-            max_len = max(len(row) for row in data)
-            columns = ["Keyword"] + [f"Val{i}" for i in range(1, max_len)]
-            df = pd.DataFrame(data, columns=columns)
+            # Save long format
+            long_name = os.path.splitext(os.path.basename(file_path))[0] + "_long.xlsx"
+            long_file_path = os.path.join(output_folder_obj_path, long_name)
+            df_long.to_excel(long_file_path, index=False)
+            output_folder_obj.upload_stream(long_file_path, long_name)
 
-            # Save with original file name
-            output_path = os.path.join("/tmp", os.path.basename(file_path).replace(".txt", ".xlsx"))
-            df.to_excel(output_path, index=False)
-            with open(output_path, "rb") as f:
-                output_folder_handle.upload_stream(os.path.basename(file_path).replace(".txt", ".xlsx"), f)
-            print(f"✅ Processed {file_path} -> uploaded {os.path.basename(output_path)}")
+        else:
+            # Local save
+            wide_output_path = os.path.join(output_folder, os.path.basename(file_path))
+            df_processed.to_excel(wide_output_path, index=False)
 
-    else:
-        txt_files = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.lower().endswith(".txt")]
-        print(f"📁 Found {len(txt_files)} TXT files in local folder.")
+            long_output_path = os.path.join(output_folder, os.path.splitext(os.path.basename(file_path))[0] + "_long.xlsx")
+            df_long.to_excel(long_output_path, index=False)
 
-        for file_path in txt_files:
-            data = process_single_file(file_path, keywords)
-            if not data:
-                print(f"⚠️ No keywords found in {file_path}. Skipping.")
-                continue
-            
-            max_len = max(len(row) for row in data)
-            columns = ["Keyword"] + [f"Val{i}" for i in range(1, max_len)]
-            df = pd.DataFrame(data, columns=columns)
-
-            # Save with original file name
-            output_file_path = os.path.join(output_folder, os.path.basename(file_path).replace(".txt", ".xlsx"))
-            df.to_excel(output_file_path, index=False)
-            print(f"✅ Processed {file_path} -> saved {output_file_path}")
+        print(f"Processed: {os.path.basename(file_path)}")
+    except Exception as e:
+        print(f"Error processing {file_path}: {e}")
