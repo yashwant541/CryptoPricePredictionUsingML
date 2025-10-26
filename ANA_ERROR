@@ -17,22 +17,19 @@ else:
     match_folder_path = r"C:\path\to\match"
     notmatch_folder_path = r"C:\path\to\notmatch"
 
-# ------------------------------------------------------
-# 🧩 Helper function
-# ------------------------------------------------------
 def process_file(file_path, file_name):
     df = pd.read_csv(file_path)
 
     # --- Define column pair mappings ---
     mappings = [
         ("AB1", "C1"),
-        ("AB1 Category", "C1 Category"),
-        ("AB2", "C2"),
-        ("AB2 Category", "C2 Category"),
-        ("AB3", "C3"),
-        ("AB3 Category", "C3 Category"),
-        ("AB4", "C4"),
-        ("AB4 Category", "C4 Category")
+        ("AB1 Category", "C111"),
+        ("AB2", "C11"),
+        ("AB2 Category", "C111"),
+        ("AB3", "C2"),
+        ("AB3 Category", "C2 Category"),
+        ("AB4", "C3"),
+        ("AB4 Category", "C3 Category")
     ]
 
     match_rows = []
