@@ -1,127 +1,123 @@
-import pandas as pd
-import dataiku
-import tempfile
 import os
+import pandas as pd
+import numpy as np
 
 # ------------------------------------------------------
-# 🔧 Configuration (replace with your Dataiku folder IDs)
+# ⚙️ Configuration
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXX")      # Folder containing the Excel files
-output_folder = dataiku.Folder("XXXXXXX")    # Folder to save consolidated output
+
+dataiku_mode = False  # 🔄 Set True if running inside Dataiku
+
+if dataiku_mode:
+    import dataiku
+    input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")
+    output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")
+    input_path = input_folder.get_path()
+    output_path = output_folder.get_path()
+else:
+    # Local paths
+    input_path = r"C:\path\to\input_folder"
+    output_path = r"C:\path\to\output_folder"
+
+# Define mappings manually
+A_cols = ["A1_colname", "A2_colname", "A3_colname", "A4_colname"]
+B_cols = ["B1_colname", "B2_colname", "B3_colname", "B4_colname"]
+
+# List of tuples for C columns (column name, category column name)
+C_cols = [
+    ("C1_colname", "C1_category_colname"),
+    ("C2_colname", "C2_category_colname"),
+    ("C3_colname", "C3_category_colname"),
+    ("C4_colname", "C4_category_colname")
+]
 
 # ------------------------------------------------------
 # 🧠 Helper Functions
 # ------------------------------------------------------
-def extract_country_date(filename):
-    """
-    Extract country code and file date from filename.
-    Assumes filename format: ORIGAMI_XXX_COUNTRY_FILEDATE_XXXXX.xlsx
-    """
-    parts = filename.split("_")
-    country = parts[2] if len(parts) > 2 else ""
-    file_date = parts[3] if len(parts) > 3 else ""
-    return country, file_date
 
-def read_excel_safe(file_path):
-    """
-    Read an Excel file safely:
-    - Tries openpyxl for .xlsx
-    - Uses pyxlsb for .xlsb or binary Excel
-    """
-    try:
-        if file_path.endswith('.xlsb'):
-            return pd.read_excel(file_path, engine='pyxlsb')
+def pick_value(a_val, b_val):
+    """Pick A if valid, else B. Return (value, source_tag)."""
+    if pd.notna(a_val) and str(a_val).strip().upper() not in ["N/A", "NA", "NONE", "NULL", ""]:
+        return a_val, "D-1"
+    elif pd.notna(b_val) and str(b_val).strip().upper() not in ["N/A", "NA", "NONE", "NULL", ""]:
+        return b_val, "D-4"
+    else:
+        return np.nan, np.nan
+
+def process_file(file_path, output_folder):
+    """Process one input file and save the transformed output."""
+    filename = os.path.basename(file_path)
+    print(f"🔹 Processing: {filename}")
+
+    # Read file (csv or excel)
+    if file_path.lower().endswith(".csv"):
+        df = pd.read_csv(file_path)
+    elif file_path.lower().endswith((".xlsx", ".xls")):
+        df = pd.read_excel(file_path)
+    else:
+        print(f"⚠️ Skipped unsupported file type: {filename}")
+        return
+
+    # Ensure Category and Tenor exist
+    if not all(col in df.columns for col in ["Category", "Tenor"]):
+        print(f"⚠️ Skipped (missing 'Category' or 'Tenor'): {filename}")
+        return
+
+    # Create new dataframe
+    output_df = df[["Category", "Tenor"]].copy()
+
+    # Compare A/B columns
+    for i, (a_col, b_col) in enumerate(zip(A_cols, B_cols), start=1):
+        if a_col not in df.columns or b_col not in df.columns:
+            print(f"⚠️ Missing A/B columns ({a_col}, {b_col}) in {filename}")
+            output_df[f"AB{i}"] = np.nan
+            output_df[f"AB{i} Category"] = np.nan
+            continue
+
+        values, sources = zip(*[pick_value(a, b) for a, b in zip(df[a_col], df[b_col])])
+        output_df[f"AB{i}"] = values
+        output_df[f"AB{i} Category"] = sources
+
+    # Add C columns
+    for i, (c_val, c_cat) in enumerate(C_cols, start=1):
+        if c_val in df.columns and c_cat in df.columns:
+            output_df[f"C{i}"] = df[c_val]
+            output_df[f"C{i} Category"] = df[c_cat]
         else:
-            return pd.read_excel(file_path, engine='openpyxl')
-    except Exception:
-        # fallback for mis-labeled binary xlsx
-        try:
-            return pd.read_excel(file_path, engine='pyxlsb')
-        except Exception as e2:
-            raise Exception(f"Failed to read Excel file '{file_path}': {e2}")
+            output_df[f"C{i}"] = np.nan
+            output_df[f"C{i} Category"] = np.nan
 
-def process_file(file_path, file_name):
-    """
-    Transform Excel table to long format:
-    FileName | Country | FileDate | Tenure | Rate | Factor | Rationale | Final Rate
-    """
-    df = read_excel_safe(file_path)
-    country, file_date = extract_country_date(file_name)
-    tenures = df.columns[1:]  # All columns after 'Determining Factor'
+    # Save output
+    output_file = os.path.join(
+        output_folder,
+        os.path.splitext(filename)[0] + "_final" + os.path.splitext(filename)[1]
+    )
 
-    output_rows = []
+    if output_file.lower().endswith(".csv"):
+        output_df.to_csv(output_file, index=False)
+    else:
+        output_df.to_excel(output_file, index=False)
 
-    for col in tenures:
-        col_values = df[col].tolist()
-        rate = None
-        factor = None
+    print(f"✅ Saved: {output_file}")
 
-        # Pick first non-N/A value from rows 2-6 (index 1-5)
-        for idx in range(1, 6):
-            val = col_values[idx]
-            if pd.notna(val) and str(val).strip().upper() != "N/A":
-                rate = val
-                factor = idx+1  # subtract 1 if needed
-                break
-
-        # Rationale
-        rationale_row = df[df.iloc[:, 0] == "Rational for Proposing the Adjustment"]
-        rationale = rationale_row.iloc[0, df.columns.get_loc(col)] if not rationale_row.empty else ""
-
-        # Final Rate
-        final_rate_row = df[df.iloc[:, 0] == "Final Rate"]
-        final_rate = final_rate_row.iloc[0, df.columns.get_loc(col)] if not final_rate_row.empty else ""
-
-        output_rows.append({
-            "FileName": file_name,
-            "Country": country,
-            "FileDate": file_date,
-            "Tenure": col,
-            "Rate": rate,
-            "Factor": factor,
-            "Rationale": rationale,
-            "Final Rate": final_rate
-        })
-
-    return output_rows
 
 # ------------------------------------------------------
-# 🚀 Main Execution
+# 🚀 Main Runner
 # ------------------------------------------------------
+
 def main():
-    print("🔍 Reading Excel files from Dataiku input folder...")
+    os.makedirs(output_path, exist_ok=True)
+    files = [f for f in os.listdir(input_path) if f.lower().endswith((".csv", ".xlsx", ".xls"))]
 
-    # List all Excel files in the Dataiku input folder
-    excel_files = [f for f in input_folder.list_paths_in_partition() if f.endswith(('.xlsx', '.xlsb'))]
-    if not excel_files:
-        raise Exception("❌ No Excel files found in input folder.")
+    if not files:
+        print("⚠️ No input files found.")
+        return
 
-    all_data = []
+    for f in files:
+        process_file(os.path.join(input_path, f), output_path)
 
-    for file_path in excel_files:
-        file_name = os.path.basename(file_path)
-        with input_folder.get_download_stream(file_path) as stream:
-            # Save temporary local copy to read
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp_file:
-                tmp_file.write(stream.read())
-                tmp_file_path = tmp_file.name
+    print("\n🎉 All files processed successfully!")
 
-        # Process file
-        all_data.extend(process_file(tmp_file_path, file_name))
-        os.remove(tmp_file_path)
 
-    # Convert to DataFrame
-    output_df = pd.DataFrame(all_data)
-
-    # Save consolidated output to Dataiku folder
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-        output_df.to_csv(tmp_file.name, index=False)
-        with open(tmp_file.name, "rb") as f:
-            output_folder.upload_stream("Excel_Long_Format_Consolidated.csv", f)
-        os.remove(tmp_file.name)
-
-    print(f"✅ Processing complete: {len(output_df)} rows created.")
-
-# ------------------------------------------------------
 if __name__ == "__main__":
     main()
