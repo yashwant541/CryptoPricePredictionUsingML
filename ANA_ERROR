@@ -4,7 +4,7 @@ import io
 import dataiku
 
 # ------------------------------------------------------
-# ⚙️ Configuration
+# ⚙️ CONFIGURATION
 # ------------------------------------------------------
 use_dataiku = True  # 🔄 Switch between Dataiku and local
 
@@ -23,7 +23,7 @@ else:
 def process_file(file_path, file_name):
     df = pd.read_csv(file_path)
 
-    # Define mapping pairs (you can adjust)
+    # --- Define column pair mappings ---
     mappings = [
         ("AB1", "C1"),
         ("AB1 Category", "C1 Category"),
@@ -48,29 +48,35 @@ def process_file(file_path, file_name):
                     is_match = False
                     break
         if is_match:
-            match_rows.append(row)
+            match_rows.append(row.to_dict())
         else:
-            notmatch_rows.append(row)
+            notmatch_rows.append(row.to_dict())
 
     match_df = pd.DataFrame(match_rows)
     notmatch_df = pd.DataFrame(notmatch_rows)
 
-    # ✅ Save to Dataiku or local
-    if use_dataiku:
-        # Save match file
-        match_buffer = io.StringIO()
-        match_df.to_csv(match_buffer, index=False)
-        match_folder.upload_stream(file_name, io.BytesIO(match_buffer.getvalue().encode("utf-8")))
+    # File names with suffix
+    match_file_name = os.path.splitext(file_name)[0] + "_match.csv"
+    notmatch_file_name = os.path.splitext(file_name)[0] + "_notmatch.csv"
 
-        # Save notmatch file
-        notmatch_buffer = io.StringIO()
-        notmatch_df.to_csv(notmatch_buffer, index=False)
-        notmatch_folder.upload_stream(file_name, io.BytesIO(notmatch_buffer.getvalue().encode("utf-8")))
+    # ✅ Save only if there are rows
+    if use_dataiku:
+        if not match_df.empty:
+            buffer = io.StringIO()
+            match_df.to_csv(buffer, index=False)
+            match_folder.upload_stream(match_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
+
+        if not notmatch_df.empty:
+            buffer = io.StringIO()
+            notmatch_df.to_csv(buffer, index=False)
+            notmatch_folder.upload_stream(notmatch_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
     else:
         os.makedirs(match_folder_path, exist_ok=True)
         os.makedirs(notmatch_folder_path, exist_ok=True)
-        match_df.to_csv(os.path.join(match_folder_path, file_name), index=False)
-        notmatch_df.to_csv(os.path.join(notmatch_folder_path, file_name), index=False)
+        if not match_df.empty:
+            match_df.to_csv(os.path.join(match_folder_path, match_file_name), index=False)
+        if not notmatch_df.empty:
+            notmatch_df.to_csv(os.path.join(notmatch_folder_path, notmatch_file_name), index=False)
 
     print(f"✅ {file_name}: {len(match_df)} matched, {len(notmatch_df)} not matched")
 
