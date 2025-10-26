@@ -47,9 +47,9 @@ def process_file(file_path, file_name):
     else:
         df = pd.read_excel(file_path, engine="openpyxl")
 
+    # Only first column is Tenor now
     output = pd.DataFrame()
-    output["Category"] = df["Category"]
-    output["Tenor"] = df["Tenor"]
+    output["Tenor"] = df.iloc[:, 0]
 
     # Compare A/B columns and mark source
     for i in range(1, 5):
@@ -64,8 +64,11 @@ def process_file(file_path, file_name):
             output[ab_cat_col] = None
             continue
 
-        output[ab_col] = df[a_col].where(df[a_col].notna() & (df[a_col].astype(str).str.upper() != "N/A"),
-                                         df[b_col])
+        # Pick A if valid, else B
+        output[ab_col] = df[a_col].where(
+            df[a_col].notna() & (df[a_col].astype(str).str.upper() != "N/A"),
+            df[b_col]
+        )
         output[ab_cat_col] = df[a_col].apply(
             lambda x: "D-1" if pd.notna(x) and str(x).strip().upper() != "N/A" else "D-4"
         )
@@ -97,7 +100,7 @@ def main():
                 tmp.write(stream.read())
                 tmp_path = tmp.name
 
-        # Process and save output
+        # Process and save output individually
         processed_df = process_file(tmp_path, file_name)
         processed_filename = os.path.splitext(file_name)[0] + "_Processed.csv"
 
