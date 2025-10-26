@@ -6,8 +6,8 @@ import os
 # ------------------------------------------------------
 # 🔧 Configuration (replace with your Dataiku folder IDs)
 # ------------------------------------------------------
-input_folder = dataiku.Folder("OfihbxF6")      # Folder containing the Excel files
-output_folder = dataiku.Folder("jId6ot39")    # Folder to save consolidated output
+input_folder = dataiku.Folder("XXXXXXX")      # Folder containing the Excel files
+output_folder = dataiku.Folder("XXXXXXX")    # Folder to save consolidated output
 
 # ------------------------------------------------------
 # 🧠 Helper Functions
