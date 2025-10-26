@@ -6,76 +6,51 @@ import dataiku
 # ------------------------------------------------------
 # ⚙️ CONFIGURATION
 # ------------------------------------------------------
-use_dataiku = True  # 🔄 Switch between Dataiku and local
+use_dataiku = True  # True = Dataiku, False = Local
 
 if use_dataiku:
-    input_folder = dataiku.Folder("INPUT_FOLDER_ID")       # Input CSV files
-    match_folder = dataiku.Folder("MATCH_FOLDER_ID")       # For matched output
-    notmatch_folder = dataiku.Folder("NOTMATCH_FOLDER_ID") # For unmatched output
+    input_folder = dataiku.Folder("MATCH_FOLDER_ID")  # input match files
+    output_folder = dataiku.Folder("FINAL_FOLDER_ID") # processed output
 else:
-    input_folder_path = r"C:\path\to\input"
-    match_folder_path = r"C:\path\to\match"
-    notmatch_folder_path = r"C:\path\to\notmatch"
+    input_folder_path = r"C:\path\to\match_files"
+    output_folder_path = r"C:\path\to\final_files"
 
-def process_file(file_path, file_name):
+# ------------------------------------------------------
+# 🧠 Helper Function
+# ------------------------------------------------------
+def process_match_file(file_path, file_name):
     df = pd.read_csv(file_path)
 
-    # --- Define column pair mappings ---
-    mappings = [
-        ("AB1", "C1"),
-        ("AB1 Category", "C111"),
-        ("AB2", "C11"),
-        ("AB2 Category", "C111"),
-        ("AB3", "C2"),
-        ("AB3 Category", "C2 Category"),
-        ("AB4", "C3"),
-        ("AB4 Category", "C3 Category")
-    ]
+    # Keep only the C columns
+    columns_to_keep = {
+        "C1": "ATM Ask",
+        "C2": "ATM Bid",
+        "C3": "25d RR Mid",
+        "C4": "25d BF Mid",
+        "C1 Category": "ATM Ask Category",
+        "C2 Category": "ATM Bid Category",
+        "C3 Category": "25d RR Mid Category",
+        "C4 Category": "25d BF Mid Category",
+        "Tenor": "Tenor"  # keep Tenor for reference
+    }
 
-    match_rows = []
-    notmatch_rows = []
+    # Filter existing columns only
+    df_filtered = df[[col for col in columns_to_keep if col in df.columns]].copy()
 
-    for _, row in df.iterrows():
-        is_match = True
-        for col_a, col_b in mappings:
-            if col_a in df.columns and col_b in df.columns:
-                val_a = str(row[col_a]).strip() if not pd.isna(row[col_a]) else ""
-                val_b = str(row[col_b]).strip() if not pd.isna(row[col_b]) else ""
-                if val_a != val_b:
-                    is_match = False
-                    break
-        if is_match:
-            match_rows.append(row.to_dict())
-        else:
-            notmatch_rows.append(row.to_dict())
+    # Rename columns
+    df_filtered.rename(columns=columns_to_keep, inplace=True)
 
-    match_df = pd.DataFrame(match_rows)
-    notmatch_df = pd.DataFrame(notmatch_rows)
-
-    # File names with suffix
-    match_file_name = os.path.splitext(file_name)[0] + "_match.csv"
-    notmatch_file_name = os.path.splitext(file_name)[0] + "_notmatch.csv"
-
-    # ✅ Save only if there are rows
+    # Save output
+    output_file_name = file_name
     if use_dataiku:
-        if not match_df.empty:
-            buffer = io.StringIO()
-            match_df.to_csv(buffer, index=False)
-            match_folder.upload_stream(match_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
-
-        if not notmatch_df.empty:
-            buffer = io.StringIO()
-            notmatch_df.to_csv(buffer, index=False)
-            notmatch_folder.upload_stream(notmatch_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
+        buffer = io.StringIO()
+        df_filtered.to_csv(buffer, index=False)
+        output_folder.upload_stream(output_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
     else:
-        os.makedirs(match_folder_path, exist_ok=True)
-        os.makedirs(notmatch_folder_path, exist_ok=True)
-        if not match_df.empty:
-            match_df.to_csv(os.path.join(match_folder_path, match_file_name), index=False)
-        if not notmatch_df.empty:
-            notmatch_df.to_csv(os.path.join(notmatch_folder_path, notmatch_file_name), index=False)
+        os.makedirs(output_folder_path, exist_ok=True)
+        df_filtered.to_csv(os.path.join(output_folder_path, output_file_name), index=False)
 
-    print(f"✅ {file_name}: {len(match_df)} matched, {len(notmatch_df)} not matched")
+    print(f"✅ Processed {file_name}, kept columns: {list(df_filtered.columns)}")
 
 # ------------------------------------------------------
 # 🚀 Main Execution
@@ -85,11 +60,11 @@ if use_dataiku:
         if path.endswith(".csv"):
             file_name = os.path.basename(path)
             with input_folder.get_download_stream(path) as f:
-                df = pd.read_csv(f)
+                temp_df = pd.read_csv(f)
                 temp_path = f"/tmp/{file_name}"
-                df.to_csv(temp_path, index=False)
-                process_file(temp_path, file_name)
+                temp_df.to_csv(temp_path, index=False)
+                process_match_file(temp_path, file_name)
 else:
     for filename in os.listdir(input_folder_path):
         if filename.endswith(".csv"):
-            process_file(os.path.join(input_folder_path, filename), filename)
+            process_match_file(os.path.join(input_folder_path, filename), filename)
