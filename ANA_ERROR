@@ -10,7 +10,7 @@ input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")
 output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")
 
 # ------------------------------------------------------
-# 🏷️ Column Mappings (fill these in manually)
+# 🏷️ Column Mappings (fill these manually)
 # ------------------------------------------------------
 A_columns = {
     "A1": "ColumnName_A1",
@@ -42,16 +42,17 @@ C_columns = {
 # ------------------------------------------------------
 def process_file(file_path, file_name):
     """Reads a file, applies A/B logic, and returns processed DataFrame."""
+    # Read file
     if file_path.endswith(".csv"):
         df = pd.read_csv(file_path)
     else:
         df = pd.read_excel(file_path, engine="openpyxl")
 
-    # Only first column is Tenor now
+    # Only first column is Tenor
     output = pd.DataFrame()
     output["Tenor"] = df.iloc[:, 0]
 
-    # Compare A/B columns and mark source
+    # Process A/B columns and mark source
     for i in range(1, 5):
         a_col = A_columns.get(f"A{i}")
         b_col = B_columns.get(f"B{i}")
@@ -86,7 +87,7 @@ def process_file(file_path, file_name):
 def main():
     print("🔍 Reading input files from Dataiku folder...")
 
-    # Collect all supported files
+    # List all supported files
     input_files = [f for f in input_folder.list_paths_in_partition() if f.endswith(('.csv', '.xlsx'))]
     if not input_files:
         raise Exception("❌ No input files found in input folder.")
@@ -95,15 +96,17 @@ def main():
         file_name = os.path.basename(file_path)
         print(f"📂 Processing file: {file_name}")
 
+        # Download temp copy
         with input_folder.get_download_stream(file_path) as stream:
             with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp:
                 tmp.write(stream.read())
                 tmp_path = tmp.name
 
-        # Process and save output individually
+        # Process file
         processed_df = process_file(tmp_path, file_name)
-        processed_filename = os.path.splitext(file_name)[0] + "_Processed.csv"
 
+        # Save output individually
+        processed_filename = os.path.splitext(file_name)[0] + "_Processed.csv"
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_out:
             processed_df.to_csv(tmp_out.name, index=False)
             with open(tmp_out.name, "rb") as f:
