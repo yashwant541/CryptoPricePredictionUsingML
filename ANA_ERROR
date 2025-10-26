@@ -1,7 +1,7 @@
 import pandas as pd
 import os
 import tempfile
-import re
+import numpy as np
 from datetime import datetime
 
 # Try importing Dataiku (skip if running locally)
@@ -23,130 +23,144 @@ local_output_folder = r"C:\Users\YourName\Desktop\Output"
 DATAIKU_INPUT_FOLDER_ID = "input_folder_id_here"
 DATAIKU_OUTPUT_FOLDER_ID = "output_folder_id_here"
 
-# --- Tenure mapping
-tenure_mapping = {
-    '1 Week': ['Val1', 'Val2'],
-    '1 Month': ['Val3', 'Val4'],
-    '3 Months': ['Val5', 'Val6'],
-    '6 Months': ['Val7', 'Val8'],
-    '1 Year': ['Val9', 'Val10']
-}
+# --- Column Mapping (manually define)
+A_cols = ["A1_colname", "A2_colname", "A3_colname", "A4_colname"]
+B_cols = ["B1_colname", "B2_colname", "B3_colname", "B4_colname"]
+
+# List of tuples for C columns (column name, category column name)
+C_cols = [
+    ("C1_colname", "C1_category_colname"),
+    ("C2_colname", "C2_category_colname"),
+    ("C3_colname", "C3_category_colname"),
+    ("C4_colname", "C4_category_colname")
+]
 
 # =====================================================
 # 🧠 Helper Functions
 # =====================================================
-def extract_date_from_filename(filename):
-    """Extract date from filename between 'on' and 'of'."""
-    print(f"🔹 Processing filename: {filename}")
-    match = re.search(r'on\s+(\d{1,2}-[A-Za-z]{3}-\d{4})\s+of', filename, re.IGNORECASE)
-    if match:
-        date_str = match.group(1)
-        print(f"✅ Extracted date: {date_str}")
-        return date_str
+
+def pick_value(a_val, b_val):
+    """Pick A if valid, else B. Return (value, source_tag)."""
+    if pd.notna(a_val) and str(a_val).strip().upper() not in ["N/A", "NA", "NONE", "NULL", ""]:
+        return a_val, "D-1"
+    elif pd.notna(b_val) and str(b_val).strip().upper() not in ["N/A", "NA", "NONE", "NULL", ""]:
+        return b_val, "D-4"
     else:
-        print("⚠️ Date not found in filename.")
-        return None
+        return np.nan, np.nan
+
 
 def transform_table(df):
-    """Transform table to Tenure columns with averaging for first row only."""
-    new_rows = []
-    for idx, row in df.iterrows():
-        new_row = {'Keyword': row['Keyword']}
-        if row['Keyword'] == 'AVERAGE ATM VOL':
-            # Take average of pairs
-            for tenure, vals in tenure_mapping.items():
-                nums = pd.to_numeric(row[vals], errors='coerce')
-                new_row[tenure] = nums.mean()
-        else:
-            # Map first 5 columns Val1–Val5 → Tenures
-            new_row['1 Week'] = row.get('Val1', None)
-            new_row['1 Month'] = row.get('Val2', None)
-            new_row['3 Months'] = row.get('Val3', None)
-            new_row['6 Months'] = row.get('Val4', None)
-            new_row['1 Year'] = row.get('Val5', None)
-        new_rows.append(new_row)
-    return pd.DataFrame(new_rows)
+    """Perform A/B comparison and return transformed DataFrame."""
+    if not all(col in df.columns for col in ["Category", "Tenor"]):
+        raise ValueError("Input file missing 'Category' or 'Tenor' columns.")
 
-def process_file(file_path, original_filename=None):
-    """Process Excel file → transformed → long format → add Date column."""
-    df = pd.read_excel(file_path, engine="openpyxl")
-    df_transformed = transform_table(df)
-    df_long = df_transformed.melt(id_vars='Keyword', var_name='Tenure', value_name='Value')
+    result = df[["Category", "Tenor"]].copy()
 
-    # Use original filename for date extraction
-    filename_for_date = original_filename if original_filename else file_path
-    file_date = extract_date_from_filename(os.path.basename(filename_for_date))
-    df_long['Date'] = file_date
-    return df_long
+    # A/B comparison logic
+    for i, (a_col, b_col) in enumerate(zip(A_cols, B_cols), start=1):
+        if a_col not in df.columns or b_col not in df.columns:
+            result[f"AB{i}"] = np.nan
+            result[f"AB{i} Category"] = np.nan
+            continue
+        values, sources = zip(*[pick_value(a, b) for a, b in zip(df[a_col], df[b_col])])
+        result[f"AB{i}"] = values
+        result[f"AB{i} Category"] = sources
+
+    # Add C columns
+    for i, (c_val, c_cat) in enumerate(C_cols, start=1):
+        result[f"C{i}"] = df[c_val] if c_val in df.columns else np.nan
+        result[f"C{i} Category"] = df[c_cat] if c_cat in df.columns else np.nan
+
+    return result
+
+
+def process_file(file_path):
+    """Read and transform a single file."""
+    filename = os.path.basename(file_path)
+    print(f"🔹 Processing: {filename}")
+
+    # Read file
+    if file_path.lower().endswith(".csv"):
+        df = pd.read_csv(file_path)
+    elif file_path.lower().endswith((".xlsx", ".xls")):
+        df = pd.read_excel(file_path)
+    else:
+        raise ValueError("Unsupported file format")
+
+    transformed_df = transform_table(df)
+    return transformed_df
+
 
 # =====================================================
 # 🚀 Main Execution
 # =====================================================
 def main():
     start_time = datetime.now()
-    print(f"🚀 Starting Excel → Consolidated Tenure Table at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-
-    combined_long = []
+    print(f"🚀 Starting A/B Comparison Processing at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     if USE_DATAIKU:
         print("📦 Running in Dataiku mode...")
         input_folder_obj = dataiku.Folder(DATAIKU_INPUT_FOLDER_ID)
         output_folder_obj = dataiku.Folder(DATAIKU_OUTPUT_FOLDER_ID)
-        input_files = [f for f in input_folder_obj.list_paths_in_partition() if f.lower().endswith(".xlsx")]
+        input_files = [f for f in input_folder_obj.list_paths_in_partition() if f.lower().endswith((".csv", ".xlsx", ".xls"))]
 
         if not input_files:
-            print("⚠️ No Excel files found in Dataiku input folder.")
+            print("⚠️ No input files found in Dataiku input folder.")
             return
 
         for file_path in input_files:
             try:
-                # Download to temporary file
                 with input_folder_obj.get_download_stream(file_path) as stream:
-                    with tempfile.NamedTemporaryFile(mode="wb", suffix=".xlsx", delete=False) as tmp_file:
+                    suffix = ".csv" if file_path.lower().endswith(".csv") else ".xlsx"
+                    with tempfile.NamedTemporaryFile(mode="wb", suffix=suffix, delete=False) as tmp_file:
                         tmp_file.write(stream.read())
                         tmp_file_path = tmp_file.name
 
-                # Pass original filename for date extraction
-                df_long = process_file(tmp_file_path, original_filename=file_path)
-                combined_long.append(df_long)
+                transformed_df = process_file(tmp_file_path)
+
+                # Save to temp and upload
+                output_name = os.path.splitext(os.path.basename(file_path))[0] + "_final.csv"
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as tmp_csv:
+                    transformed_df.to_csv(tmp_csv.name, index=False)
+                    tmp_csv_path = tmp_csv.name
+
+                output_folder_obj.upload_stream(output_name, open(tmp_csv_path, "rb"))
                 os.remove(tmp_file_path)
+                os.remove(tmp_csv_path)
+
+                print(f"✅ Processed and saved: {output_name}")
+
             except Exception as e:
                 print(f"❌ Error processing {file_path}: {e}")
 
-        # Save consolidated CSV
-        if combined_long:
-            consolidated_df = pd.concat(combined_long, ignore_index=True)
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as tmp_csv:
-                consolidated_df.to_csv(tmp_csv.name, index=False)
-                tmp_csv_path = tmp_csv.name
-            output_folder_obj.upload_stream("date_table.csv", open(tmp_csv_path, "rb"))
-            os.remove(tmp_csv_path)
-            print("✅ Consolidated date_table.csv saved in Dataiku.")
-
     else:
         print("💻 Running in Local mode...")
-        input_files = [f for f in os.listdir(local_input_folder) if f.lower().endswith(".xlsx")]
+        os.makedirs(local_output_folder, exist_ok=True)
+        input_files = [f for f in os.listdir(local_input_folder) if f.lower().endswith((".csv", ".xlsx", ".xls"))]
+
         if not input_files:
-            print("⚠️ No Excel files found in local input folder.")
+            print("⚠️ No input files found in local input folder.")
             return
 
         for filename in input_files:
             try:
                 file_path = os.path.join(local_input_folder, filename)
-                df_long = process_file(file_path, original_filename=filename)
-                combined_long.append(df_long)
+                transformed_df = process_file(file_path)
+                output_name = os.path.splitext(filename)[0] + "_final" + os.path.splitext(filename)[1]
+                output_path = os.path.join(local_output_folder, output_name)
+
+                if output_path.lower().endswith(".csv"):
+                    transformed_df.to_csv(output_path, index=False)
+                else:
+                    transformed_df.to_excel(output_path, index=False)
+
+                print(f"✅ Saved locally: {output_path}")
+
             except Exception as e:
                 print(f"❌ Error processing {filename}: {e}")
 
-        # Save consolidated CSV
-        if combined_long:
-            consolidated_df = pd.concat(combined_long, ignore_index=True)
-            os.makedirs(local_output_folder, exist_ok=True)
-            consolidated_output_path = os.path.join(local_output_folder, "date_table.csv")
-            consolidated_df.to_csv(consolidated_output_path, index=False)
-            print(f"✅ Consolidated date_table.csv saved locally at {consolidated_output_path}")
+    print(f"🎉 Completed in {(datetime.now() - start_time).total_seconds():.2f}s")
 
-    print(f"🎉 Processing completed in {(datetime.now() - start_time).total_seconds():.2f}s")
 
 # =====================================================
 # 🕒 Run Script
