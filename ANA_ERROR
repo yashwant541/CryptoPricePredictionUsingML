@@ -1,169 +1,127 @@
 import pandas as pd
-import os
+import dataiku
 import tempfile
-import numpy as np
-from datetime import datetime
+import os
 
-# Try importing Dataiku (skip if running locally)
-try:
-    import dataiku
-except ImportError:
-    dataiku = None
+# ------------------------------------------------------
+# 🔧 Configuration (replace with your Dataiku folder IDs)
+# ------------------------------------------------------
+input_folder = dataiku.Folder("OfihbxF6")      # Folder containing the Excel files
+output_folder = dataiku.Folder("jId6ot39")    # Folder to save consolidated output
 
-# =====================================================
-# ⚙️ CONFIGURATION
-# =====================================================
-USE_DATAIKU = True  # Toggle: True = Dataiku, False = Local
-
-# --- Local paths (used if USE_DATAIKU = False)
-local_input_folder = r"C:\Users\YourName\Desktop\Input"
-local_output_folder = r"C:\Users\YourName\Desktop\Output"
-
-# --- Dataiku folder IDs
-DATAIKU_INPUT_FOLDER_ID = "input_folder_id_here"
-DATAIKU_OUTPUT_FOLDER_ID = "output_folder_id_here"
-
-# --- Column Mapping (manually define)
-A_cols = ["A1_colname", "A2_colname", "A3_colname", "A4_colname"]
-B_cols = ["B1_colname", "B2_colname", "B3_colname", "B4_colname"]
-
-# List of tuples for C columns (column name, category column name)
-C_cols = [
-    ("C1_colname", "C1_category_colname"),
-    ("C2_colname", "C2_category_colname"),
-    ("C3_colname", "C3_category_colname"),
-    ("C4_colname", "C4_category_colname")
-]
-
-# =====================================================
+# ------------------------------------------------------
 # 🧠 Helper Functions
-# =====================================================
+# ------------------------------------------------------
+def extract_country_date(filename):
+    """
+    Extract country code and file date from filename.
+    Assumes filename format: ORIGAMI_XXX_COUNTRY_FILEDATE_XXXXX.xlsx
+    """
+    parts = filename.split("_")
+    country = parts[2] if len(parts) > 2 else ""
+    file_date = parts[3] if len(parts) > 3 else ""
+    return country, file_date
 
-def pick_value(a_val, b_val):
-    """Pick A if valid, else B. Return (value, source_tag)."""
-    if pd.notna(a_val) and str(a_val).strip().upper() not in ["N/A", "NA", "NONE", "NULL", ""]:
-        return a_val, "D-1"
-    elif pd.notna(b_val) and str(b_val).strip().upper() not in ["N/A", "NA", "NONE", "NULL", ""]:
-        return b_val, "D-4"
-    else:
-        return np.nan, np.nan
+def read_excel_safe(file_path):
+    """
+    Read an Excel file safely:
+    - Tries openpyxl for .xlsx
+    - Uses pyxlsb for .xlsb or binary Excel
+    """
+    try:
+        if file_path.endswith('.xlsb'):
+            return pd.read_excel(file_path, engine='pyxlsb')
+        else:
+            return pd.read_excel(file_path, engine='openpyxl')
+    except Exception:
+        # fallback for mis-labeled binary xlsx
+        try:
+            return pd.read_excel(file_path, engine='pyxlsb')
+        except Exception as e2:
+            raise Exception(f"Failed to read Excel file '{file_path}': {e2}")
 
+def process_file(file_path, file_name):
+    """
+    Transform Excel table to long format:
+    FileName | Country | FileDate | Tenure | Rate | Factor | Rationale | Final Rate
+    """
+    df = read_excel_safe(file_path)
+    country, file_date = extract_country_date(file_name)
+    tenures = df.columns[1:]  # All columns after 'Determining Factor'
 
-def transform_table(df):
-    """Perform A/B comparison and return transformed DataFrame."""
-    if not all(col in df.columns for col in ["Category", "Tenor"]):
-        raise ValueError("Input file missing 'Category' or 'Tenor' columns.")
+    output_rows = []
 
-    result = df[["Category", "Tenor"]].copy()
+    for col in tenures:
+        col_values = df[col].tolist()
+        rate = None
+        factor = None
 
-    # A/B comparison logic
-    for i, (a_col, b_col) in enumerate(zip(A_cols, B_cols), start=1):
-        if a_col not in df.columns or b_col not in df.columns:
-            result[f"AB{i}"] = np.nan
-            result[f"AB{i} Category"] = np.nan
-            continue
-        values, sources = zip(*[pick_value(a, b) for a, b in zip(df[a_col], df[b_col])])
-        result[f"AB{i}"] = values
-        result[f"AB{i} Category"] = sources
+        # Pick first non-N/A value from rows 2-6 (index 1-5)
+        for idx in range(1, 6):
+            val = col_values[idx]
+            if pd.notna(val) and str(val).strip().upper() != "N/A":
+                rate = val
+                factor = idx+1  # subtract 1 if needed
+                break
 
-    # Add C columns
-    for i, (c_val, c_cat) in enumerate(C_cols, start=1):
-        result[f"C{i}"] = df[c_val] if c_val in df.columns else np.nan
-        result[f"C{i} Category"] = df[c_cat] if c_cat in df.columns else np.nan
+        # Rationale
+        rationale_row = df[df.iloc[:, 0] == "Rational for Proposing the Adjustment"]
+        rationale = rationale_row.iloc[0, df.columns.get_loc(col)] if not rationale_row.empty else ""
 
-    return result
+        # Final Rate
+        final_rate_row = df[df.iloc[:, 0] == "Final Rate"]
+        final_rate = final_rate_row.iloc[0, df.columns.get_loc(col)] if not final_rate_row.empty else ""
 
+        output_rows.append({
+            "FileName": file_name,
+            "Country": country,
+            "FileDate": file_date,
+            "Tenure": col,
+            "Rate": rate,
+            "Factor": factor,
+            "Rationale": rationale,
+            "Final Rate": final_rate
+        })
 
-def process_file(file_path):
-    """Read and transform a single file."""
-    filename = os.path.basename(file_path)
-    print(f"🔹 Processing: {filename}")
+    return output_rows
 
-    # Read file
-    if file_path.lower().endswith(".csv"):
-        df = pd.read_csv(file_path)
-    elif file_path.lower().endswith((".xlsx", ".xls")):
-        df = pd.read_excel(file_path)
-    else:
-        raise ValueError("Unsupported file format")
-
-    transformed_df = transform_table(df)
-    return transformed_df
-
-
-# =====================================================
+# ------------------------------------------------------
 # 🚀 Main Execution
-# =====================================================
+# ------------------------------------------------------
 def main():
-    start_time = datetime.now()
-    print(f"🚀 Starting A/B Comparison Processing at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print("🔍 Reading Excel files from Dataiku input folder...")
 
-    if USE_DATAIKU:
-        print("📦 Running in Dataiku mode...")
-        input_folder_obj = dataiku.Folder(DATAIKU_INPUT_FOLDER_ID)
-        output_folder_obj = dataiku.Folder(DATAIKU_OUTPUT_FOLDER_ID)
-        input_files = [f for f in input_folder_obj.list_paths_in_partition() if f.lower().endswith((".csv", ".xlsx", ".xls"))]
+    # List all Excel files in the Dataiku input folder
+    excel_files = [f for f in input_folder.list_paths_in_partition() if f.endswith(('.xlsx', '.xlsb'))]
+    if not excel_files:
+        raise Exception("❌ No Excel files found in input folder.")
 
-        if not input_files:
-            print("⚠️ No input files found in Dataiku input folder.")
-            return
+    all_data = []
 
-        for file_path in input_files:
-            try:
-                with input_folder_obj.get_download_stream(file_path) as stream:
-                    suffix = ".csv" if file_path.lower().endswith(".csv") else ".xlsx"
-                    with tempfile.NamedTemporaryFile(mode="wb", suffix=suffix, delete=False) as tmp_file:
-                        tmp_file.write(stream.read())
-                        tmp_file_path = tmp_file.name
+    for file_path in excel_files:
+        file_name = os.path.basename(file_path)
+        with input_folder.get_download_stream(file_path) as stream:
+            # Save temporary local copy to read
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp_file:
+                tmp_file.write(stream.read())
+                tmp_file_path = tmp_file.name
 
-                transformed_df = process_file(tmp_file_path)
+        # Process file
+        all_data.extend(process_file(tmp_file_path, file_name))
+        os.remove(tmp_file_path)
 
-                # Save to temp and upload
-                output_name = os.path.splitext(os.path.basename(file_path))[0] + "_final.csv"
-                with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8") as tmp_csv:
-                    transformed_df.to_csv(tmp_csv.name, index=False)
-                    tmp_csv_path = tmp_csv.name
+    # Convert to DataFrame
+    output_df = pd.DataFrame(all_data)
 
-                output_folder_obj.upload_stream(output_name, open(tmp_csv_path, "rb"))
-                os.remove(tmp_file_path)
-                os.remove(tmp_csv_path)
+    # Save consolidated output to Dataiku folder
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+        output_df.to_csv(tmp_file.name, index=False)
+        with open(tmp_file.name, "rb") as f:
+            output_folder.upload_stream("Excel_Long_Format_Consolidated.csv", f)
+        os.remove(tmp_file.name)
 
-                print(f"✅ Processed and saved: {output_name}")
+    print(f"✅ Processing complete: {len(output_df)} rows created.")
 
-            except Exception as e:
-                print(f"❌ Error processing {file_path}: {e}")
-
-    else:
-        print("💻 Running in Local mode...")
-        os.makedirs(local_output_folder, exist_ok=True)
-        input_files = [f for f in os.listdir(local_input_folder) if f.lower().endswith((".csv", ".xlsx", ".xls"))]
-
-        if not input_files:
-            print("⚠️ No input files found in local input folder.")
-            return
-
-        for filename in input_files:
-            try:
-                file_path = os.path.join(local_input_folder, filename)
-                transformed_df = process_file(file_path)
-                output_name = os.path.splitext(filename)[0] + "_final" + os.path.splitext(filename)[1]
-                output_path = os.path.join(local_output_folder, output_name)
-
-                if output_path.lower().endswith(".csv"):
-                    transformed_df.to_csv(output_path, index=False)
-                else:
-                    transformed_df.to_excel(output_path, index=False)
-
-                print(f"✅ Saved locally: {output_path}")
-
-            except Exception as e:
-                print(f"❌ Error processing {filename}: {e}")
-
-    print(f"🎉 Completed in {(datetime.now() - start_time).total_seconds():.2f}s")
-
-
-# =====================================================
-# 🕒 Run Script
-# =====================================================
+# ------------------------------------------------------
 if __name__ == "__main__":
     main()
