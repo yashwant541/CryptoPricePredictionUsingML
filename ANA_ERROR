@@ -1,124 +1,244 @@
+import re
+import os
+import sys
+import shutil
+import tempfile
 import pandas as pd
 import dataiku
-import tempfile
-import os
+from openpyxl import load_workbook
 
-# ------------------------------------------------------
-# 🔧 Configuration — replace with your Dataiku folder IDs
-# ------------------------------------------------------
-input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")
-output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")
+SHEET_NAME_PATTERN = r'COMPUTED[_ ]?DATA'
 
-# ------------------------------------------------------
-# 🏷️ Column Mappings (fill these manually)
-# ------------------------------------------------------
-A_columns = {
-    "A1": "ColumnName_A1",
-    "A2": "ColumnName_A2",
-    "A3": "ColumnName_A3",
-    "A4": "ColumnName_A4"
-}
+# -----------------------------
+# Fixed Dataiku Folder Handles
+# -----------------------------
+input_folder = dataiku.Folder("XXXXXXXX")      # 📂 Replace with your input folder ID
+output_folder_tables = dataiku.Folder("XXXXXXXX")  # 📂 Replace with your output folder ID for tables
+output_folder_summary = dataiku.Folder("XXXXXXXX") # 📂 Replace with your output folder ID for summary CSV
 
-B_columns = {
-    "B1": "ColumnName_B1",
-    "B2": "ColumnName_B2",
-    "B3": "ColumnName_B3",
-    "B4": "ColumnName_B4"
-}
+# -----------------------------
+# Logging Helper
+# -----------------------------
+def log(message):
+    print(f"[LOG] {message}", file=sys.stderr, flush=True)
 
-C_columns = {
-    "C1": "ColumnName_C1",
-    "C1_Category": "ColumnName_C1_Category",
-    "C2": "ColumnName_C2",
-    "C2_Category": "ColumnName_C2_Category",
-    "C3": "ColumnName_C3",
-    "C3_Category": "ColumnName_C3_Category",
-    "C4": "ColumnName_C4",
-    "C4_Category": "ColumnName_C4_Category"
-}
-
-# ------------------------------------------------------
-# 🧠 Core Logic
-# ------------------------------------------------------
-def process_file(file_path, file_name):
-    """Reads a file, applies A/B logic, and returns processed DataFrame."""
-    # Read file
-    if file_path.endswith(".csv"):
-        df = pd.read_csv(file_path)
-    else:
-        df = pd.read_excel(file_path, engine="openpyxl")
-
-    # Only first column is Tenor
-    output = pd.DataFrame()
-    output["Tenor"] = df.iloc[:, 0]
-
-    # Process A/B columns and mark source
-    for i in range(1, 5):
-        a_col = A_columns.get(f"A{i}")
-        b_col = B_columns.get(f"B{i}")
-        ab_col = f"AB{i}"
-        ab_cat_col = f"AB{i} Category"
-
-        if a_col not in df.columns or b_col not in df.columns:
-            print(f"⚠️ Missing columns for {ab_col} in {file_name}")
-            output[ab_col] = None
-            output[ab_cat_col] = None
-            continue
-
-        # Pick A if valid, else B
-        output[ab_col] = df[a_col].where(
-            df[a_col].notna() & (df[a_col].astype(str).str.upper() != "N/A"),
-            df[b_col]
-        )
-        output[ab_cat_col] = df[a_col].apply(
-            lambda x: "D-1" if pd.notna(x) and str(x).strip().upper() != "N/A" else "D-4"
-        )
-
-    # Add C columns
-    for key, col_name in C_columns.items():
-        output[key] = df[col_name] if col_name in df.columns else None
-
-    return output
+# -----------------------------
+# Utility Functions
+# -----------------------------
+def extract_date_from_filename(filename):
+    """Extract date pattern like 01-Aug-25"""
+    match = re.search(r'\d{2}-[A-Za-z]{3}-\d{2}', filename)
+    return match.group(0) if match else ""
 
 
-# ------------------------------------------------------
-# 🚀 Main Execution
-# ------------------------------------------------------
+def read_excel_tab(filepath):
+    """Read 'COMPUTED DATA' (or similar) sheet and split into main table + maker-checker summary"""
+    wb = load_workbook(filepath, data_only=True)
+    sheet_name = None
+
+    # Try to find sheet named similar to "COMPUTED DATA"
+    for name in wb.sheetnames:
+        if re.search(SHEET_NAME_PATTERN, name, re.IGNORECASE):
+            sheet_name = name
+            break
+
+    if not sheet_name:
+        log("⚠️ 'COMPUTED DATA' not found in workbook.")
+        return None, None
+
+    ws = wb[sheet_name]
+    data_rows = []
+    summary_rows = []
+    found_summary = False
+
+    # Split main table and summary area
+    for row in ws.iter_rows(values_only=True):
+        row_text = " ".join([str(c) for c in row if c]).strip()
+        if not found_summary:
+            if any(x in row_text for x in ["USER:", "Benchmark:", "Status", "Date:"]):
+                found_summary = True
+                summary_rows.append(row)
+            else:
+                data_rows.append(row)
+        else:
+            summary_rows.append(row)
+
+    # Filter out empty rows from table
+    data_rows = [r for r in data_rows if any(r)]
+    if not data_rows:
+        return None, None
+
+    df_table = pd.DataFrame(data_rows[1:], columns=data_rows[0])
+
+    # Parse maker-checker summary
+    summary_texts = [" ".join([str(c) for c in row if c]).strip() for row in summary_rows if any(row)]
+    metadata = []
+    current = {}
+
+    for line in summary_texts:
+        line = line.strip()  # remove leading/trailing spaces
+
+        # USER
+        if re.search(r'\bUSER\b', line):
+            if current:
+                metadata.append(current)
+                current = {}
+            match = re.search(r'USER[:\s]*(.*)', line)
+            current["USER"] = match.group(1).strip() if match else ""
+
+        # Benchmark
+        elif re.search(r'\bBenchmark\b', line):
+            match = re.search(r'Benchmark[:\s]*(.*)', line)
+            current["Benchmark"] = match.group(1).strip() if match else ""
+
+        # Date
+        elif re.search(r'\bDate\b', line):
+            match = re.search(r'Date[:\s]*(.*)', line)
+            current["Date (in file)"] = match.group(1).strip() if match else ""
+
+        # Status
+        elif re.search(r'\bStatus\b', line) and "Status Time" not in line:
+            match = re.search(r'Status[:\s]*(.*)', line)
+            current["Status"] = match.group(1).strip() if match else ""
+
+        # Status Time
+        elif re.search(r'\bStatus Time\b', line):
+            match = re.search(r'Status Time[:\s]*(.*)', line)
+            current["Status Time"] = match.group(1).strip() if match else ""
+
+    if current:
+        metadata.append(current)
+
+    return df_table, metadata
+
+
+# -----------------------------
+# Main Processing
+# -----------------------------
 def main():
-    print("🔍 Reading input files from Dataiku folder...")
+    try:
+        log("🔍 Scanning top-level of input folder for ORIGAMI Excel files...")
 
-    # List all supported files
-    input_files = [f for f in input_folder.list_paths_in_partition() if f.endswith(('.csv', '.xlsx'))]
-    if not input_files:
-        raise Exception("❌ No input files found in input folder.")
+        all_files = input_folder.list_paths_in_partition()
+        excel_files = [
+            f for f in all_files
+            if "/" not in f.strip("/")  # ensures top-level only
+            and os.path.basename(f).startswith("ORIGAMI")
+            and f.lower().endswith((".xlsx", ".xls"))
+        ]
 
-    for file_path in input_files:
-        file_name = os.path.basename(file_path)
-        print(f"📂 Processing file: {file_name}")
+        if not excel_files:
+            raise Exception("❌ No ORIGAMI Excel files found in the top level of the input folder.")
 
-        # Download temp copy
-        with input_folder.get_download_stream(file_path) as stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_name)[1]) as tmp:
-                tmp.write(stream.read())
-                tmp_path = tmp.name
+        summary_records = []
 
-        # Process file
-        processed_df = process_file(tmp_path, file_name)
+        for path in excel_files:
+            file_name = os.path.basename(path)
+            log(f"📄 Processing: {file_name}")
 
-        # Save output individually
-        processed_filename = os.path.splitext(file_name)[0] + "_Processed.csv"
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_out:
-            processed_df.to_csv(tmp_out.name, index=False)
-            with open(tmp_out.name, "rb") as f:
-                output_folder.upload_stream(processed_filename, f)
-            os.remove(tmp_out.name)
+            # Download to temporary file
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_file:
+                tmp_file_path = tmp_file.name
+                with input_folder.get_download_stream(path) as stream:
+                    shutil.copyfileobj(stream, tmp_file)
 
-        os.remove(tmp_path)
-        print(f"✅ Saved: {processed_filename}")
+            # Extract date from filename
+            file_date = extract_date_from_filename(file_name)
 
-    print("🎉 All files processed and saved individually.")
+            # Parse Excel
+            df_table, metadata_list = read_excel_tab(tmp_file_path)
+            os.remove(tmp_file_path)
+
+            if df_table is None:
+                log(f"⚠️ Skipped {file_name}: No valid 'COMPUTED DATA' or table found.")
+                continue
+
+            # ------------------------------------------------------
+            # 🧹 Step 1: Drop first three header rows
+            # ------------------------------------------------------
+            if len(df_table) >= 3:
+                df_table = df_table.iloc[2:].reset_index(drop=True)
+            else:
+                log(f"⚠️ {file_name}: Less than 2 rows to drop — skipped cleanup.")
+                continue
+
+            # ------------------------------------------------------
+            # 🏷️ Step 2: Add new header row
+            # ------------------------------------------------------
+            new_headers = [
+                "Tenor", "DF-1 ATM Bid", "DF-1 ATM Ask", 
+                "DF-1 25d RR Mid",	"DF-1 25d BF Mid", "DF-2", 
+                "DF-3", "DF-4 ATM Bid", "DF-4 ATM Ask",	"DF-4 25d RR Mid", 
+                "DF-4 25d BF Mid", "DF-5", "Final ATM Bid",	"Final ATM Ask", 
+                "Final ATM Source", "Final 25d RR Mid", "Final 25d RR Source", 
+                "Final 25d BF Mid", "Final 25d BF Source"
+            ]
+
+            # Ensure number of columns match
+            if len(df_table.columns) != len(new_headers):
+                log(f"⚠️ {file_name}: Column count mismatch "
+                    f"({len(df_table.columns)} vs {len(new_headers)}) — trimming or padding.")
+                if len(df_table.columns) > len(new_headers):
+                    df_table = df_table.iloc[:, :len(new_headers)]
+                else:
+                    for i in range(len(new_headers) - len(df_table.columns)):
+                        df_table[f"Extra_{i+1}"] = ""
+
+            df_table.columns = new_headers
+
+            # ------------------------------------------------------
+            # 💾 Step 3: Save cleaned table
+            # ------------------------------------------------------
+            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_out:
+                df_table.to_excel(tmp_out.name, index=False)
+                out_name = file_name.replace(".xlsx", "_table.xlsx")
+                with open(tmp_out.name, "rb") as f_out:
+                    output_folder_tables.upload_stream(out_name, f_out)
+                os.remove(tmp_out.name)
+                log(f"✅ Saved cleaned table: {out_name}")
+
+            # ------------------------------------------------------
+            # 🧾 Step 4: Add metadata info to summary
+            # ------------------------------------------------------
+            if metadata_list:
+                for meta in metadata_list:
+                    summary_records.append({
+                        "FileName": file_name,
+                        "FileDate": file_date,
+                        "USER": meta.get("USER", ""),
+                        "Benchmark": meta.get("Benchmark", ""),
+                        "Date (in file)": meta.get("Date (in file)", ""),
+                        "Status": meta.get("Status", ""),
+                        "Status Time": meta.get("Status Time", "")
+                    })
+            else:
+                summary_records.append({
+                    "FileName": file_name,
+                    "FileDate": file_date,
+                    "USER": "", "Benchmark": "", "Date (in file)": "",
+                    "Status": "", "Status Time": ""
+                })
+
+        # Save summary CSV
+        if summary_records:
+            df_summary = pd.DataFrame(summary_records)
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
+                df_summary.to_csv(tmp_csv.name, index=False)
+                csv_name = "maker_checker_summary.csv"
+                with open(tmp_csv.name, 'rb') as f:
+                    output_folder_summary.upload_stream(csv_name, f)
+                os.remove(tmp_csv.name)
+            log(f"✅ Summary written to {csv_name} ({len(summary_records)} rows)")
+        else:
+            log("⚠️ No metadata found to include in summary.")
+
+    except Exception as e:
+        log(f"🔥 ERROR: {str(e)}")
+        raise
 
 
-# ------------------------------------------------------
+# -----------------------------
+# Entrypoint
+# -----------------------------
 if __name__ == "__main__":
     main()
