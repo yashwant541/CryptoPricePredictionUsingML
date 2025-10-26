@@ -1,5 +1,6 @@
 import pandas as pd
 import os
+import io
 import dataiku
 
 # ------------------------------------------------------
@@ -22,7 +23,7 @@ else:
 def process_file(file_path, file_name):
     df = pd.read_csv(file_path)
 
-    # Define mapping pairs
+    # Define mapping pairs (you can adjust)
     mappings = [
         ("AB1", "C1"),
         ("AB1 Category", "C1 Category"),
@@ -39,16 +40,13 @@ def process_file(file_path, file_name):
 
     for _, row in df.iterrows():
         is_match = True
-
         for col_a, col_b in mappings:
             if col_a in df.columns and col_b in df.columns:
                 val_a = str(row[col_a]).strip() if not pd.isna(row[col_a]) else ""
                 val_b = str(row[col_b]).strip() if not pd.isna(row[col_b]) else ""
-
                 if val_a != val_b:
                     is_match = False
                     break
-
         if is_match:
             match_rows.append(row)
         else:
@@ -57,12 +55,20 @@ def process_file(file_path, file_name):
     match_df = pd.DataFrame(match_rows)
     notmatch_df = pd.DataFrame(notmatch_rows)
 
+    # ✅ Save to Dataiku or local
     if use_dataiku:
-        with match_folder.get_writer(file_name) as writer:
-            match_df.to_csv(writer, index=False)
-        with notmatch_folder.get_writer(file_name) as writer:
-            notmatch_df.to_csv(writer, index=False)
+        # Save match file
+        match_buffer = io.StringIO()
+        match_df.to_csv(match_buffer, index=False)
+        match_folder.upload_stream(file_name, io.BytesIO(match_buffer.getvalue().encode("utf-8")))
+
+        # Save notmatch file
+        notmatch_buffer = io.StringIO()
+        notmatch_df.to_csv(notmatch_buffer, index=False)
+        notmatch_folder.upload_stream(file_name, io.BytesIO(notmatch_buffer.getvalue().encode("utf-8")))
     else:
+        os.makedirs(match_folder_path, exist_ok=True)
+        os.makedirs(notmatch_folder_path, exist_ok=True)
         match_df.to_csv(os.path.join(match_folder_path, file_name), index=False)
         notmatch_df.to_csv(os.path.join(notmatch_folder_path, file_name), index=False)
 
@@ -76,10 +82,10 @@ if use_dataiku:
         if path.endswith(".csv"):
             file_name = os.path.basename(path)
             with input_folder.get_download_stream(path) as f:
-                temp_df = pd.read_csv(f)
-                temp_file = os.path.join("/tmp", file_name)
-                temp_df.to_csv(temp_file, index=False)
-                process_file(temp_file, file_name)
+                df = pd.read_csv(f)
+                temp_path = f"/tmp/{file_name}"
+                df.to_csv(temp_path, index=False)
+                process_file(temp_path, file_name)
 else:
     for filename in os.listdir(input_folder_path):
         if filename.endswith(".csv"):
