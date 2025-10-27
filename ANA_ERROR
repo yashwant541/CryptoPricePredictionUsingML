@@ -19,32 +19,36 @@ else:
 # 🧭 COLUMN MAPPINGS
 # ------------------------------------------------------
 column_mapping = {
-    "C1": "ATM Ask",
-    "C1 Category": "ATM Ask Category",
-    "C11": "ATM Bid",
-    "C11 Category": "ATM Bid Category",
-    "C2": "25d RR Mid",
-    "C2 Category": "25d RR Mid Category",
-    "C3": "25d BF Mid",
-    "C3 Category": "25d BF Mid Category"
+    "C1": "AAA",
+    "C1 Category": "AAA Category",
+    "C2": "AA+",
+    "C2 Category": "AA+ Category",
+    "C3": "AA",
+    "C3 Category": "AA Category",
+    "C4": "AA-",
+    "C4 Category": "AA- Category"
 }
 
 # ------------------------------------------------------
 # ⚙️ PROCESSING FUNCTION
 # ------------------------------------------------------
 def process_file(file_path, file_name):
+    # Read input CSV
     df = pd.read_csv(file_path)
 
-    # Select only the C columns (and Tenor if it exists)
-    c_columns = [col for col in df.columns if col.startswith("C") or col.lower() == "tenor"]
+    # Keep only Tenor/Rating column(s) and C columns
+    c_columns = [col for col in df.columns if col.startswith("C") or "tenor" in col.lower() or "rating" in col.lower()]
 
-    # Filter the dataframe
+    if not c_columns:
+        print(f"⚠️ Skipping {file_name}: No C or Tenor/Rating columns found.")
+        return
+
+    # Filter and rename
     filtered_df = df[c_columns].copy()
+    rename_map = {col: column_mapping[col] for col in filtered_df.columns if col in column_mapping}
+    filtered_df.rename(columns=rename_map, inplace=True)
 
-    # Rename according to mapping
-    filtered_df.rename(columns=column_mapping, inplace=True)
-
-    # Save the transformed file
+    # Save transformed output
     if use_dataiku:
         buffer = io.StringIO()
         filtered_df.to_csv(buffer, index=False)
@@ -53,7 +57,7 @@ def process_file(file_path, file_name):
         os.makedirs(output_folder_path, exist_ok=True)
         filtered_df.to_csv(os.path.join(output_folder_path, file_name), index=False)
 
-    print(f"✅ Processed: {file_name} ({len(filtered_df)} rows)")
+    print(f"✅ Processed: {file_name} ({len(filtered_df)} rows, {len(filtered_df.columns)} columns)")
 
 # ------------------------------------------------------
 # 🚀 MAIN EXECUTION
