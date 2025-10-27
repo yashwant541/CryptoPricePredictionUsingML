@@ -9,9 +9,9 @@ import dataiku
 use_dataiku = True  # 🔄 Switch between Dataiku and local
 
 if use_dataiku:
-    input_folder = dataiku.Folder("7WXwUJep")       # Input CSV files
-    match_folder = dataiku.Folder("1foei4zV")       # For matched output
-    notmatch_folder = dataiku.Folder("zEuoVJeo") # For unmatched output
+    input_folder = dataiku.Folder("XXXXXXXX")       # Input CSV files
+    match_folder = dataiku.Folder("XXXXXXXX")       # For matched output
+    notmatch_folder = dataiku.Folder("XXXXXXXX") # For unmatched output
 else:
     input_folder_path = r"C:\path\to\input"
     match_folder_path = r"C:\path\to\match"
