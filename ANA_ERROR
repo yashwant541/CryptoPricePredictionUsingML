@@ -1,1 +1,11 @@
-Tenor,AB1,AB1 Category,AB2,AB2 Category,AB3,AB3 Category,AB4,AB4 Category,C1,C11,C111,C2,C2_Category,C3,C3_Category
+    # --- Define column pair mappings ---
+    mappings = [
+        ("AB1", "C1"),
+        ("AB1 Category", "C111"),
+        ("AB2", "C11"),
+        ("AB2 Category", "C111"),
+        ("AB3", "C2"),
+        ("AB3 Category", "C2 Category"),
+        ("AB4", "C3"),
+        ("AB4 Category", "C3 Category")
+    ]
