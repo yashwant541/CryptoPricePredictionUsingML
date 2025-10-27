@@ -1,4 +1,3 @@
-
 import pandas as pd
 import dataiku
 import tempfile
@@ -8,85 +7,101 @@ import os
 # 🔧 Configuration (replace with your Dataiku folder IDs)
 # ------------------------------------------------------
 input_folder = dataiku.Folder("XXXXXXX")       # Folder containing maker_checker_summary.csv
-output_folder = dataiku.Folder("XXXXXXX")      # Folder to save success/fail results
+output_folder = dataiku.Folder("XXXXXXX")      # Folder to save flagged results
 
 # ------------------------------------------------------
 # 🧠 Helper Function
 # ------------------------------------------------------
-def evaluate_maker_checker(df):
+def flag_missing_status(summary_df):
     """
-    Evaluate maker-checker logic per file for each Benchmark + Date combination:
-    1. Ensure each file has exactly 4 rows
-    2. Ensure maker ≠ checker
+    For each FileDate + Benchmark combination, check if all four statuses are present:
+    'Calculated', 'Proposed', 'Approved', 'Submitted'.
+    Flag combinations where any are missing.
     """
-    success_records = []
-    fail_records = []
+    expected_statuses = {"Calculated", "Proposed", "Approved", "Submitted"}
 
-    # Drop fully blank rows
-    df = df.dropna(how='all')
+    # Validate required columns
+    required_cols = ["FileDate", "Benchmark", "Status"]
+    missing_cols = [c for c in required_cols if c not in summary_df.columns]
+    if missing_cols:
+        raise Exception(f"❌ Missing required columns: {missing_cols}")
 
-    # Clean column names
-    df.columns = [c.strip() for c in df.columns]
+    # Clean and normalize
+    summary_df["Status"] = summary_df["Status"].astype(str).str.strip().str.title()
 
-    # Group by Benchmark + Date
-    for (benchmark, date_in_file), group in df.groupby(["Benchmark", "Date (in file)"]):
-        # Iterate over files within this combination
-        for file_name, file_grp in group.groupby("FileName"):
-            file_grp = file_grp.copy()  # Avoid SettingWithCopyWarning
+    # Group and evaluate
+    grouped = (
+        summary_df.groupby(["FileDate", "Benchmark"])["Status"]
+        .agg(lambda x: set(x))
+        .reset_index()
+    )
 
-            # Rule 1: exactly 4 rows
-            if len(file_grp) != 4:
-                file_grp["FailReason"] = "Row count != 4"
-                fail_records.append(file_grp)
-                continue
+    grouped["Missing_Statuses"] = grouped["Status"].apply(lambda s: list(expected_statuses - s))
+    grouped["Flag"] = grouped["Missing_Statuses"].apply(lambda x: len(x) > 0)
 
-            # Identify maker and checker users
-            maker_users = set(file_grp[file_grp["Status"].isin(["Calculated", "Proposed"])]["USER"].dropna())
-            checker_users = set(file_grp[file_grp["Status"].isin(["Approved", "Submitted"])]["USER"].dropna())
+    flagged_summary = grouped[grouped["Flag"]].copy()
 
-            # Rule 2: maker ≠ checker
-            if maker_users and checker_users and not maker_users.intersection(checker_users):
-                success_records.append(file_grp)
-            else:
-                file_grp["FailReason"] = "Maker and checker overlap or missing users"
-                fail_records.append(file_grp)
+    # Merge back for detailed rows
+    flagged_details = summary_df.merge(
+        flagged_summary[["FileDate", "Benchmark"]],
+        on=["FileDate", "Benchmark"],
+        how="inner"
+    )
 
-    df_success = pd.concat(success_records, ignore_index=True) if success_records else pd.DataFrame(columns=df.columns)
-    df_fail = pd.concat(fail_records, ignore_index=True) if fail_records else pd.DataFrame(columns=df.columns)
-
-    return df_success, df_fail
+    return flagged_summary, flagged_details
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
 def main():
-    print("🔍 Reading maker_checker_summary.csv from Dataiku input folder...")
+    print("🔍 Reading maker_checker_summary file from Dataiku input folder...")
 
-    # Locate the summary file
-    files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith(".csv")]
+    # Locate file
+    files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith((".csv", ".xlsx"))]
     if not files:
-        raise Exception("❌ No CSV found in MakerChecker summary input folder.")
-    summary_path = files[0]
+        raise Exception("❌ No summary file found in input folder.")
+    if len(files) > 1:
+        raise Exception(f"⚠️ Multiple files found in input folder: {[os.path.basename(f) for f in files]}.\nPlease keep only one summary file.")
 
-    # Read file
-    with input_folder.get_download_stream(summary_path) as stream:
-        df_summary = pd.read_csv(stream)
+    file_path = files[0]
+    file_name = os.path.basename(file_path)
 
-    # Evaluate
-    df_success, df_fail = evaluate_maker_checker(df_summary)
+    # Read the file
+    with input_folder.get_download_stream(file_path) as stream:
+        if file_name.lower().endswith(".csv"):
+            summary_df = pd.read_csv(stream)
+        else:
+            summary_df = pd.read_excel(stream)
 
-    # Save results to Dataiku output folder
-    for df, filename in [(df_success, "MakerChecker_Success.csv"), (df_fail, "MakerChecker_Fails.csv")]:
+    print(f"📘 Loaded summary file: {file_name} with {len(summary_df)} rows")
+
+    # Evaluate missing statuses
+    flagged_summary, flagged_details = flag_missing_status(summary_df)
+
+    # ------------------------------------------------------
+    # 💾 Save results using tempfile + upload_stream
+    # ------------------------------------------------------
+    output_files = [
+        (flagged_summary, "flagged_summary.csv"),
+        (flagged_details, "flagged_details.csv")
+    ]
+
+    for df, filename in output_files:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
             df.to_csv(tmp_file.name, index=False)
             with open(tmp_file.name, "rb") as f:
                 output_folder.upload_stream(filename, f)
-            os.remove(tmp_file.name)  # Clean up temp file
+            os.remove(tmp_file.name)  # Clean temp file
 
-    print(f"✅ Evaluation complete: {len(df_success)} success rows, {len(df_fail)} fail rows.")
+    print(f"✅ Flagging complete: {len(flagged_summary)} combinations flagged.")
+
+    if not flagged_summary.empty:
+        print(flagged_summary[["FileDate", "Benchmark", "Missing_Statuses"]])
+    else:
+        print("🎉 All combinations have all four statuses!")
 
 # ------------------------------------------------------
-# Entry point
+# Entry Point
 # ------------------------------------------------------
 if __name__ == "__main__":
     main()
