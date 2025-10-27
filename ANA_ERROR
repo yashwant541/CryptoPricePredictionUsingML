@@ -9,8 +9,8 @@ import dataiku
 use_dataiku = True  # 🔄 Switch between Dataiku and local
 
 if use_dataiku:
-    input_folder = dataiku.Folder("1foei4zV")   # Input: Match folder (CSV files)
-    output_folder = dataiku.Folder("KYgZH4YD")  # Output: Final transformed files
+    input_folder = dataiku.Folder("XXXXXXXX")   # Input: Match folder (CSV files)
+    output_folder = dataiku.Folder("XXXXXXXX")  # Output: Final transformed files
 else:
     input_folder_path = r"C:\path\to\match"
     output_folder_path = r"C:\path\to\final"
