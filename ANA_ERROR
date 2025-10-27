@@ -1,7 +1,6 @@
 import pandas as pd
 import os
 import io
-import re
 import dataiku
 
 # ------------------------------------------------------
@@ -10,75 +9,79 @@ import dataiku
 use_dataiku = True  # 🔄 Switch between Dataiku and local
 
 if use_dataiku:
-    input_folder = dataiku.Folder("MATCH_FOLDER_ID")   # Input folder containing match CSV files
-    output_folder = dataiku.Folder("LONG_FOLDER_ID")   # Output folder for reshaped files
+    input_folder = dataiku.Folder("7WXwUJep")       # Input CSV files
+    match_folder = dataiku.Folder("1foei4zV")       # For matched output
+    notmatch_folder = dataiku.Folder("zEuoVJeo") # For unmatched output
 else:
-    input_folder_path = r"C:\path\to\matched_clean"
-    output_folder_path = r"C:\path\to\long_output"
+    input_folder_path = r"C:\path\to\input"
+    match_folder_path = r"C:\path\to\match"
+    notmatch_folder_path = r"C:\path\to\notmatch"
 
 # ------------------------------------------------------
-# 🧩 Helper Function: Extract date between 3rd and 4th "_"
-# ------------------------------------------------------
-def extract_date_from_filename(filename):
-    """
-    Extracts the date between the 3rd and 4th underscore ("_") in the filename.
-    Expected format: 01-Aug-25 or similar.
-    Returns the date string if found, else empty string.
-    """
-    parts = filename.split("_")
-    if len(parts) >= 4:
-        date_part = parts[3].split(".")[0]  # remove file extension if attached
-        # Validate it looks like a date (01-Aug-25 format)
-        if re.match(r"\d{1,2}-[A-Za-z]{3}-\d{2,4}", date_part):
-            return date_part
-    return ""
-
-# ------------------------------------------------------
-# 🧠 FUNCTION TO PROCESS FILE
+# 🧩 Helper function
 # ------------------------------------------------------
 def process_file(file_path, file_name):
     df = pd.read_csv(file_path)
 
-    # Columns expected
-    tenor_col = "Tenor"
-    rate_cols = ["ATM Ask", "ATM Bid", "25d RR Mid", "25d BF Mid"]
+    # --- Define column pair mappings ---
+    mappings = [
+        ("AB1", "C1"),
+        ("AB1 Category", "C111"),
+        ("AB2", "C11"),
+        ("AB2 Category", "C111"),
+        ("AB3", "C2"),
+        ("AB3 Category", "C2 Category"),
+        ("AB4", "C3"),
+        ("AB4 Category", "C3 Category")
+    ]
 
-    # Map each type to its Category
-    category_map = {
-        "ATM Ask": "DF-4",
-        "ATM Bid": "DF-1",
-        "25d RR Mid": "DF-2",
-        "25d BF Mid": "DF-3"
-    }
+    match_rows = []
+    notmatch_rows = []
 
-    # Melt wide → long
-    long_df = df.melt(
-        id_vars=[tenor_col],
-        value_vars=rate_cols,
-        var_name="Type",
-        value_name="Rate"
-    )
+    for _, row in df.iterrows():
+        is_match = True
+        for col_a, col_b in mappings:
+            if col_a in df.columns and col_b in df.columns:
+                val_a = str(row[col_a]).strip() if not pd.isna(row[col_a]) else ""
+                val_b = str(row[col_b]).strip() if not pd.isna(row[col_b]) else ""
+                if val_a != val_b:
+                    is_match = False
+                    break
+        if is_match:
+            match_rows.append(row.to_dict())
+        else:
+            notmatch_rows.append(row.to_dict())
 
-    # Add Category & FileDate
-    long_df["Category"] = long_df["Type"].map(category_map)
-    long_df["FileDate"] = extract_date_from_filename(file_name)
+    match_df = pd.DataFrame(match_rows)
+    notmatch_df = pd.DataFrame(notmatch_rows)
 
-    # Output file name
-    output_file_name = os.path.splitext(file_name)[0] + "_long.csv"
+    # File names with suffix
+    match_file_name = os.path.splitext(file_name)[0] + "_match.csv"
+    notmatch_file_name = os.path.splitext(file_name)[0] + "_notmatch.csv"
 
-    # Save
+    # ✅ Save only if there are rows
     if use_dataiku:
-        buffer = io.StringIO()
-        long_df.to_csv(buffer, index=False)
-        output_folder.upload_stream(output_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
-    else:
-        os.makedirs(output_folder_path, exist_ok=True)
-        long_df.to_csv(os.path.join(output_folder_path, output_file_name), index=False)
+        if not match_df.empty:
+            buffer = io.StringIO()
+            match_df.to_csv(buffer, index=False)
+            match_folder.upload_stream(match_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
 
-    print(f"✅ {file_name}: {len(long_df)} rows processed (Date: {long_df['FileDate'].iloc[0]})")
+        if not notmatch_df.empty:
+            buffer = io.StringIO()
+            notmatch_df.to_csv(buffer, index=False)
+            notmatch_folder.upload_stream(notmatch_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
+    else:
+        os.makedirs(match_folder_path, exist_ok=True)
+        os.makedirs(notmatch_folder_path, exist_ok=True)
+        if not match_df.empty:
+            match_df.to_csv(os.path.join(match_folder_path, match_file_name), index=False)
+        if not notmatch_df.empty:
+            notmatch_df.to_csv(os.path.join(notmatch_folder_path, notmatch_file_name), index=False)
+
+    print(f"✅ {file_name}: {len(match_df)} matched, {len(notmatch_df)} not matched")
 
 # ------------------------------------------------------
-# 🚀 MAIN EXECUTION
+# 🚀 Main Execution
 # ------------------------------------------------------
 if use_dataiku:
     for path in input_folder.list_paths_in_partition():
