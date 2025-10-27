@@ -38,27 +38,64 @@ def extract_date_from_filename(filename):
 def process_file(file_path, file_name):
     df = pd.read_csv(file_path)
 
-    # Rename "Tenor/Rating" → "Tenor" (if needed)
-    if "Tenor/Rating" in df.columns:
+    # Normalize Tenor column name
+    if "Tenor/Rating" in df.columns and "Tenor" not in df.columns:
         df = df.rename(columns={"Tenor/Rating": "Tenor"})
+    # if neither present, try to find something with 'tenor' in name
+    if "Tenor" not in df.columns:
+        tenor_candidates = [c for c in df.columns if "tenor" in c.lower() or "rating" in c.lower()]
+        if tenor_candidates:
+            df = df.rename(columns={tenor_candidates[0]: "Tenor"})
+        else:
+            # create Tenor as index if not present (will become NaN)
+            df["Tenor"] = pd.NA
 
-    # Identify ratings (AAA, AA+, AA, AA-) and their category columns
+    # Define rating columns we expect
     rating_cols = ["AAA", "AA+", "AA", "AA-"]
     category_cols = [f"{r} Category" for r in rating_cols]
 
-    # Melt wide → long for each rating
+    # Verify existence and log missing columns
+    existing_rating_cols = [c for c in rating_cols if c in df.columns]
+    existing_category_cols = [c for c in category_cols if c in df.columns]
+
+    if not existing_rating_cols:
+        print(f"⚠️ Skipping {file_name}: No rating columns ({rating_cols}) found.")
+        return
+
+    # Build long frames ensuring each rating picks its own category column
     long_frames = []
-    for rating, cat_col in zip(rating_cols, category_cols):
-        temp = df[["Tenor", rating, cat_col]].copy()
-        temp = temp.rename(columns={rating: "Value", cat_col: "Category"})
+    for rating in rating_cols:
+        rating_col = rating
+        cat_col = f"{rating} Category"
+        if rating_col not in df.columns:
+            # skip missing rating columns
+            continue
+
+        # If category column is missing, create it with NaN to preserve structure
+        if cat_col not in df.columns:
+            df[cat_col] = pd.NA
+
+        temp = df[["Tenor", rating_col, cat_col]].copy()
+        temp = temp.rename(columns={rating_col: "Value", cat_col: "Category"})
         temp["Rating"] = rating
+        # Reorder to a stable layout before appending
+        temp = temp[["Tenor", "Rating", "Value", "Category"]]
         long_frames.append(temp)
 
     # Combine all into one long DataFrame
-    long_df = pd.concat(long_frames, ignore_index=True)
+    if long_frames:
+        long_df = pd.concat(long_frames, ignore_index=True)
+    else:
+        print(f"⚠️ {file_name}: No data to melt after checking rating columns.")
+        return
 
-    # Add file date from filename
-    long_df["FileDate"] = extract_date_from_filename(file_name)
+    # Add file date from filename (same value for all rows)
+    file_date = extract_date_from_filename(file_name)
+    long_df["FileDate"] = file_date
+
+    # Ensure final column order
+    final_cols = ["Tenor", "Rating", "Value", "Category", "FileDate"]
+    long_df = long_df[final_cols]
 
     # Output file name
     output_file_name = os.path.splitext(file_name)[0] + "_long.csv"
@@ -72,7 +109,8 @@ def process_file(file_path, file_name):
         os.makedirs(output_folder_path, exist_ok=True)
         long_df.to_csv(os.path.join(output_folder_path, output_file_name), index=False)
 
-    print(f"✅ {file_name}: {len(long_df)} rows processed (Date: {long_df['FileDate'].iloc[0] if not long_df.empty else 'N/A'})")
+    print(f"✅ {file_name}: {len(long_df)} rows processed (Date: {file_date or 'N/A'})")
+
 
 # ------------------------------------------------------
 # 🚀 MAIN EXECUTION
