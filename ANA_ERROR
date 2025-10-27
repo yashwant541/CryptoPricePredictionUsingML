@@ -1,107 +1,66 @@
 import pandas as pd
 import dataiku
-import tempfile
-import os
 
 # ------------------------------------------------------
-# 🔧 Configuration (replace with your Dataiku folder IDs)
+# ⚙️ CONFIGURATION
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXX")       # Folder containing maker_checker_summary.csv
-output_folder = dataiku.Folder("XXXXXXX")      # Folder to save flagged results
+# Replace with your actual dataset names in Dataiku
+input_dataset = "input_file_dataset"   # e.g. name of the uploaded CSV dataset
+output_dataset = "missing_dates_output"  # e.g. name of output dataset
 
-# ------------------------------------------------------
-# 🧠 Helper Function
-# ------------------------------------------------------
-def flag_missing_status(summary_df):
-    """
-    For each FileDate + Benchmark combination, check if all four statuses are present:
-    'Calculated', 'Proposed', 'Approved', 'Submitted'.
-    Flag combinations where any are missing.
-    """
-    expected_statuses = {"Calculated", "Proposed", "Approved", "Submitted"}
+# Define the start and end date range
+start_date = "2025-01-01"
+end_date = "2025-01-31"
 
-    # Validate required columns
-    required_cols = ["FileDate", "Benchmark", "Status"]
-    missing_cols = [c for c in required_cols if c not in summary_df.columns]
-    if missing_cols:
-        raise Exception(f"❌ Missing required columns: {missing_cols}")
+# Define the date column name in your CSV
+date_column = "File Date"
 
-    # Clean and normalize
-    summary_df["Status"] = summary_df["Status"].astype(str).str.strip().str.title()
-
-    # Group and evaluate
-    grouped = (
-        summary_df.groupby(["FileDate", "Benchmark"])["Status"]
-        .agg(lambda x: set(x))
-        .reset_index()
-    )
-
-    grouped["Missing_Statuses"] = grouped["Status"].apply(lambda s: list(expected_statuses - s))
-    grouped["Flag"] = grouped["Missing_Statuses"].apply(lambda x: len(x) > 0)
-
-    flagged_summary = grouped[grouped["Flag"]].copy()
-
-    # Merge back for detailed rows
-    flagged_details = summary_df.merge(
-        flagged_summary[["FileDate", "Benchmark"]],
-        on=["FileDate", "Benchmark"],
-        how="inner"
-    )
-
-    return flagged_summary, flagged_details
+# List of holidays (YYYY-MM-DD)
+holidays = [
+    "2025-01-01",
+    "2025-01-26"
+]
 
 # ------------------------------------------------------
-# 🚀 Main Execution
+# 📥 READ INPUT DATASET
 # ------------------------------------------------------
-def main():
-    print("🔍 Reading maker_checker_summary file from Dataiku input folder...")
-
-    # Locate file
-    files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith((".csv", ".xlsx"))]
-    if not files:
-        raise Exception("❌ No summary file found in input folder.")
-    if len(files) > 1:
-        raise Exception(f"⚠️ Multiple files found in input folder: {[os.path.basename(f) for f in files]}.\nPlease keep only one summary file.")
-
-    file_path = files[0]
-    file_name = os.path.basename(file_path)
-
-    # Read the file
-    with input_folder.get_download_stream(file_path) as stream:
-        if file_name.lower().endswith(".csv"):
-            summary_df = pd.read_csv(stream)
-        else:
-            summary_df = pd.read_excel(stream)
-
-    print(f"📘 Loaded summary file: {file_name} with {len(summary_df)} rows")
-
-    # Evaluate missing statuses
-    flagged_summary, flagged_details = flag_missing_status(summary_df)
-
-    # ------------------------------------------------------
-    # 💾 Save results using tempfile + upload_stream
-    # ------------------------------------------------------
-    output_files = [
-        (flagged_summary, "flagged_summary.csv"),
-        (flagged_details, "flagged_details.csv")
-    ]
-
-    for df, filename in output_files:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-            df.to_csv(tmp_file.name, index=False)
-            with open(tmp_file.name, "rb") as f:
-                output_folder.upload_stream(filename, f)
-            os.remove(tmp_file.name)  # Clean temp file
-
-    print(f"✅ Flagging complete: {len(flagged_summary)} combinations flagged.")
-
-    if not flagged_summary.empty:
-        print(flagged_summary[["FileDate", "Benchmark", "Missing_Statuses"]])
-    else:
-        print("🎉 All combinations have all four statuses!")
+df = dataiku.Dataset(input_dataset).get_dataframe()
 
 # ------------------------------------------------------
-# Entry Point
+# 🧮 PROCESS DATA
 # ------------------------------------------------------
-if __name__ == "__main__":
-    main()
+# Convert 'File Date' to date
+df[date_column] = pd.to_datetime(df[date_column], errors="coerce").dt.date
+
+# Generate full date range
+date_range = pd.date_range(start=start_date, end=end_date).date
+
+# Filter only weekdays and exclude holidays
+valid_dates = [
+    d for d in date_range
+    if d.weekday() < 5 and str(d) not in holidays
+]
+
+# Get list of available dates in the dataset
+file_dates = set(df[date_column].dropna())
+
+# Identify missing working dates
+missing_dates = [d for d in valid_dates if d not in file_dates]
+
+# Prepare result DataFrame
+result_df = pd.DataFrame(missing_dates, columns=["Missing Date"])
+
+# ------------------------------------------------------
+# 💾 WRITE OUTPUT DATASET
+# ------------------------------------------------------
+dataiku.Dataset(output_dataset).write_with_schema(result_df)
+
+# ------------------------------------------------------
+# 🪶 LOG OUTPUT
+# ------------------------------------------------------
+if result_df.empty:
+    print("\n🎉 No missing working-day dates found!")
+else:
+    print("\n📅 Missing non-weekend, non-holiday dates:")
+    for d in missing_dates:
+        print(d)
