@@ -1,11 +1,73 @@
-    # --- Define column pair mappings ---
-    mappings = [
-        ("AB1", "C1"),
-        ("AB1 Category", "C111"),
-        ("AB2", "C11"),
-        ("AB2 Category", "C111"),
-        ("AB3", "C2"),
-        ("AB3 Category", "C2 Category"),
-        ("AB4", "C3"),
-        ("AB4 Category", "C3 Category")
-    ]
+import pandas as pd
+import os
+import io
+import dataiku
+
+# ------------------------------------------------------
+# ⚙️ CONFIGURATION
+# ------------------------------------------------------
+use_dataiku = True  # 🔄 Switch between Dataiku and local
+
+if use_dataiku:
+    input_folder = dataiku.Folder("MATCH_FOLDER_ID")   # Input: Match folder (CSV files)
+    output_folder = dataiku.Folder("FINAL_FOLDER_ID")  # Output: Final transformed files
+else:
+    input_folder_path = r"C:\path\to\match"
+    output_folder_path = r"C:\path\to\final"
+
+# ------------------------------------------------------
+# 🧭 COLUMN MAPPINGS
+# ------------------------------------------------------
+column_mapping = {
+    "C1": "ATM Ask",
+    "C1 Category": "ATM Ask Category",
+    "C11": "ATM Bid",
+    "C11 Category": "ATM Bid Category",
+    "C2": "25d RR Mid",
+    "C2 Category": "25d RR Mid Category",
+    "C3": "25d BF Mid",
+    "C3 Category": "25d BF Mid Category"
+}
+
+# ------------------------------------------------------
+# ⚙️ PROCESSING FUNCTION
+# ------------------------------------------------------
+def process_file(file_path, file_name):
+    df = pd.read_csv(file_path)
+
+    # Select only the C columns (and Tenor if it exists)
+    c_columns = [col for col in df.columns if col.startswith("C") or col.lower() == "tenor"]
+
+    # Filter the dataframe
+    filtered_df = df[c_columns].copy()
+
+    # Rename according to mapping
+    filtered_df.rename(columns=column_mapping, inplace=True)
+
+    # Save the transformed file
+    if use_dataiku:
+        buffer = io.StringIO()
+        filtered_df.to_csv(buffer, index=False)
+        output_folder.upload_stream(file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
+    else:
+        os.makedirs(output_folder_path, exist_ok=True)
+        filtered_df.to_csv(os.path.join(output_folder_path, file_name), index=False)
+
+    print(f"✅ Processed: {file_name} ({len(filtered_df)} rows)")
+
+# ------------------------------------------------------
+# 🚀 MAIN EXECUTION
+# ------------------------------------------------------
+if use_dataiku:
+    for path in input_folder.list_paths_in_partition():
+        if path.endswith(".csv"):
+            file_name = os.path.basename(path)
+            with input_folder.get_download_stream(path) as f:
+                df = pd.read_csv(f)
+                temp_path = f"/tmp/{file_name}"
+                df.to_csv(temp_path, index=False)
+                process_file(temp_path, file_name)
+else:
+    for filename in os.listdir(input_folder_path):
+        if filename.endswith(".csv"):
+            process_file(os.path.join(input_folder_path, filename), filename)
