@@ -1,95 +1,95 @@
 import pandas as pd
-import io
 import os
+import io
+import re
 import dataiku
 
 # ------------------------------------------------------
 # ⚙️ CONFIGURATION
 # ------------------------------------------------------
-use_dataiku = True  # 🔄 Switch between Dataiku and Local usage
+use_dataiku = True  # 🔄 Switch between Dataiku and local
 
 if use_dataiku:
-    input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # Folder with input files
-    output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID") # Folder to save output files
+    input_folder = dataiku.Folder("KYgZH4YD")   # Input folder containing match CSV files
+    output_folder = dataiku.Folder("gMz645xe")   # Output folder for reshaped files
 else:
-    input_path = r"C:\path\to\input\folder"
-    output_path = r"C:\path\to\output\folder"
-
-
-# ------------------------------------------------------
-# 🧠 LOAD ALL FILES
-# ------------------------------------------------------
-dfs = []
-
-if use_dataiku:
-    for file_path in input_folder.list_paths_in_partition():
-        filename = os.path.basename(file_path)
-        if filename.lower().endswith(('.csv', '.xlsx')):
-            with input_folder.get_download_stream(file_path) as stream:
-                content = stream.read()
-
-                if filename.lower().endswith('.csv'):
-                    df = pd.read_csv(io.BytesIO(content), dtype=str)
-                else:
-                    df = pd.read_excel(io.BytesIO(content), dtype=str)
-
-                dfs.append(df)
-                print(f"✅ Loaded: {filename} ({len(df)} rows)")
-else:
-    for filename in os.listdir(input_path):
-        if filename.lower().endswith(('.csv', '.xlsx')):
-            full_path = os.path.join(input_path, filename)
-            if filename.lower().endswith('.csv'):
-                df = pd.read_csv(full_path, dtype=str)
-            else:
-                df = pd.read_excel(full_path, dtype=str)
-            dfs.append(df)
-            print(f"✅ Loaded: {filename} ({len(df)} rows)")
-
+    input_folder_path = r"C:\path\to\matched_clean"
+    output_folder_path = r"C:\path\to\long_output"
 
 # ------------------------------------------------------
-# 🧩 COMBINE ALL DATA
+# 🧩 Helper Function: Extract date between 3rd and 4th "_"
 # ------------------------------------------------------
-if dfs:
-    combined_df = pd.concat(dfs, ignore_index=True)
-    print(f"\n📊 Combined total rows: {len(combined_df)}")
-else:
-    raise ValueError("❌ No valid files found in the input folder.")
-
-
-# ------------------------------------------------------
-# 💾 SAVE CONSOLIDATED FILE
-# ------------------------------------------------------
-if use_dataiku:
-    csv_buffer = io.StringIO()
-    combined_df.to_csv(csv_buffer, index=False)
-    csv_buffer.seek(0)
-    output_folder.upload_stream("ConsolidatedFile.csv", io.BytesIO(csv_buffer.getvalue().encode('utf-8')))
-    print("✅ Saved: ConsolidatedFile.csv")
-else:
-    combined_df.to_csv(os.path.join(output_path, "ConsolidatedFile.csv"), index=False)
-    print("✅ Saved: ConsolidatedFile.csv (local)")
-
+def extract_date_from_filename(filename):
+    """
+    Extracts the date between the 3rd and 4th underscore ("_") in the filename.
+    Expected format: 01-Aug-25 or similar.
+    Returns the date string if found, else empty string.
+    """
+    parts = filename.split("_")
+    if len(parts) >= 4:
+        date_part = parts[3].split(".")[0]  # remove file extension if attached
+        # Validate it looks like a date (01-Aug-25 format)
+        if re.match(r"\d{1,2}-[A-Za-z]{3}-\d{2,4}", date_part):
+            return date_part
+    return ""
 
 # ------------------------------------------------------
-# 🔍 FILTER CATEGORY != 'DF-4'
+# 🧠 FUNCTION TO PROCESS FILE
 # ------------------------------------------------------
-if 'Category' not in combined_df.columns:
-    raise ValueError("❌ The 'Category' column does not exist in the input files.")
+def process_file(file_path, file_name):
+    df = pd.read_csv(file_path)
 
-filtered_df = combined_df[combined_df['Category'] != 'DF-4']
-print(f"📉 Filtered rows: {len(filtered_df)} (Category != 'DF-4')")
+    # Columns expected
+    tenor_col = "Tenor"
+    rate_cols = ["ATM Ask", "ATM Bid", "25d RR Mid", "25d BF Mid"]
 
+    # Map each type to its Category
+    category_map = {
+        "ATM Ask": "DF-4",
+        "ATM Bid": "DF-1",
+        "25d RR Mid": "DF-2",
+        "25d BF Mid": "DF-3"
+    }
+
+    # Melt wide → long
+    long_df = df.melt(
+        id_vars=[tenor_col],
+        value_vars=rate_cols,
+        var_name="Type",
+        value_name="Rate"
+    )
+
+    # Add Category & FileDate
+    long_df["Category"] = long_df["Type"].map(category_map)
+    long_df["FileDate"] = extract_date_from_filename(file_name)
+
+    # Output file name
+    output_file_name = os.path.splitext(file_name)[0] + "_long.csv"
+
+    # Save
+    if use_dataiku:
+        buffer = io.StringIO()
+        long_df.to_csv(buffer, index=False)
+        output_folder.upload_stream(output_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
+    else:
+        os.makedirs(output_folder_path, exist_ok=True)
+        long_df.to_csv(os.path.join(output_folder_path, output_file_name), index=False)
+
+    print(f"✅ {file_name}: {len(long_df)} rows processed (Date: {long_df['FileDate'].iloc[0]})")
 
 # ------------------------------------------------------
-# 💾 SAVE FILTERED FILE
+# 🚀 MAIN EXECUTION
 # ------------------------------------------------------
 if use_dataiku:
-    csv_buffer = io.StringIO()
-    filtered_df.to_csv(csv_buffer, index=False)
-    csv_buffer.seek(0)
-    output_folder.upload_stream("DF_Failure.csv", io.BytesIO(csv_buffer.getvalue().encode('utf-8')))
-    print("✅ Saved: DF_Failure.csv")
+    for path in input_folder.list_paths_in_partition():
+        if path.endswith(".csv"):
+            file_name = os.path.basename(path)
+            with input_folder.get_download_stream(path) as f:
+                df = pd.read_csv(f)
+                temp_path = f"/tmp/{file_name}"
+                df.to_csv(temp_path, index=False)
+                process_file(temp_path, file_name)
 else:
-    filtered_df.to_csv(os.path.join(output_path, "DF_Failure.csv"), index=False)
-    print("✅ Saved: DF_Failure.csv (local)")
+    for filename in os.listdir(input_folder_path):
+        if filename.endswith(".csv"):
+            process_file(os.path.join(input_folder_path, filename), filename)
