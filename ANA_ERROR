@@ -6,7 +6,7 @@ import dataiku
 # ------------------------------------------------------
 # ⚙️ CONFIGURATION
 # ------------------------------------------------------
-use_dataiku = True  # 🔄 Switch for Dataiku / Local usage
+use_dataiku = True  # 🔄 Switch between Dataiku and Local usage
 
 if use_dataiku:
     input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # Folder with input files
@@ -22,16 +22,19 @@ else:
 dfs = []
 
 if use_dataiku:
-    for file_info in input_folder.list_paths_in_partition():
-        filename = os.path.basename(file_info)
+    for file_path in input_folder.list_paths_in_partition():
+        filename = os.path.basename(file_path)
         if filename.lower().endswith(('.csv', '.xlsx')):
-            with input_folder.get_download_stream(filename) as f:
+            with input_folder.get_download_stream(file_path) as stream:
+                content = stream.read()
+
                 if filename.lower().endswith('.csv'):
-                    df = pd.read_csv(f, dtype=str)
+                    df = pd.read_csv(io.BytesIO(content), dtype=str)
                 else:
-                    df = pd.read_excel(f, dtype=str)
+                    df = pd.read_excel(io.BytesIO(content), dtype=str)
+
                 dfs.append(df)
-                print(f"✅ Loaded: {filename} | {len(df)} rows")
+                print(f"✅ Loaded: {filename} ({len(df)} rows)")
 else:
     for filename in os.listdir(input_path):
         if filename.lower().endswith(('.csv', '.xlsx')):
@@ -41,41 +44,52 @@ else:
             else:
                 df = pd.read_excel(full_path, dtype=str)
             dfs.append(df)
-            print(f"✅ Loaded: {filename} | {len(df)} rows")
+            print(f"✅ Loaded: {filename} ({len(df)} rows)")
+
 
 # ------------------------------------------------------
 # 🧩 COMBINE ALL DATA
 # ------------------------------------------------------
 if dfs:
     combined_df = pd.concat(dfs, ignore_index=True)
-    print(f"\n📊 Combined Total Rows: {len(combined_df)}")
+    print(f"\n📊 Combined total rows: {len(combined_df)}")
 else:
-    raise ValueError("No valid CSV or Excel files found to combine.")
+    raise ValueError("❌ No valid files found in the input folder.")
 
 
 # ------------------------------------------------------
 # 💾 SAVE CONSOLIDATED FILE
 # ------------------------------------------------------
 if use_dataiku:
-    with output_folder.get_writer("ConsolidatedFile.csv") as writer:
-        combined_df.to_csv(writer, index=False)
+    csv_buffer = io.StringIO()
+    combined_df.to_csv(csv_buffer, index=False)
+    csv_buffer.seek(0)
+    output_folder.upload_stream("ConsolidatedFile.csv", io.BytesIO(csv_buffer.getvalue().encode('utf-8')))
+    print("✅ Saved: ConsolidatedFile.csv")
 else:
     combined_df.to_csv(os.path.join(output_path, "ConsolidatedFile.csv"), index=False)
-print("✅ Saved: ConsolidatedFile.csv")
+    print("✅ Saved: ConsolidatedFile.csv (local)")
 
 
 # ------------------------------------------------------
 # 🔍 FILTER CATEGORY != 'DF-4'
 # ------------------------------------------------------
+if 'Category' not in combined_df.columns:
+    raise ValueError("❌ The 'Category' column does not exist in the input files.")
+
 filtered_df = combined_df[combined_df['Category'] != 'DF-4']
-print(f"📉 Filtered Rows: {len(filtered_df)} (Category != 'DF-4')")
+print(f"📉 Filtered rows: {len(filtered_df)} (Category != 'DF-4')")
+
 
 # ------------------------------------------------------
 # 💾 SAVE FILTERED FILE
 # ------------------------------------------------------
 if use_dataiku:
-    with output_folder.get_writer("DF_Failure.csv") as writer:
-        filtered_df.to_csv(writer, index=False)
+    csv_buffer = io.StringIO()
+    filtered_df.to_csv(csv_buffer, index=False)
+    csv_buffer.seek(0)
+    output_folder.upload_stream("DF_Failure.csv", io.BytesIO(csv_buffer.getvalue().encode('utf-8')))
+    print("✅ Saved: DF_Failure.csv")
 else:
     filtered_df.to_csv(os.path.join(output_path, "DF_Failure.csv"), index=False)
-print("✅ Saved: DF_Failure.csv")
+    print("✅ Saved: DF_Failure.csv (local)")
