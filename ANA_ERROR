@@ -1,117 +1,92 @@
+
 import pandas as pd
-import os
-import io
 import dataiku
+import tempfile
+import os
 
 # ------------------------------------------------------
-# ⚙️ CONFIGURATION
+# 🔧 Configuration (replace with your Dataiku folder IDs)
 # ------------------------------------------------------
-use_dataiku = True   # 🔄 Switch between Dataiku and local mode
-
-if use_dataiku:
-    input_folder = dataiku.Folder("INPUT_FOLDER_ID")     # 📥 Input folder containing the summary file
-    output_folder = dataiku.Folder("OUTPUT_FOLDER_ID")   # 📤 Output folder for results
-else:
-    input_path = r"C:\path\to\maker_checker_summary.csv" # Local path to the single summary file
-    output_path = r"C:\path\to\output\folder"
-    os.makedirs(output_path, exist_ok=True)
+input_folder = dataiku.Folder("XXXXXXX")       # Folder containing maker_checker_summary.csv
+output_folder = dataiku.Folder("XXXXXXX")      # Folder to save success/fail results
 
 # ------------------------------------------------------
-# 🧠 EXPECTED STATUS VALUES
+# 🧠 Helper Function
 # ------------------------------------------------------
-expected_statuses = {"Calculated", "Proposed", "Approved", "Submitted"}
+def evaluate_maker_checker(df):
+    """
+    Evaluate maker-checker logic per file for each Benchmark + Date combination:
+    1. Ensure each file has exactly 4 rows
+    2. Ensure maker ≠ checker
+    """
+    success_records = []
+    fail_records = []
+
+    # Drop fully blank rows
+    df = df.dropna(how='all')
+
+    # Clean column names
+    df.columns = [c.strip() for c in df.columns]
+
+    # Group by Benchmark + Date
+    for (benchmark, date_in_file), group in df.groupby(["Benchmark", "Date (in file)"]):
+        # Iterate over files within this combination
+        for file_name, file_grp in group.groupby("FileName"):
+            file_grp = file_grp.copy()  # Avoid SettingWithCopyWarning
+
+            # Rule 1: exactly 4 rows
+            if len(file_grp) != 4:
+                file_grp["FailReason"] = "Row count != 4"
+                fail_records.append(file_grp)
+                continue
+
+            # Identify maker and checker users
+            maker_users = set(file_grp[file_grp["Status"].isin(["Calculated", "Proposed"])]["USER"].dropna())
+            checker_users = set(file_grp[file_grp["Status"].isin(["Approved", "Submitted"])]["USER"].dropna())
+
+            # Rule 2: maker ≠ checker
+            if maker_users and checker_users and not maker_users.intersection(checker_users):
+                success_records.append(file_grp)
+            else:
+                file_grp["FailReason"] = "Maker and checker overlap or missing users"
+                fail_records.append(file_grp)
+
+    df_success = pd.concat(success_records, ignore_index=True) if success_records else pd.DataFrame(columns=df.columns)
+    df_fail = pd.concat(fail_records, ignore_index=True) if fail_records else pd.DataFrame(columns=df.columns)
+
+    return df_success, df_fail
 
 # ------------------------------------------------------
-# 📚 READ THE SINGLE SUMMARY FILE
+# 🚀 Main Execution
 # ------------------------------------------------------
-if use_dataiku:
-    # Get first file path from folder
-    file_list = input_folder.list_paths_in_partition()
-    if not file_list:
-        raise ValueError("❌ No files found in the input folder.")
-    
-    file_path = file_list[0]
-    file_name = os.path.basename(file_path)
-    print(f"📥 Reading summary file: {file_name}...")
-    
-    with input_folder.get_download_stream(file_path) as stream:
-        if file_name.lower().endswith(".csv"):
-            summary = pd.read_csv(stream)
-        elif file_name.lower().endswith(".xlsx"):
-            summary = pd.read_excel(stream)
-        else:
-            raise ValueError("❌ Unsupported file format. Please use CSV or XLSX.")
-else:
-    print(f"📥 Reading local summary file: {input_path}...")
-    if input_path.lower().endswith(".csv"):
-        summary = pd.read_csv(input_path)
-    elif input_path.lower().endswith(".xlsx"):
-        summary = pd.read_excel(input_path)
-    else:
-        raise ValueError("❌ Unsupported file format. Please use CSV or XLSX.")
+def main():
+    print("🔍 Reading maker_checker_summary.csv from Dataiku input folder...")
+
+    # Locate the summary file
+    files = [f for f in input_folder.list_paths_in_partition() if f.lower().endswith(".csv")]
+    if not files:
+        raise Exception("❌ No CSV found in MakerChecker summary input folder.")
+    summary_path = files[0]
+
+    # Read file
+    with input_folder.get_download_stream(summary_path) as stream:
+        df_summary = pd.read_csv(stream)
+
+    # Evaluate
+    df_success, df_fail = evaluate_maker_checker(df_summary)
+
+    # Save results to Dataiku output folder
+    for df, filename in [(df_success, "MakerChecker_Success.csv"), (df_fail, "MakerChecker_Fails.csv")]:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+            df.to_csv(tmp_file.name, index=False)
+            with open(tmp_file.name, "rb") as f:
+                output_folder.upload_stream(filename, f)
+            os.remove(tmp_file.name)  # Clean up temp file
+
+    print(f"✅ Evaluation complete: {len(df_success)} success rows, {len(df_fail)} fail rows.")
 
 # ------------------------------------------------------
-# 🧩 VALIDATE REQUIRED COLUMNS
+# Entry point
 # ------------------------------------------------------
-required_cols = ["FileDate", "Benchmark", "Status"]
-missing_cols = [col for col in required_cols if col not in summary.columns]
-if missing_cols:
-    raise ValueError(f"❌ Missing required columns: {missing_cols}")
-
-# ------------------------------------------------------
-# 🧹 CLEANUP & NORMALIZE
-# ------------------------------------------------------
-summary["Status"] = summary["Status"].astype(str).str.strip().str.title()
-
-# ------------------------------------------------------
-# 📊 GROUP & FLAG MISSING STATUS COMBINATIONS
-# ------------------------------------------------------
-status_summary = (
-    summary.groupby(["FileDate", "Benchmark"])["Status"]
-    .agg(lambda x: set(x))
-    .reset_index()
-)
-
-status_summary["Missing_Statuses"] = status_summary["Status"].apply(
-    lambda s: list(expected_statuses - s)
-)
-status_summary["Flag"] = status_summary["Missing_Statuses"].apply(lambda x: len(x) > 0)
-
-flagged = status_summary[status_summary["Flag"]].copy()
-
-# ------------------------------------------------------
-# 🧾 MERGE BACK FOR DETAILED FLAGGED ROWS
-# ------------------------------------------------------
-flagged_details = summary.merge(
-    flagged[["FileDate", "Benchmark"]],
-    on=["FileDate", "Benchmark"],
-    how="inner"
-)
-
-# ------------------------------------------------------
-# 💾 SAVE OUTPUTS (UPLOAD STREAMS)
-# ------------------------------------------------------
-if use_dataiku:
-    # Save summary output
-    flagged_csv = flagged.to_csv(index=False)
-    with output_folder.upload_stream("flagged_summary.csv") as stream:
-        stream.write(flagged_csv.encode("utf-8"))
-
-    # Save detailed flagged data
-    flagged_details_csv = flagged_details.to_csv(index=False)
-    with output_folder.upload_stream("flagged_details.csv") as stream:
-        stream.write(flagged_details_csv.encode("utf-8"))
-else:
-    flagged.to_csv(os.path.join(output_path, "flagged_summary.csv"), index=False)
-    flagged_details.to_csv(os.path.join(output_path, "flagged_details.csv"), index=False)
-
-# ------------------------------------------------------
-# ✅ COMPLETION MESSAGE
-# ------------------------------------------------------
-print("✅ Flagging completed successfully!")
-print(f"Total (FileDate, Benchmark) flagged: {len(flagged)}")
-
-if not flagged.empty:
-    print(flagged[["FileDate", "Benchmark", "Missing_Statuses"]])
-else:
-    print("🎉 All combinations have all four statuses!")
+if __name__ == "__main__":
+    main()
