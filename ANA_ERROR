@@ -11,7 +11,7 @@ use_dataiku = True  # 🔄 Switch between Dataiku and local
 
 if use_dataiku:
     input_folder = dataiku.Folder("XXXXXXX")   # Input folder containing match CSV files
-    output_folder = dataiku.Folder("XXXXXXX")   # Output folder for reshaped files
+    output_folder = dataiku.Folder("XXXXXXX")  # Output folder for reshaped files
 else:
     input_folder_path = r"C:\path\to\matched_clean"
     output_folder_path = r"C:\path\to\long_output"
@@ -39,29 +39,48 @@ def extract_date_from_filename(filename):
 def process_file(file_path, file_name):
     df = pd.read_csv(file_path)
 
-    # Columns expected
+    # Normalize Tenor column
+    if "Tenor/Rating" in df.columns and "Tenor" not in df.columns:
+        df.rename(columns={"Tenor/Rating": "Tenor"}, inplace=True)
+
     tenor_col = "Tenor"
-    rate_cols = ["ATM Ask", "ATM Bid", "25d RR Mid", "25d BF Mid"]
 
-    # Map each type to its Category
-    category_map = {
-        "ATM Ask": "DF-4",
-        "ATM Bid": "DF-1",
-        "25d RR Mid": "DF-2",
-        "25d BF Mid": "DF-3"
-    }
+    # Define rate columns and their corresponding category columns
+    rate_category_pairs = [
+        ("ATM Ask", "ATM Ask Category"),
+        ("ATM Bid", "ATM Bid Category"),
+        ("25d RR Mid", "25d RR Mid Category"),
+        ("25d BF Mid", "25d BF Mid Category")
+    ]
 
-    # Melt wide → long
-    long_df = df.melt(
-        id_vars=[tenor_col],
-        value_vars=rate_cols,
-        var_name="Type",
-        value_name="Rate"
-    )
+    # Build long dataframe manually to preserve matching category
+    long_frames = []
+    for rate_col, cat_col in rate_category_pairs:
+        if rate_col in df.columns:
+            temp = df[[tenor_col, rate_col]].copy()
+            temp.rename(columns={rate_col: "Rate"}, inplace=True)
+            temp["Type"] = rate_col
 
-    # Add Category & FileDate
-    long_df["Category"] = long_df["Type"].map(category_map)
+            # Get category column value if available
+            if cat_col in df.columns:
+                temp["Category"] = df[cat_col]
+            else:
+                temp["Category"] = None  # default if missing
+
+            long_frames.append(temp)
+
+    # Combine all
+    if not long_frames:
+        print(f"⚠️ Skipping {file_name}: No valid rate columns found.")
+        return
+
+    long_df = pd.concat(long_frames, ignore_index=True)
+
+    # Add file date
     long_df["FileDate"] = extract_date_from_filename(file_name)
+
+    # Reorder columns
+    long_df = long_df[["Tenor", "Type", "Rate", "Category", "FileDate"]]
 
     # Output file name
     output_file_name = os.path.splitext(file_name)[0] + "_long.csv"
@@ -75,7 +94,7 @@ def process_file(file_path, file_name):
         os.makedirs(output_folder_path, exist_ok=True)
         long_df.to_csv(os.path.join(output_folder_path, output_file_name), index=False)
 
-    print(f"✅ {file_name}: {len(long_df)} rows processed (Date: {long_df['FileDate'].iloc[0]})")
+    print(f"✅ {file_name}: {len(long_df)} rows processed (Date: {long_df['FileDate'].iloc[0] if not long_df.empty else 'N/A'})")
 
 # ------------------------------------------------------
 # 🚀 MAIN EXECUTION
