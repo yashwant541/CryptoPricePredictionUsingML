@@ -11,11 +11,12 @@ use_dataiku = True  # 🔄 Switch between Dataiku and local
 if use_dataiku:
     input_folder = dataiku.Folder("XXXXXXXX")       # Input CSV files
     match_folder = dataiku.Folder("XXXXXXXX")       # For matched output
-    notmatch_folder = dataiku.Folder("XXXXXXXX") # For unmatched output
+    notmatch_folder = dataiku.Folder("XXXXXXXX")    # For unmatched output
 else:
     input_folder_path = r"C:\path\to\input"
     match_folder_path = r"C:\path\to\match"
     notmatch_folder_path = r"C:\path\to\notmatch"
+
 
 # ------------------------------------------------------
 # 🧩 Helper function
@@ -26,13 +27,13 @@ def process_file(file_path, file_name):
     # --- Define column pair mappings ---
     mappings = [
         ("AB1", "C1"),
-        ("AB1 Category", "C111"),
-        ("AB2", "C11"),
-        ("AB2 Category", "C111"),
-        ("AB3", "C2"),
-        ("AB3 Category", "C2 Category"),
-        ("AB4", "C3"),
-        ("AB4 Category", "C3 Category")
+        ("AB1 Category", "C1 Category"),
+        ("AB2", "C2"),
+        ("AB2 Category", "C2 Category"),
+        ("AB3", "C3"),
+        ("AB3 Category", "C3 Category"),
+        ("AB4", "C4"),
+        ("AB4 Category", "C4 Category"),
     ]
 
     match_rows = []
@@ -79,6 +80,7 @@ def process_file(file_path, file_name):
             notmatch_df.to_csv(os.path.join(notmatch_folder_path, notmatch_file_name), index=False)
 
     print(f"✅ {file_name}: {len(match_df)} matched, {len(notmatch_df)} not matched")
+
 
 # ------------------------------------------------------
 # 🚀 Main Execution
