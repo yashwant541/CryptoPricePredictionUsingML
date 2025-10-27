@@ -10,10 +10,10 @@ import dataiku
 use_dataiku = True  # 🔄 Switch between Dataiku and local
 
 if use_dataiku:
-    input_folder = dataiku.Folder("XXXXXXXX")   # Input folder containing match CSV files
-    output_folder = dataiku.Folder("XXXXXXXX")   # Output folder for reshaped files
+    input_folder = dataiku.Folder("XXXXXXXX")    # Input folder = previous output (AAA, AA+ etc.)
+    output_folder = dataiku.Folder("XXXXXXXX")   # Output folder for long-format CSVs
 else:
-    input_folder_path = r"C:\path\to\matched_clean"
+    input_folder_path = r"C:\path\to\rating_level_output"
     output_folder_path = r"C:\path\to\long_output"
 
 # ------------------------------------------------------
@@ -27,8 +27,7 @@ def extract_date_from_filename(filename):
     """
     parts = filename.split("_")
     if len(parts) >= 4:
-        date_part = parts[3].split(".")[0]  # remove file extension if attached
-        # Validate it looks like a date (01-Aug-25 format)
+        date_part = parts[3].split(".")[0]
         if re.match(r"\d{1,2}-[A-Za-z]{3}-\d{2,4}", date_part):
             return date_part
     return ""
@@ -39,34 +38,32 @@ def extract_date_from_filename(filename):
 def process_file(file_path, file_name):
     df = pd.read_csv(file_path)
 
-    # Columns expected
-    tenor_col = "Tenor"
-    rate_cols = ["ATM Ask", "ATM Bid", "25d RR Mid", "25d BF Mid"]
+    # Rename "Tenor/Rating" → "Tenor" (if needed)
+    if "Tenor/Rating" in df.columns:
+        df = df.rename(columns={"Tenor/Rating": "Tenor"})
 
-    # Map each type to its Category
-    category_map = {
-        "ATM Ask": "DF-4",
-        "ATM Bid": "DF-1",
-        "25d RR Mid": "DF-2",
-        "25d BF Mid": "DF-3"
-    }
+    # Identify ratings (AAA, AA+, AA, AA-) and their category columns
+    rating_cols = ["AAA", "AA+", "AA", "AA-"]
+    category_cols = [f"{r} Category" for r in rating_cols]
 
-    # Melt wide → long
-    long_df = df.melt(
-        id_vars=[tenor_col],
-        value_vars=rate_cols,
-        var_name="Type",
-        value_name="Rate"
-    )
+    # Melt wide → long for each rating
+    long_frames = []
+    for rating, cat_col in zip(rating_cols, category_cols):
+        temp = df[["Tenor", rating, cat_col]].copy()
+        temp = temp.rename(columns={rating: "Value", cat_col: "Category"})
+        temp["Rating"] = rating
+        long_frames.append(temp)
 
-    # Add Category & FileDate
-    long_df["Category"] = long_df["Type"].map(category_map)
+    # Combine all into one long DataFrame
+    long_df = pd.concat(long_frames, ignore_index=True)
+
+    # Add file date from filename
     long_df["FileDate"] = extract_date_from_filename(file_name)
 
     # Output file name
     output_file_name = os.path.splitext(file_name)[0] + "_long.csv"
 
-    # Save
+    # Save output
     if use_dataiku:
         buffer = io.StringIO()
         long_df.to_csv(buffer, index=False)
@@ -75,7 +72,7 @@ def process_file(file_path, file_name):
         os.makedirs(output_folder_path, exist_ok=True)
         long_df.to_csv(os.path.join(output_folder_path, output_file_name), index=False)
 
-    print(f"✅ {file_name}: {len(long_df)} rows processed (Date: {long_df['FileDate'].iloc[0]})")
+    print(f"✅ {file_name}: {len(long_df)} rows processed (Date: {long_df['FileDate'].iloc[0] if not long_df.empty else 'N/A'})")
 
 # ------------------------------------------------------
 # 🚀 MAIN EXECUTION
