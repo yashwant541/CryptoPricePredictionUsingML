@@ -15,11 +15,12 @@ output_folder = dataiku.Folder("XXXXXXX")     # Folder to save consolidated outp
 def consolidate_maker_checker(df):
     """
     Consolidate maker-checker info:
-    - Maker = user with Calculated/Proposed status
-    - Checker = user with Approved/Submitted status
-    - Each row per FileName + Benchmark + Date combination
-    - Status times separated into columns
+    - Keep USER columns for Calculated, Proposed, Approved, Submitted
+    - Create Maker and Checker columns
+    - Add descriptive Flag column based on user combinations
     """
+
+    # Pivot the data
     pivot_df = df.pivot_table(
         index=["FileName", "FileDate", "Benchmark", "Date (in file)"],
         columns="Status",
@@ -30,9 +31,11 @@ def consolidate_maker_checker(df):
     pivot_df.columns = [f"{col[0]} {col[1]}".strip() for col in pivot_df.columns.values]
     pivot_df = pivot_df.reset_index()
 
+    # Maker and Checker
     pivot_df['Maker'] = pivot_df['USER Calculated'].combine_first(pivot_df['USER Proposed'])
     pivot_df['Checker'] = pivot_df['USER Approved'].combine_first(pivot_df['USER Submitted'])
 
+    # Rename status time columns
     pivot_df = pivot_df.rename(columns={
         'Status Time Calculated': 'Calculated Status Time',
         'Status Time Proposed': 'Proposed Status Time',
@@ -40,18 +43,52 @@ def consolidate_maker_checker(df):
         'Status Time Submitted': 'Submitted Status Time'
     })
 
-    pivot_df['USER'] = ""  # Blank as in your example
+    # Add USER column (blank, for consistency)
+    pivot_df['USER'] = ""
 
-    # Drop individual USER columns
-    pivot_df = pivot_df.drop(columns=['USER Calculated', 'USER Proposed', 'USER Approved', 'USER Submitted'])
+    # 🧩 Add Flag column based on maker/checker logic
+    def get_flag(row):
+        calc = str(row.get('USER Calculated', '') or '').strip()
+        prop = str(row.get('USER Proposed', '') or '').strip()
+        appr = str(row.get('USER Approved', '') or '').strip()
+        subm = str(row.get('USER Submitted', '') or '').strip()
+        maker = str(row.get('Maker', '') or '').strip()
+        checker = str(row.get('Checker', '') or '').strip()
+
+        # Case 1: Maker == Checker → Not successful
+        if maker and checker and maker == checker:
+            return "Maker Checker Not Successful"
+
+        # Case 2: Maker success (both sides match)
+        if calc == prop and appr == subm:
+            return "Maker-Checker Success"
+
+        # Case 3: Maker mismatch, Checker ok
+        if calc != prop and appr == subm:
+            return "Maker Checker Successful but User Calculated different than User Proposed"
+
+        # Case 4: Maker ok, Checker mismatch
+        if calc == prop and appr != subm:
+            return "Maker Checker Successful but User Approved different than User Submitted"
+
+        # Case 5: Both mismatch
+        if calc != prop and appr != subm:
+            return "Maker Checker Successful but both Maker and Checker users differ"
+
+        return "Maker Checker Not Successful"
+
+    pivot_df['Flag'] = pivot_df.apply(get_flag, axis=1)
 
     # Reorder columns
     cols = [
         'FileName', 'FileDate', 'USER', 'Benchmark', 'Date (in file)',
+        'USER Calculated', 'USER Proposed', 'USER Approved', 'USER Submitted',
         'Maker', 'Checker',
-        'Calculated Status Time', 'Proposed Status Time', 'Approved Status Time', 'Submitted Status Time'
+        'Calculated Status Time', 'Proposed Status Time',
+        'Approved Status Time', 'Submitted Status Time',
+        'Flag'
     ]
-    pivot_df = pivot_df[cols]
+    pivot_df = pivot_df.reindex(columns=cols)
 
     return pivot_df
 
@@ -79,6 +116,7 @@ def main():
         os.remove(tmp_file.name)
 
     print(f"✅ Consolidation complete: {len(df_consolidated)} rows created.")
+    print("📄 Output file: MakerChecker_Success_Consolidated.csv")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
