@@ -7,240 +7,152 @@ import pandas as pd
 import dataiku
 from openpyxl import load_workbook
 
+# ------------------------------------------------------
+# 🔧 CONFIGURATION
+# ------------------------------------------------------
 SHEET_NAME_PATTERN = r'COMPUTED[_ ]?DATA'
 
-# -----------------------------
-# Fixed Dataiku Folder Handles
-# -----------------------------
-input_folder = dataiku.Folder("XXXXXXX")      # 📂 Replace with your input folder ID
-output_folder_tables = dataiku.Folder("XXXXXXXX")  # 📂 Replace with your output folder ID for tables
-output_folder_summary = dataiku.Folder("XXXXXXXX") # 📂 Replace with your output folder ID for summary CSV
+input_folder = dataiku.Folder("XXXXXXX")     # 📂 Replace with your input folder ID
+output_folder = dataiku.Folder("XXXXXXX")    # 📂 Replace with your output folder ID
 
-# -----------------------------
-# Logging Helper
-# -----------------------------
-def log(message):
-    print(f"[LOG] {message}", file=sys.stderr, flush=True)
+# ------------------------------------------------------
+# 🧠 HELPER FUNCTIONS
+# ------------------------------------------------------
+def log(msg):
+    print(f"[LOG] {msg}", file=sys.stderr, flush=True)
 
-# -----------------------------
-# Utility Functions
-# -----------------------------
+
 def extract_date_from_filename(filename):
     """Extract date pattern like 01-Aug-25"""
     match = re.search(r'\d{2}-[A-Za-z]{3}-\d{2}', filename)
     return match.group(0) if match else ""
 
 
-def read_excel_tab(filepath):
-    """Read 'COMPUTED DATA' (or similar) sheet and split into main table + maker-checker summary"""
+def get_cell_address(row_idx, col_idx):
+    """Convert numeric indices to Excel-style cell address"""
+    from openpyxl.utils import get_column_letter
+    return f"{get_column_letter(col_idx + 1)}{row_idx + 1}"
+
+
+# ------------------------------------------------------
+# 📄 MAIN EXCEL PARSING FUNCTION
+# ------------------------------------------------------
+def analyze_computed_data(filepath, filename, file_date):
     wb = load_workbook(filepath, data_only=True)
     sheet_name = None
 
-    # Try to find sheet named similar to "COMPUTED DATA"
     for name in wb.sheetnames:
         if re.search(SHEET_NAME_PATTERN, name, re.IGNORECASE):
             sheet_name = name
             break
 
     if not sheet_name:
-        log("⚠️ 'COMPUTED DATA' not found in workbook.")
-        return None, None
+        log(f"⚠️ {filename}: No 'COMPUTED DATA' sheet found.")
+        return []
 
     ws = wb[sheet_name]
-    data_rows = []
-    summary_rows = []
-    found_summary = False
 
-    # Split main table and summary area
-    for row in ws.iter_rows(values_only=True):
-        row_text = " ".join([str(c) for c in row if c]).strip()
-        if not found_summary:
-            if any(x in row_text for x in ["USER:", "Benchmark:", "Status", "Date:"]):
-                found_summary = True
-                summary_rows.append(row)
-            else:
-                data_rows.append(row)
-        else:
-            summary_rows.append(row)
+    records = []
+    df5_flag = False
 
-    # Filter out empty rows from table
-    data_rows = [r for r in data_rows if any(r)]
-    if not data_rows:
-        return None, None
+    # We want rows 2, 3, 4 (Excel) → indexes 1, 2, 3
+    for r_idx in [1, 2, 3]:
+        row = ws[r_idx]
+        for c_idx, cell in enumerate(row):
+            value = str(cell.value).strip() if cell.value is not None else ""
+            if value:
+                cell_address = get_cell_address(r_idx, c_idx)
+                records.append({
+                    "FileName": filename,
+                    "FileDate": file_date,
+                    "RowNumber": r_idx + 1,
+                    "CellLocation": cell_address,
+                    "Value": value
+                })
 
-    df_table = pd.DataFrame(data_rows[1:], columns=data_rows[0])
+        # Check for DF-5 keyword presence
+        row_values = [str(c.value).upper() if c.value else "" for c in row]
+        if "DF-5" in "".join(row_values):
+            df5_flag = True
 
-    # Parse maker-checker summary
-    summary_texts = [" ".join([str(c) for c in row if c]).strip() for row in summary_rows if any(row)]
-    metadata = []
-    current = {}
+    # Add one summary line per file
+    records.append({
+        "FileName": filename,
+        "FileDate": file_date,
+        "RowNumber": "",
+        "CellLocation": "",
+        "Value": "",
+        "DF-5 Flag": df5_flag
+    })
 
-    for line in summary_texts:
-        line = line.strip()  # remove leading/trailing spaces
-
-        # USER
-        if re.search(r'\bUSER\b', line):
-            if current:
-                metadata.append(current)
-                current = {}
-            match = re.search(r'USER[:\s]*(.*)', line)
-            current["USER"] = match.group(1).strip() if match else ""
-
-        # Benchmark
-        elif re.search(r'\bBenchmark\b', line):
-            match = re.search(r'Benchmark[:\s]*(.*)', line)
-            current["Benchmark"] = match.group(1).strip() if match else ""
-
-        # Date
-        elif re.search(r'\bDate\b', line):
-            match = re.search(r'Date[:\s]*(.*)', line)
-            current["Date (in file)"] = match.group(1).strip() if match else ""
-
-        # Status
-        elif re.search(r'\bStatus\b', line) and "Status Time" not in line:
-            match = re.search(r'Status[:\s]*(.*)', line)
-            current["Status"] = match.group(1).strip() if match else ""
-
-        # Status Time
-        elif re.search(r'\bStatus Time\b', line):
-            match = re.search(r'Status Time[:\s]*(.*)', line)
-            current["Status Time"] = match.group(1).strip() if match else ""
-
-    if current:
-        metadata.append(current)
-
-    return df_table, metadata
+    return records
 
 
-# -----------------------------
-# Main Processing
-# -----------------------------
+# ------------------------------------------------------
+# 🚀 MAIN FUNCTION
+# ------------------------------------------------------
 def main():
     try:
-        log("🔍 Scanning top-level of input folder for ORIGAMI Excel files...")
+        log("🔍 Scanning top-level input folder for ORIGAMI Excel files...")
 
         all_files = input_folder.list_paths_in_partition()
         excel_files = [
             f for f in all_files
-            if "/" not in f.strip("/")  # ensures top-level only
+            if "/" not in f.strip("/")
             and os.path.basename(f).startswith("ORIGAMI")
             and f.lower().endswith((".xlsx", ".xls"))
         ]
 
         if not excel_files:
-            raise Exception("❌ No ORIGAMI Excel files found in the top level of the input folder.")
+            raise Exception("❌ No ORIGAMI Excel files found at top level.")
 
-        summary_records = []
+        all_records = []
 
         for path in excel_files:
             file_name = os.path.basename(path)
-            log(f"📄 Processing: {file_name}")
+            log(f"📘 Processing: {file_name}")
 
-            # Download to temporary file
             with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_file:
-                tmp_file_path = tmp_file.name
                 with input_folder.get_download_stream(path) as stream:
                     shutil.copyfileobj(stream, tmp_file)
+                tmp_path = tmp_file.name
 
-            # Extract date from filename
             file_date = extract_date_from_filename(file_name)
+            file_records = analyze_computed_data(tmp_path, file_name, file_date)
+            all_records.extend(file_records)
 
-            # Parse Excel
-            df_table, metadata_list = read_excel_tab(tmp_file_path)
-            os.remove(tmp_file_path)
+            os.remove(tmp_path)
 
-            if df_table is None:
-                log(f"⚠️ Skipped {file_name}: No valid 'COMPUTED DATA' or table found.")
-                continue
+        if not all_records:
+            log("⚠️ No data extracted from any file.")
+            return
 
-            # ------------------------------------------------------
-            # 🧹 Step 1: Drop first two header rows
-            # ------------------------------------------------------
-            if len(df_table) >= 2:
-                df_table = df_table.iloc[1:].reset_index(drop=True)
-            else:
-                log(f"⚠️ {file_name}: Less than 2 rows to drop — skipped cleanup.")
-                continue
+        df_out = pd.DataFrame(all_records)
 
-            # ------------------------------------------------------
-            # 🏷️ Step 2: Add new header row
-            # ------------------------------------------------------
-            new_headers = [
-                "Category", "Tenor/Rating",
-                "DF-1 AAA", "DF-1 AA+", "DF-1 AA", "DF-1 AA-",
-                "DF2", "DF3",
-                "DF-4 AAA", "DF-4 AA+", "DF-4 AA", "DF-4 AA-", "DF5",
-                "Final AAA", "Final AAA Source",
-                "Final AA+", "Final AA+ Source",
-                "Final AA", "Final AA Source",
-                "Final AA-", "Final AA Source"
-            ]
+        # Ensure consistent column ordering
+        columns = ["FileName", "FileDate", "RowNumber", "CellLocation", "Value", "DF-5 Flag"]
+        for col in columns:
+            if col not in df_out.columns:
+                df_out[col] = ""
+        df_out = df_out[columns]
 
-            # Ensure number of columns match
-            if len(df_table.columns) != len(new_headers):
-                log(f"⚠️ {file_name}: Column count mismatch "
-                    f"({len(df_table.columns)} vs {len(new_headers)}) — trimming or padding.")
-                if len(df_table.columns) > len(new_headers):
-                    df_table = df_table.iloc[:, :len(new_headers)]
-                else:
-                    for i in range(len(new_headers) - len(df_table.columns)):
-                        df_table[f"Extra_{i+1}"] = ""
+        # Save consolidated CSV
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
+            df_out.to_csv(tmp_csv.name, index=False)
+            out_name = "computed_data_flags_summary.csv"
+            with open(tmp_csv.name, 'rb') as f_out:
+                output_folder.upload_stream(out_name, f_out)
+            os.remove(tmp_csv.name)
 
-            df_table.columns = new_headers
-
-            # ------------------------------------------------------
-            # 💾 Step 3: Save cleaned table
-            # ------------------------------------------------------
-            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_out:
-                df_table.to_excel(tmp_out.name, index=False)
-                out_name = file_name.replace(".xlsx", "_table.xlsx")
-                with open(tmp_out.name, "rb") as f_out:
-                    output_folder_tables.upload_stream(out_name, f_out)
-                os.remove(tmp_out.name)
-                log(f"✅ Saved cleaned table: {out_name}")
-
-            # ------------------------------------------------------
-            # 🧾 Step 4: Add metadata info to summary
-            # ------------------------------------------------------
-            if metadata_list:
-                for meta in metadata_list:
-                    summary_records.append({
-                        "FileName": file_name,
-                        "FileDate": file_date,
-                        "USER": meta.get("USER", ""),
-                        "Benchmark": meta.get("Benchmark", ""),
-                        "Date (in file)": meta.get("Date (in file)", ""),
-                        "Status": meta.get("Status", ""),
-                        "Status Time": meta.get("Status Time", "")
-                    })
-            else:
-                summary_records.append({
-                    "FileName": file_name,
-                    "FileDate": file_date,
-                    "USER": "", "Benchmark": "", "Date (in file)": "",
-                    "Status": "", "Status Time": ""
-                })
-
-        # Save summary CSV
-        if summary_records:
-            df_summary = pd.DataFrame(summary_records)
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
-                df_summary.to_csv(tmp_csv.name, index=False)
-                csv_name = "maker_checker_summary.csv"
-                with open(tmp_csv.name, 'rb') as f:
-                    output_folder_summary.upload_stream(csv_name, f)
-                os.remove(tmp_csv.name)
-            log(f"✅ Summary written to {csv_name} ({len(summary_records)} rows)")
-        else:
-            log("⚠️ No metadata found to include in summary.")
+        log(f"✅ Consolidated summary saved: {out_name} ({len(df_out)} rows)")
 
     except Exception as e:
         log(f"🔥 ERROR: {str(e)}")
         raise
 
 
-# -----------------------------
-# Entrypoint
-# -----------------------------
+# ------------------------------------------------------
+# 🏁 ENTRYPOINT
+# ------------------------------------------------------
 if __name__ == "__main__":
     main()
