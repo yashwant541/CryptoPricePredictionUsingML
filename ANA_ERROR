@@ -1,67 +1,85 @@
 import pandas as pd
 import dataiku
+import tempfile
+import os
 
 # ------------------------------------------------------
-# ⚙️ CONFIGURATION
+# 🔧 Configuration (replace with your Dataiku folder IDs)
 # ------------------------------------------------------
-# Replace with your actual dataset names in Dataiku
-input_dataset = "input_file_dataset"   # e.g. name of the uploaded CSV dataset
-output_dataset = "missing_dates_output"  # e.g. name of output dataset
-
-# Define the start and end date range
-start_date = "2025-01-01"
-end_date = "2025-01-31"
-
-# Define the date column name in your CSV
-date_column = "File Date"
-
-# List of holidays (YYYY-MM-DD)
-holidays = [
-    '2024-09-18', '2024-10-01', '2024-10-11', '2024-12-25', '2024-12-26', '2025-01-01', '2025-01-29', 
-    '2025-01-30', '2025-01-31', '2025-04-04', '2025-04-18', '2025-04-19', '2025-04-21', '2025-05-01', 
-    '2025-05-05', '2025-05-31', '2025-07-01'
-]
+input_folder = dataiku.Folder("O9zgmRQh")      # Folder containing MakerChecker_Success.csv
+output_folder = dataiku.Folder("FbpQvhvC")     # Folder to save consolidated output
 
 # ------------------------------------------------------
-# 📥 READ INPUT DATASET
+# 🧠 Helper Function
 # ------------------------------------------------------
-df = dataiku.Dataset(input_dataset).get_dataframe()
+def consolidate_maker_checker(df):
+    """
+    Consolidate maker-checker info:
+    - Maker = user with Calculated/Proposed status
+    - Checker = user with Approved/Submitted status
+    - Each row per FileName + Benchmark + Date combination
+    - Status times separated into columns
+    """
+    pivot_df = df.pivot_table(
+        index=["FileName", "FileDate", "Benchmark", "Date (in file)"],
+        columns="Status",
+        values=["USER", "Status Time"],
+        aggfunc='first'
+    )
+
+    pivot_df.columns = [f"{col[0]} {col[1]}".strip() for col in pivot_df.columns.values]
+    pivot_df = pivot_df.reset_index()
+
+    pivot_df['Maker'] = pivot_df['USER Calculated'].combine_first(pivot_df['USER Proposed'])
+    pivot_df['Checker'] = pivot_df['USER Approved'].combine_first(pivot_df['USER Submitted'])
+
+    pivot_df = pivot_df.rename(columns={
+        'Status Time Calculated': 'Calculated Status Time',
+        'Status Time Proposed': 'Proposed Status Time',
+        'Status Time Approved': 'Approved Status Time',
+        'Status Time Submitted': 'Submitted Status Time'
+    })
+
+    pivot_df['USER'] = ""  # Blank as in your example
+
+    # Drop individual USER columns
+    pivot_df = pivot_df.drop(columns=['USER Calculated', 'USER Proposed', 'USER Approved', 'USER Submitted'])
+
+    # Reorder columns
+    cols = [
+        'FileName', 'FileDate', 'USER', 'Benchmark', 'Date (in file)',
+        'Maker', 'Checker',
+        'Calculated Status Time', 'Proposed Status Time', 'Approved Status Time', 'Submitted Status Time'
+    ]
+    pivot_df = pivot_df[cols]
+
+    return pivot_df
 
 # ------------------------------------------------------
-# 🧮 PROCESS DATA
+# 🚀 Main Execution
 # ------------------------------------------------------
-# Convert 'File Date' to date
-df[date_column] = pd.to_datetime(df[date_column], errors="coerce").dt.date
+def main():
+    print("🔍 Reading MakerChecker_Success.csv from Dataiku input folder...")
 
-# Generate full date range
-date_range = pd.date_range(start=start_date, end=end_date).date
+    files = [f for f in input_folder.list_paths_in_partition() if "MakerChecker_Success" in f]
+    if not files:
+        raise Exception("❌ MakerChecker_Success.csv not found in input folder.")
+    success_path = files[0]
 
-# Filter only weekdays and exclude holidays
-valid_dates = [
-    d for d in date_range
-    if d.weekday() < 5 and str(d) not in holidays
-]
+    with input_folder.get_download_stream(success_path) as stream:
+        df_success = pd.read_csv(stream)
 
-# Get list of available dates in the dataset
-file_dates = set(df[date_column].dropna())
+    df_consolidated = consolidate_maker_checker(df_success)
 
-# Identify missing working dates
-missing_dates = [d for d in valid_dates if d not in file_dates]
+    # Save consolidated output
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+        df_consolidated.to_csv(tmp_file.name, index=False)
+        with open(tmp_file.name, "rb") as f:
+            output_folder.upload_stream("MakerChecker_Success_Consolidated.csv", f)
+        os.remove(tmp_file.name)
 
-# Prepare result DataFrame
-result_df = pd.DataFrame(missing_dates, columns=["Missing Date"])
-
-# ------------------------------------------------------
-# 💾 WRITE OUTPUT DATASET
-# ------------------------------------------------------
-dataiku.Dataset(output_dataset).write_with_schema(result_df)
+    print(f"✅ Consolidation complete: {len(df_consolidated)} rows created.")
 
 # ------------------------------------------------------
-# 🪶 LOG OUTPUT
-# ------------------------------------------------------
-if result_df.empty:
-    print("\n🎉 No missing working-day dates found!")
-else:
-    print("\n📅 Missing non-weekend, non-holiday dates:")
-    for d in missing_dates:
-        print(d)
+if __name__ == "__main__":
+    main()
