@@ -2,36 +2,46 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
-from datetime import datetime
 
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
 input_folder = dataiku.Folder("XXXXXXXXX")      # 📥 Input folder
-output_folder = dataiku.Folder("XXXXXXXXX")    # 📤 Output folder
+output_folder = dataiku.Folder("XXXXXXXXX")     # 📤 Output folder
 
-# List of sheet names to skip
-EXCEPTION_SHEETS = ["Tracking Sheet", "FXO VOLS FBIL Realtime", "FXO VOLS Refinitiv Realtime"]  # add any sheet names you want to ignore
+label_column = "Label"  # 🏷️ Column to split
 
 # ------------------------------------------------------
-# 🧠 Helper Functions
+# 🧠 Per-file split configurations
 # ------------------------------------------------------
-def looks_like_date(val):
-    """Check if a value looks like a date"""
-    if isinstance(val, (pd.Timestamp, datetime)):
-        return True
-    if isinstance(val, str):
-        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
-            try:
-                datetime.strptime(val.strip(), fmt)
-                return True
-            except:
-                continue
-    return False
+file_config = {
+    # filename (without extension): {split lengths + new column names}
+    "file1": {"split_lengths": [2, 3], "col_names": ["Country", "Time"]},
+    "file2": {"split_lengths": [3, 2, 1], "col_names": ["Region", "Zone", "Type"]},
+    "file3": {"split_lengths": [4], "col_names": ["Code"]},
+    # Add more if needed
+}
 
-def read_excel_safe(file_path):
-    """Read Excel using openpyxl engine for .xlsx"""
-    return pd.ExcelFile(file_path, engine="openpyxl")
+# ------------------------------------------------------
+# 🧩 Label splitting logic
+# ------------------------------------------------------
+def split_label(label, split_lengths):
+    """
+    Splits from left based on split_lengths.
+    Stops at '=' and captures only part before it.
+    Anything remaining (variable length) before '=' becomes the 'Remaining' column.
+    """
+    text = str(label).split("=")[0]  # take only part before '='
+    parts, start = [], 0
+
+    for length in split_lengths:
+        parts.append(text[start:start + length])
+        start += length
+
+    # Remaining part before '='
+    remaining = text[start:] if start < len(text) else ""
+    parts.append(remaining)
+    return parts
 
 # ------------------------------------------------------
 # 🚀 Main Execution
@@ -41,80 +51,67 @@ def main():
     if not input_files:
         raise FileNotFoundError("❌ No files found in input folder!")
 
-    for excel_file_info in input_files:
-        file_name = os.path.basename(excel_file_info)
+    for file_info in input_files:
+        file_name = os.path.basename(file_info)
+        base_name, ext = os.path.splitext(file_name)
 
-        # Download file to temporary location
-        with input_folder.get_download_stream(excel_file_info) as stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+        print(f"📄 Processing file: {file_name}")
+
+        if base_name not in file_config:
+            print(f"⚠️ No configuration found for {base_name}. Skipping this file.")
+            continue
+
+        # 🧾 Get configuration for this file
+        cfg = file_config[base_name]
+        split_lengths = cfg["split_lengths"]
+        col_names = cfg["col_names"] + ["Remaining"]
+
+        # -------------------------------
+        # 📥 Read file to temporary path
+        # -------------------------------
+        with input_folder.get_download_stream(file_info) as stream:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                 tmp.write(stream.read())
                 tmp_path = tmp.name
 
-        xls = read_excel_safe(tmp_path)
+        # Read data depending on file type
+        if ext.lower() == ".csv":
+            df = pd.read_csv(tmp_path)
+        elif ext.lower() in [".xls", ".xlsx"]:
+            df = pd.read_excel(tmp_path)
+        else:
+            print(f"⚠️ Skipping unsupported file type: {file_name}")
+            os.remove(tmp_path)
+            continue
 
-        for sheet_name in xls.sheet_names:
+        # -------------------------------
+        # 🧩 Apply splitting logic
+        # -------------------------------
+        if label_column not in df.columns:
+            print(f"⚠️ Column '{label_column}' not found in {file_name}. Skipping.")
+            os.remove(tmp_path)
+            continue
 
-            # Skip sheets in the exception list
-            if sheet_name in EXCEPTION_SHEETS:
-                print(f"⏩ Skipping sheet '{sheet_name}' as it is in the exception list")
-                continue
+        split_df = df[label_column].apply(lambda x: pd.Series(split_label(x, split_lengths), index=col_names))
+        final_df = pd.concat([df, split_df], axis=1)
 
-            df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
+        # -------------------------------
+        # 💾 Save to output folder
+        # -------------------------------
+        with tempfile.NamedTemporaryFile(mode="w+b", suffix=ext, delete=False) as tmp_out:
+            if ext.lower() == ".csv":
+                final_df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
+            else:
+                final_df.to_excel(tmp_out.name, index=False)
 
-            # Row 7 (index 6) contains labels
-            label_row_index = 6
-            labels_row = df_raw.iloc[label_row_index]
+            with open(tmp_out.name, "rb") as f:
+                output_folder.upload_stream(file_name, f)
 
-            tidy_data_list = []
-
-            # Loop through all columns to find labels
-            for col in range(df_raw.shape[1]):
-                label = labels_row[col]
-
-                # Only process columns that have a label
-                if pd.notna(label):
-                    if col + 1 < df_raw.shape[1]:
-                        dates = df_raw.iloc[label_row_index + 1:, col]
-                        values = df_raw.iloc[label_row_index + 1:, col + 1]
-
-                        # Remove rows where dates or values are missing
-                        mask = dates.notna() & values.notna()
-                        dates = dates[mask]
-                        values = values[mask]
-
-                        temp_df = pd.DataFrame({
-                            "Date": dates,
-                            "Label": label,
-                            "Value": values
-                        })
-                        tidy_data_list.append(temp_df)
-
-            if not tidy_data_list:
-                print(f"⚠️ No valid data found in sheet '{sheet_name}'")
-                continue
-
-            # Concatenate all label blocks into one tidy DataFrame
-            final_df = pd.concat(tidy_data_list, ignore_index=True)
-
-            # Convert Date column to datetime
-            final_df["Date"] = pd.to_datetime(final_df["Date"], errors='coerce')
-
-            # Optional: sort by Date
-            final_df = final_df.sort_values("Date").reset_index(drop=True)
-
-            # Save to CSV in Dataiku output folder using the sheet name
-            safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-                final_df.to_csv(tmp_file.name, index=False)
-                with open(tmp_file.name, "rb") as f:
-                    output_folder.upload_stream(f"{safe_sheet_name}.csv", f)
-                os.remove(tmp_file.name)
-
-            print(f"✅ Sheet '{sheet_name}' saved as CSV: {safe_sheet_name}.csv")
-
-        # Cleanup temporary Excel
         os.remove(tmp_path)
-        print(f"✅ Processing complete for file: {file_name}")
+        os.remove(tmp_out.name)
+        print(f"✅ Processed and saved: {file_name}")
+
+    print("🎯 All files processed successfully!")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
