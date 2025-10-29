@@ -1,117 +1,100 @@
 import pandas as pd
-import dataiku
-import tempfile
 import os
-import re
-from openpyxl import load_workbook
+import io
+import dataiku
 
 # ------------------------------------------------------
 # ⚙️ CONFIGURATION
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXX")   # Input folder with Excel files
-output_folder = dataiku.Folder("XXXXXXX")  # Output folder for consolidated result
+use_dataiku = True  # 🔄 Switch between Dataiku and local
 
-SHEET_NAME_PATTERN = r"COMPUTED\s*DATA"  # Match Computed Data sheet name
+if use_dataiku:
+    input_folder = dataiku.Folder("THyT7M5V")       # Input CSV files
+    match_folder = dataiku.Folder("cloMgy8H")       # For matched output
+    notmatch_folder = dataiku.Folder("ec5ttRoI")    # For unmatched output
+else:
+    input_folder_path = r"C:\path\to\input"
+    match_folder_path = r"C:\path\to\match"
+    notmatch_folder_path = r"C:\path\to\notmatch"
 
-# ------------------------------------------------------
-# 🧠 Helper Functions
-# ------------------------------------------------------
-def get_cell_address(row_idx, col_idx):
-    """Return Excel-style cell address (A1, B2, etc.)."""
-    letters = ""
-    col = col_idx + 1
-    while col:
-        col, remainder = divmod(col - 1, 26)
-        letters = chr(65 + remainder) + letters
-    return f"{letters}{row_idx + 1}"
-
-def log(msg):
-    print(msg)
-
-def extract_file_date(filename):
-    """Extract date pattern from filename like 01-Aug-25."""
-    match = re.search(r"(\d{1,2}-[A-Za-z]{3}-\d{2,4})", filename)
-    return match.group(1) if match else None
 
 # ------------------------------------------------------
-# 🔍 Main Extraction Logic
+# 🧩 Helper function
 # ------------------------------------------------------
-def analyze_computed_data(filepath, filename, file_date):
-    wb = load_workbook(filepath, data_only=True)
-    sheet_name = None
+def process_file(file_path, file_name):
+    df = pd.read_csv(file_path)
 
-    for name in wb.sheetnames:
-        if re.search(SHEET_NAME_PATTERN, name, re.IGNORECASE):
-            sheet_name = name
-            break
+    # --- Define column pair mappings ---
+    mappings = [
+        ("AB1", "C1"),
+        ("AB1 Category", "C1 Category"),
+        ("AB2", "C2"),
+        ("AB2 Category", "C2 Category"),
+        ("AB3", "C3"),
+        ("AB3 Category", "C3 Category"),
+        ("AB4", "C4"),
+        ("AB4 Category", "C4 Category"),
+    ]
 
-    if not sheet_name:
-        log(f"⚠️ {filename}: No 'COMPUTED DATA' sheet found.")
-        return []
+    match_rows = []
+    notmatch_rows = []
 
-    ws = wb[sheet_name]
-    records = []
+    for _, row in df.iterrows():
+        is_match = True
+        for col_a, col_b in mappings:
+            if col_a in df.columns and col_b in df.columns:
+                val_a = str(row[col_a]).strip() if not pd.isna(row[col_a]) else ""
+                val_b = str(row[col_b]).strip() if not pd.isna(row[col_b]) else ""
+                if val_a != val_b:
+                    is_match = False
+                    break
+        if is_match:
+            match_rows.append(row.to_dict())
+        else:
+            notmatch_rows.append(row.to_dict())
 
-    # Rows 2, 3, 4 → zero-based indices 1, 2, 3
-    for r_idx in [1, 2, 3]:
-        row = ws[r_idx]
-        for c_idx, cell in enumerate(row):
-            value = str(cell.value).strip() if cell.value is not None else ""
-            if value:
-                cell_address = get_cell_address(r_idx, c_idx)
+    match_df = pd.DataFrame(match_rows)
+    notmatch_df = pd.DataFrame(notmatch_rows)
 
-                # ✅ DF-5 Flag Logic:
-                # True if the cell value matches "DF-5" (case-insensitive) and is in Excel row 2
-                df5_flag = (value.strip().upper() == "DF-5" and (r_idx + 1 == 2))
+    # File names with suffix
+    match_file_name = os.path.splitext(file_name)[0] + "_match.csv"
+    notmatch_file_name = os.path.splitext(file_name)[0] + "_notmatch.csv"
 
-                records.append({
-                    "FileName": filename,
-                    "FileDate": file_date,
-                    "RowNumber": r_idx + 1,
-                    "CellLocation": cell_address,
-                    "Value": value,
-                    "DF-5 Flag": df5_flag
-                })
+    # ✅ Save only if there are rows
+    if use_dataiku:
+        if not match_df.empty:
+            buffer = io.StringIO()
+            match_df.to_csv(buffer, index=False)
+            match_folder.upload_stream(match_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
 
-    return records
+        if not notmatch_df.empty:
+            buffer = io.StringIO()
+            notmatch_df.to_csv(buffer, index=False)
+            notmatch_folder.upload_stream(notmatch_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
+    else:
+        os.makedirs(match_folder_path, exist_ok=True)
+        os.makedirs(notmatch_folder_path, exist_ok=True)
+        if not match_df.empty:
+            match_df.to_csv(os.path.join(match_folder_path, match_file_name), index=False)
+        if not notmatch_df.empty:
+            notmatch_df.to_csv(os.path.join(notmatch_folder_path, notmatch_file_name), index=False)
+
+    print(f"✅ {file_name}: {len(match_df)} matched, {len(notmatch_df)} not matched")
+
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
-def main():
-    all_records = []
-
+if use_dataiku:
     for path in input_folder.list_paths_in_partition():
-        if path.lower().endswith(".xlsx"):
-            with input_folder.get_download_stream(path) as stream:
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-                temp_file.write(stream.read())
-                temp_file.close()
-
-                filename = os.path.basename(path)
-                file_date = extract_file_date(filename)
-
-                records = analyze_computed_data(temp_file.name, filename, file_date)
-                all_records.extend(records)
-                os.remove(temp_file.name)
-
-    # Create consolidated DataFrame
-    df = pd.DataFrame(all_records)
-
-    if not df.empty:
-        output_path = os.path.join(tempfile.gettempdir(), "computed_data_summary.csv")
-        df.to_csv(output_path, index=False, encoding="utf-8-sig")
-
-        # Save to Dataiku output folder
-        with open(output_path, "rb") as f:
-            output_folder.upload_stream("computed_data_summary.csv", f)
-
-        log(f"✅ Consolidated file saved to Dataiku output folder.")
-    else:
-        log("⚠️ No valid data found across all files.")
-
-# ------------------------------------------------------
-# 🏁 Run
-# ------------------------------------------------------
-if __name__ == "__main__":
-    main()
+        if path.endswith(".csv"):
+            file_name = os.path.basename(path)
+            with input_folder.get_download_stream(path) as f:
+                df = pd.read_csv(f)
+                temp_path = f"/tmp/{file_name}"
+                df.to_csv(temp_path, index=False)
+                process_file(temp_path, file_name)
+else:
+    for filename in os.listdir(input_folder_path):
+        if filename.endswith(".csv"):
+            process_file(os.path.join(input_folder_path, filename), filename)
