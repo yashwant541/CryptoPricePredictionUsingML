@@ -4,79 +4,82 @@ import os
 import io
 
 # ------------------------------------------------------
-# ⚙️ CONFIGURATION (EDIT BELOW)
+# ⚙️ CONFIGURATION
 # ------------------------------------------------------
 
 input_folder = dataiku.Folder("INPUT_FOLDER_ID")      # 🔄 Replace with your input folder ID
 output_folder = dataiku.Folder("OUTPUT_FOLDER_ID")    # 🔄 Replace with your output folder ID
 
-# 🧠 Define per-file configurations
+# 🧠 Define custom configurations per file
 file_config = {
     "file1.csv": {
         "label_column": "Label",
-        "split_lengths": [2, 3, 2, 4],
-        "col_names": ["Part1", "Part2", "Part3", "Remaining"]
+        "split_lengths": [2, 3],           # Normal split lengths (Remaining auto-calculated)
+        "last_chars_as_remaining": 2,      # Always keep last 2 chars before '=' in Remaining
+        "col_names": ["Part1", "Part2", "Remaining"]
     },
     "file2.csv": {
         "label_column": "ProductCode",
-        "split_lengths": [3, 2, 5],
+        "split_lengths": [3, 2],
+        "last_chars_as_remaining": 3,
         "col_names": ["Prefix", "Batch", "Tail"]
-    },
-    "file3.xlsx": {
-        "label_column": "Identifier",
-        "split_lengths": [1, 2, 2, 3],
-        "col_names": ["SecA", "SecB", "SecC", "Rest"]
-    },
-    "file4.csv": {
-        "label_column": "Code",
-        "split_lengths": [4, 4],
-        "col_names": ["Head", "Tail"]
-    },
-    "file5.csv": {
-        "label_column": "Reference",
-        "split_lengths": [2, 2, 2, 2, 2],
-        "col_names": ["S1", "S2", "S3", "S4", "Remaining"]
     }
 }
 
-# Default config if file not in list
+# Defaults (if file not in config)
 default_label_column = "Label"
-default_split_lengths = [2, 3, 2, 4]
-default_col_names = ["Part1", "Part2", "Part3", "Remaining"]
+default_split_lengths = [2, 3]
+default_last_chars_as_remaining = 2
+default_col_names = ["Part1", "Part2", "Remaining"]
 
 # ------------------------------------------------------
 # 🧩 FUNCTION
 # ------------------------------------------------------
 
-def split_label(label, split_lengths, col_names):
+def split_label(label, split_lengths, col_names, last_chars_as_remaining):
     """
-    Removes text after first '=', then splits remaining part from left 
-    according to the given split_lengths. 
+    Split from left until '=' appears.
+    Always reserve the last `last_chars_as_remaining` characters 
+    as the final Remaining column.
     """
     label = str(label)
+    
+    # Stop at first '='
     if "=" in label:
-        clean_label = label.split("=")[0]  # stop at first '='
+        base_label = label.split("=")[0]
     else:
-        clean_label = label
-
+        base_label = label
+    
+    # Handle edge cases
+    if not base_label:
+        return dict(zip(col_names, [""] * len(col_names)))
+    
+    # Determine the portion excluding the last reserved part
+    if len(base_label) > last_chars_as_remaining:
+        core_part = base_label[:-last_chars_as_remaining]
+        remaining_part = base_label[-last_chars_as_remaining:]
+    else:
+        core_part = ""
+        remaining_part = base_label
+    
+    # Perform normal splits on core_part
     parts, start = [], 0
-
-    for i, length in enumerate(split_lengths):
-        if i < len(split_lengths) - 1:
-            parts.append(clean_label[start:start + length])
-            start += length
-        else:
-            parts.append(clean_label[start:])  # remaining text
-
-    # Pad with blanks if not enough text
+    for length in split_lengths:
+        part = core_part[start:start + length]
+        parts.append(part)
+        start += length
+    
+    # Add Remaining
+    parts.append(remaining_part)
+    
+    # Pad if short
     while len(parts) < len(col_names):
         parts.append("")
-
+    
     return dict(zip(col_names, parts))
 
-
 # ------------------------------------------------------
-# 📂 PROCESS FILES IN INPUT FOLDER
+# 📂 PROCESS ALL FILES
 # ------------------------------------------------------
 
 file_list = input_folder.list_paths_in_partition()
@@ -86,23 +89,25 @@ for path in file_list:
     filename = os.path.basename(path)
     print(f"⚙️ Processing file: {filename}")
 
-    # 🔍 Choose config for current file
+    # 🔍 Get config for file
     config = None
     for key in file_config.keys():
-        if key.lower() in filename.lower():  # substring match
+        if key.lower() in filename.lower():
             config = file_config[key]
             break
 
     if config is None:
-        print(f"⚠️ No specific config for {filename}, using default.")
+        print(f"⚠️ No specific config for {filename}, using default settings.")
         config = {
             "label_column": default_label_column,
             "split_lengths": default_split_lengths,
+            "last_chars_as_remaining": default_last_chars_as_remaining,
             "col_names": default_col_names
         }
 
     label_column = config["label_column"]
     split_lengths = config["split_lengths"]
+    last_chars_as_remaining = config["last_chars_as_remaining"]
     col_names = config["col_names"]
 
     # ------------------------------------------------------
@@ -118,13 +123,15 @@ for path in file_list:
             continue
 
     # ------------------------------------------------------
-    # 🧩 APPLY SPLITTING
+    # 🧩 APPLY SPLIT LOGIC
     # ------------------------------------------------------
     if label_column not in df.columns:
         print(f"⚠️ Column '{label_column}' not found in {filename}. Skipping.")
         continue
 
-    split_df = df[label_column].apply(lambda x: pd.Series(split_label(x, split_lengths, col_names)))
+    split_df = df[label_column].apply(
+        lambda x: pd.Series(split_label(x, split_lengths, col_names, last_chars_as_remaining))
+    )
     final_df = pd.concat([df, split_df], axis=1)
 
     # ------------------------------------------------------
