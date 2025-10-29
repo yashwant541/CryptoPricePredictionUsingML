@@ -4,70 +4,124 @@ import os
 import io
 
 # ------------------------------------------------------
-# ⚙️ CONFIGURATION (EDIT ONLY THIS SECTION)
+# ⚙️ CONFIGURATION (EDIT BELOW)
 # ------------------------------------------------------
 
 input_folder = dataiku.Folder("INPUT_FOLDER_ID")      # 🔄 Replace with your input folder ID
 output_folder = dataiku.Folder("OUTPUT_FOLDER_ID")    # 🔄 Replace with your output folder ID
 
-label_column = "Label"                                # 🔄 Column to split
-split_lengths = [2, 3, 2, 4]                          # 🔄 Lengths for each part
-col_names = ["Part1", "Part2", "Part3", "Remaining"]  # 🔄 Column names for new parts
+# 🧠 Define custom configurations for each filename
+#    Key = filename (or substring match)
+#    Each entry defines label_column, split_lengths, and col_names
+file_config = {
+    "file1.csv": {
+        "label_column": "Label",
+        "split_lengths": [2, 3, 2, 4],
+        "col_names": ["Part1", "Part2", "Part3", "Remaining"]
+    },
+    "file2.csv": {
+        "label_column": "ProductCode",
+        "split_lengths": [3, 2, 5],
+        "col_names": ["Prefix", "Batch", "Tail"]
+    },
+    "file3.xlsx": {
+        "label_column": "Identifier",
+        "split_lengths": [1, 2, 2, 3],
+        "col_names": ["SecA", "SecB", "SecC", "Rest"]
+    },
+    "file4.csv": {
+        "label_column": "Code",
+        "split_lengths": [4, 4],
+        "col_names": ["Head", "Tail"]
+    },
+    "file5.csv": {
+        "label_column": "Reference",
+        "split_lengths": [2, 2, 2, 2, 2],
+        "col_names": ["S1", "S2", "S3", "S4", "Remaining"]
+    }
+}
+
+# Default behavior (for files not in config)
+default_label_column = "Label"
+default_split_lengths = [2, 3, 2, 4]
+default_col_names = ["Part1", "Part2", "Part3", "Remaining"]
 
 # ------------------------------------------------------
-# 🧠 FUNCTION DEFINITION
+# 🧩 FUNCTION
 # ------------------------------------------------------
 
-def split_label(label):
-    """Removes '=' and splits from left based on configured split_lengths."""
+def split_label(label, split_lengths, col_names):
+    """Removes '=' and splits from left according to provided pattern."""
     clean_label = str(label).replace("=", "")
     parts, start = [], 0
+
     for i, length in enumerate(split_lengths):
         if i < len(split_lengths) - 1:
             parts.append(clean_label[start:start + length])
             start += length
         else:
             parts.append(clean_label[start:])  # Remaining text
-    
-    # Pad missing parts (if label is too short)
+
+    # Pad missing parts
     while len(parts) < len(col_names):
         parts.append("")
-    
+
     return dict(zip(col_names, parts))
 
 # ------------------------------------------------------
-# 📂 READ ALL FILES FROM INPUT FOLDER
+# 📂 PROCESS FILES IN INPUT FOLDER
 # ------------------------------------------------------
 
 file_list = input_folder.list_paths_in_partition()
-print(f"Found {len(file_list)} files to process.")
+print(f"Found {len(file_list)} files to process.\n")
 
 for path in file_list:
     filename = os.path.basename(path)
-    print(f"Processing file: {filename}")
+    print(f"⚙️ Processing file: {filename}")
 
-    # Read file
+    # 🔍 Get config for current file
+    config = None
+    for key in file_config.keys():
+        if key.lower() in filename.lower():  # substring match
+            config = file_config[key]
+            break
+
+    if config is None:
+        print(f"⚠️ No specific config for {filename}, using default.")
+        config = {
+            "label_column": default_label_column,
+            "split_lengths": default_split_lengths,
+            "col_names": default_col_names
+        }
+
+    label_column = config["label_column"]
+    split_lengths = config["split_lengths"]
+    col_names = config["col_names"]
+
+    # ------------------------------------------------------
+    # 📥 READ FILE
+    # ------------------------------------------------------
     with input_folder.get_download_stream(filename) as f:
         if filename.lower().endswith(".csv"):
             df = pd.read_csv(f)
         elif filename.lower().endswith((".xls", ".xlsx")):
             df = pd.read_excel(f)
         else:
-            print(f"⚠️ Skipping unsupported file type: {filename}")
+            print(f"⚠️ Unsupported file type, skipping: {filename}")
             continue
 
     # ------------------------------------------------------
-    # 🧩 APPLY LABEL SPLITTING LOGIC
+    # 🧩 APPLY SPLITTING
     # ------------------------------------------------------
     if label_column not in df.columns:
         print(f"⚠️ Column '{label_column}' not found in {filename}. Skipping.")
         continue
 
-    split_df = df[label_column].apply(lambda x: pd.Series(split_label(x)))
+    split_df = df[label_column].apply(lambda x: pd.Series(split_label(x, split_lengths, col_names)))
     final_df = pd.concat([df, split_df], axis=1)
 
     # ------------------------------------------------------
-    # 💾 SAVE TO OUTPUT FOLDER (same filename)
+    # 💾 SAVE TO OUTPUT FOLDER
     # ------------------------------------------------------
     temp_path = os.path.join("/tmp", filename)
     if filename.lower().endswith(".csv"):
@@ -78,6 +132,6 @@ for path in file_list:
     with open(temp_path, "rb") as f:
         output_folder.upload_stream(filename, f)
 
-    print(f"✅ Saved processed file: {filename}")
+    print(f"✅ Saved processed file: {filename}\n")
 
 print("🎯 All files processed successfully.")
