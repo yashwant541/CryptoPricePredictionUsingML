@@ -1,1 +1,108 @@
-Category,Tenor/Rating,AAA,AAA Category,AA+,AA+ Category,AA,AA Category,AA-,AA- Category
+import pandas as pd
+import os
+import io
+import re
+import dataiku
+
+# ------------------------------------------------------
+# ⚙️ CONFIGURATION
+# ------------------------------------------------------
+use_dataiku = True  # 🔄 Switch between Dataiku and local
+
+if use_dataiku:
+    input_folder = dataiku.Folder("XXXXXXXX")   # Input folder containing CSV files
+    output_folder = dataiku.Folder("XXXXXXXX")  # Output folder for reshaped files
+else:
+    input_folder_path = r"C:\path\to\input"
+    output_folder_path = r"C:\path\to\output"
+
+# ------------------------------------------------------
+# 🧩 Helper Function: Extract date between 3rd and 4th "_"
+# ------------------------------------------------------
+def extract_date_from_filename(filename):
+    """
+    Extracts the date between the 3rd and 4th underscore ("_") in the filename.
+    Expected format: 01-Aug-25 or similar.
+    Returns the date string if found, else empty string.
+    """
+    parts = filename.split("_")
+    if len(parts) >= 4:
+        date_part = parts[3].split(".")[0]
+        if re.match(r"\d{1,2}-[A-Za-z]{3}-\d{2,4}", date_part):
+            return date_part
+    return ""
+
+# ------------------------------------------------------
+# 🧠 FUNCTION TO PROCESS FILE
+# ------------------------------------------------------
+def process_file(df, file_name):
+    """
+    Converts wide credit-rating table to long format:
+    Category | Tenor/Rating | Type | Rate | DF Category | FileDate
+    """
+    # Define rating–category column pairs
+    rating_pairs = [
+        ("AAA", "AAA Category"),
+        ("AA+", "AA+ Category"),
+        ("AA", "AA Category"),
+        ("AA-", "AA- Category")
+    ]
+
+    # Verify key columns exist
+    if "Category" not in df.columns or "Tenor/Rating" not in df.columns:
+        print(f"⚠️ Skipping {file_name}: Missing 'Category' or 'Tenor/Rating' column.")
+        return
+
+    # Build long-format dataframe
+    long_frames = []
+    for rate_col, cat_col in rating_pairs:
+        if rate_col not in df.columns:
+            continue  # skip if missing
+
+        temp = df[["Category", "Tenor/Rating", rate_col]].copy()
+        temp.rename(columns={rate_col: "Rate"}, inplace=True)
+        temp["Type"] = rate_col
+        temp["DF Category"] = df[cat_col] if cat_col in df.columns else None
+        long_frames.append(temp)
+
+    if not long_frames:
+        print(f"⚠️ Skipping {file_name}: No valid rating columns found.")
+        return
+
+    long_df = pd.concat(long_frames, ignore_index=True)
+
+    # Add file date
+    long_df["FileDate"] = extract_date_from_filename(file_name)
+
+    # Reorder columns
+    long_df = long_df[["Category", "Tenor/Rating", "Type", "Rate", "DF Category", "FileDate"]]
+
+    # Output file name
+    output_file_name = os.path.splitext(file_name)[0] + "_long.csv"
+
+    # Save output
+    if use_dataiku:
+        buffer = io.StringIO()
+        long_df.to_csv(buffer, index=False)
+        output_folder.upload_stream(output_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
+    else:
+        os.makedirs(output_folder_path, exist_ok=True)
+        long_df.to_csv(os.path.join(output_folder_path, output_file_name), index=False)
+
+    print(f"✅ {file_name}: {len(long_df)} rows processed (Date: {long_df['FileDate'].iloc[0] if not long_df.empty else 'N/A'})")
+
+# ------------------------------------------------------
+# 🚀 MAIN EXECUTION
+# ------------------------------------------------------
+if use_dataiku:
+    for path in input_folder.list_paths_in_partition():
+        if path.endswith(".csv"):
+            file_name = os.path.basename(path)
+            with input_folder.get_download_stream(path) as f:
+                df = pd.read_csv(f)
+                process_file(df, file_name)
+else:
+    for filename in os.listdir(input_folder_path):
+        if filename.endswith(".csv"):
+            df = pd.read_csv(os.path.join(input_folder_path, filename))
+            process_file(df, filename)
