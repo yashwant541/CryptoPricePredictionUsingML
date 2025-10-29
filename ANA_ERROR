@@ -10,8 +10,8 @@ import dataiku
 use_dataiku = True  # 🔄 Switch between Dataiku and local
 
 if use_dataiku:
-    input_folder = dataiku.Folder("zck105lY")   # Input folder containing match CSV files
-    output_folder = dataiku.Folder("hnQnQOgl")  # Output folder for reshaped files
+    input_folder = dataiku.Folder("XXXXXXXX")   # Input folder containing match CSV files
+    output_folder = dataiku.Folder("XXXXXXXX")  # Output folder for reshaped files
 else:
     input_folder_path = r"C:\path\to\matched_clean"
     output_folder_path = r"C:\path\to\long_output"
