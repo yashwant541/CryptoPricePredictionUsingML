@@ -10,9 +10,7 @@ import io
 input_folder = dataiku.Folder("INPUT_FOLDER_ID")      # 🔄 Replace with your input folder ID
 output_folder = dataiku.Folder("OUTPUT_FOLDER_ID")    # 🔄 Replace with your output folder ID
 
-# 🧠 Define custom configurations for each filename
-#    Key = filename (or substring match)
-#    Each entry defines label_column, split_lengths, and col_names
+# 🧠 Define per-file configurations
 file_config = {
     "file1.csv": {
         "label_column": "Label",
@@ -41,7 +39,7 @@ file_config = {
     }
 }
 
-# Default behavior (for files not in config)
+# Default config if file not in list
 default_label_column = "Label"
 default_split_lengths = [2, 3, 2, 4]
 default_col_names = ["Part1", "Part2", "Part3", "Remaining"]
@@ -51,8 +49,16 @@ default_col_names = ["Part1", "Part2", "Part3", "Remaining"]
 # ------------------------------------------------------
 
 def split_label(label, split_lengths, col_names):
-    """Removes '=' and splits from left according to provided pattern."""
-    clean_label = str(label).replace("=", "")
+    """
+    Removes text after first '=', then splits remaining part from left 
+    according to the given split_lengths. 
+    """
+    label = str(label)
+    if "=" in label:
+        clean_label = label.split("=")[0]  # stop at first '='
+    else:
+        clean_label = label
+
     parts, start = [], 0
 
     for i, length in enumerate(split_lengths):
@@ -60,13 +66,14 @@ def split_label(label, split_lengths, col_names):
             parts.append(clean_label[start:start + length])
             start += length
         else:
-            parts.append(clean_label[start:])  # Remaining text
+            parts.append(clean_label[start:])  # remaining text
 
-    # Pad missing parts
+    # Pad with blanks if not enough text
     while len(parts) < len(col_names):
         parts.append("")
 
     return dict(zip(col_names, parts))
+
 
 # ------------------------------------------------------
 # 📂 PROCESS FILES IN INPUT FOLDER
@@ -79,7 +86,7 @@ for path in file_list:
     filename = os.path.basename(path)
     print(f"⚙️ Processing file: {filename}")
 
-    # 🔍 Get config for current file
+    # 🔍 Choose config for current file
     config = None
     for key in file_config.keys():
         if key.lower() in filename.lower():  # substring match
