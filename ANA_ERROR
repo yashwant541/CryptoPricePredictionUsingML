@@ -1,108 +1,83 @@
 import pandas as pd
+import dataiku
 import os
 import io
-import re
-import dataiku
 
 # ------------------------------------------------------
-# ⚙️ CONFIGURATION
+# ⚙️ CONFIGURATION (EDIT ONLY THIS SECTION)
 # ------------------------------------------------------
-use_dataiku = True  # 🔄 Switch between Dataiku and local
 
-if use_dataiku:
-    input_folder = dataiku.Folder("XXXXXXXX")   # Input folder containing CSV files
-    output_folder = dataiku.Folder("XXXXXXXX")  # Output folder for reshaped files
-else:
-    input_folder_path = r"C:\path\to\input"
-    output_folder_path = r"C:\path\to\output"
+input_folder = dataiku.Folder("INPUT_FOLDER_ID")      # 🔄 Replace with your input folder ID
+output_folder = dataiku.Folder("OUTPUT_FOLDER_ID")    # 🔄 Replace with your output folder ID
 
-# ------------------------------------------------------
-# 🧩 Helper Function: Extract date between 3rd and 4th "_"
-# ------------------------------------------------------
-def extract_date_from_filename(filename):
-    """
-    Extracts the date between the 3rd and 4th underscore ("_") in the filename.
-    Expected format: 01-Aug-25 or similar.
-    Returns the date string if found, else empty string.
-    """
-    parts = filename.split("_")
-    if len(parts) >= 4:
-        date_part = parts[3].split(".")[0]
-        if re.match(r"\d{1,2}-[A-Za-z]{3}-\d{2,4}", date_part):
-            return date_part
-    return ""
+label_column = "Label"                                # 🔄 Column to split
+split_lengths = [2, 3, 2, 4]                          # 🔄 Lengths for each part
+col_names = ["Part1", "Part2", "Part3", "Remaining"]  # 🔄 Column names for new parts
 
 # ------------------------------------------------------
-# 🧠 FUNCTION TO PROCESS FILE
+# 🧠 FUNCTION DEFINITION
 # ------------------------------------------------------
-def process_file(df, file_name):
-    """
-    Converts wide credit-rating table to long format:
-    Category | Tenor/Rating | Type | Rate | DF Category | FileDate
-    """
-    # Define rating–category column pairs
-    rating_pairs = [
-        ("AAA", "AAA Category"),
-        ("AA+", "AA+ Category"),
-        ("AA", "AA Category"),
-        ("AA-", "AA- Category")
-    ]
 
-    # Verify key columns exist
-    if "Category" not in df.columns or "Tenor/Rating" not in df.columns:
-        print(f"⚠️ Skipping {file_name}: Missing 'Category' or 'Tenor/Rating' column.")
-        return
+def split_label(label):
+    """Removes '=' and splits from left based on configured split_lengths."""
+    clean_label = str(label).replace("=", "")
+    parts, start = [], 0
+    for i, length in enumerate(split_lengths):
+        if i < len(split_lengths) - 1:
+            parts.append(clean_label[start:start + length])
+            start += length
+        else:
+            parts.append(clean_label[start:])  # Remaining text
+    
+    # Pad missing parts (if label is too short)
+    while len(parts) < len(col_names):
+        parts.append("")
+    
+    return dict(zip(col_names, parts))
 
-    # Build long-format dataframe
-    long_frames = []
-    for rate_col, cat_col in rating_pairs:
-        if rate_col not in df.columns:
-            continue  # skip if missing
+# ------------------------------------------------------
+# 📂 READ ALL FILES FROM INPUT FOLDER
+# ------------------------------------------------------
 
-        temp = df[["Category", "Tenor/Rating", rate_col]].copy()
-        temp.rename(columns={rate_col: "Rate"}, inplace=True)
-        temp["Type"] = rate_col
-        temp["DF Category"] = df[cat_col] if cat_col in df.columns else None
-        long_frames.append(temp)
+file_list = input_folder.list_paths_in_partition()
+print(f"Found {len(file_list)} files to process.")
 
-    if not long_frames:
-        print(f"⚠️ Skipping {file_name}: No valid rating columns found.")
-        return
+for path in file_list:
+    filename = os.path.basename(path)
+    print(f"Processing file: {filename}")
 
-    long_df = pd.concat(long_frames, ignore_index=True)
+    # Read file
+    with input_folder.get_download_stream(filename) as f:
+        if filename.lower().endswith(".csv"):
+            df = pd.read_csv(f)
+        elif filename.lower().endswith((".xls", ".xlsx")):
+            df = pd.read_excel(f)
+        else:
+            print(f"⚠️ Skipping unsupported file type: {filename}")
+            continue
 
-    # Add file date
-    long_df["FileDate"] = extract_date_from_filename(file_name)
+    # ------------------------------------------------------
+    # 🧩 APPLY LABEL SPLITTING LOGIC
+    # ------------------------------------------------------
+    if label_column not in df.columns:
+        print(f"⚠️ Column '{label_column}' not found in {filename}. Skipping.")
+        continue
 
-    # Reorder columns
-    long_df = long_df[["Category", "Tenor/Rating", "Type", "Rate", "DF Category", "FileDate"]]
+    split_df = df[label_column].apply(lambda x: pd.Series(split_label(x)))
+    final_df = pd.concat([df, split_df], axis=1)
 
-    # Output file name
-    output_file_name = os.path.splitext(file_name)[0] + "_long.csv"
-
-    # Save output
-    if use_dataiku:
-        buffer = io.StringIO()
-        long_df.to_csv(buffer, index=False)
-        output_folder.upload_stream(output_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
+    # ------------------------------------------------------
+    # 💾 SAVE TO OUTPUT FOLDER (same filename)
+    # ------------------------------------------------------
+    temp_path = os.path.join("/tmp", filename)
+    if filename.lower().endswith(".csv"):
+        final_df.to_csv(temp_path, index=False, encoding="utf-8-sig")
     else:
-        os.makedirs(output_folder_path, exist_ok=True)
-        long_df.to_csv(os.path.join(output_folder_path, output_file_name), index=False)
+        final_df.to_excel(temp_path, index=False)
 
-    print(f"✅ {file_name}: {len(long_df)} rows processed (Date: {long_df['FileDate'].iloc[0] if not long_df.empty else 'N/A'})")
+    with open(temp_path, "rb") as f:
+        output_folder.upload_stream(filename, f)
 
-# ------------------------------------------------------
-# 🚀 MAIN EXECUTION
-# ------------------------------------------------------
-if use_dataiku:
-    for path in input_folder.list_paths_in_partition():
-        if path.endswith(".csv"):
-            file_name = os.path.basename(path)
-            with input_folder.get_download_stream(path) as f:
-                df = pd.read_csv(f)
-                process_file(df, file_name)
-else:
-    for filename in os.listdir(input_folder_path):
-        if filename.endswith(".csv"):
-            df = pd.read_csv(os.path.join(input_folder_path, filename))
-            process_file(df, filename)
+    print(f"✅ Saved processed file: {filename}")
+
+print("🎯 All files processed successfully.")
