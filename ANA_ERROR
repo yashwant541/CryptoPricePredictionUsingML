@@ -1,151 +1,121 @@
 import pandas as pd
 import dataiku
+import tempfile
 import os
-import io
+from datetime import datetime
 
 # ------------------------------------------------------
-# ⚙️ CONFIGURATION
+# 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
+input_folder = dataiku.Folder("XXXXXXXXX")      # 📥 Input folder
+output_folder = dataiku.Folder("XXXXXXXXX")    # 📤 Output folder
 
-input_folder = dataiku.Folder("INPUT_FOLDER_ID")      # 🔄 Replace with your input folder ID
-output_folder = dataiku.Folder("OUTPUT_FOLDER_ID")    # 🔄 Replace with your output folder ID
-
-# 🧠 Define custom configurations per file
-file_config = {
-    "file1.csv": {
-        "label_column": "Label",
-        "split_lengths": [2, 3],           # Normal split lengths (Remaining auto-calculated)
-        "last_chars_as_remaining": 2,      # Always keep last 2 chars before '=' in Remaining
-        "col_names": ["Part1", "Part2", "Remaining"]
-    },
-    "file2.csv": {
-        "label_column": "ProductCode",
-        "split_lengths": [3, 2],
-        "last_chars_as_remaining": 3,
-        "col_names": ["Prefix", "Batch", "Tail"]
-    }
-}
-
-# Defaults (if file not in config)
-default_label_column = "Label"
-default_split_lengths = [2, 3]
-default_last_chars_as_remaining = 2
-default_col_names = ["Part1", "Part2", "Remaining"]
+# List of sheet names to skip
+EXCEPTION_SHEETS = ["Tracking Sheet", "FXO VOLS FBIL Realtime", "FXO VOLS Refinitiv Realtime"]  # add any sheet names you want to ignore
 
 # ------------------------------------------------------
-# 🧩 FUNCTION
+# 🧠 Helper Functions
 # ------------------------------------------------------
+def looks_like_date(val):
+    """Check if a value looks like a date"""
+    if isinstance(val, (pd.Timestamp, datetime)):
+        return True
+    if isinstance(val, str):
+        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
+            try:
+                datetime.strptime(val.strip(), fmt)
+                return True
+            except:
+                continue
+    return False
 
-def split_label(label, split_lengths, col_names, last_chars_as_remaining):
-    """
-    Split from left until '=' appears.
-    Always reserve the last `last_chars_as_remaining` characters 
-    as the final Remaining column.
-    """
-    label = str(label)
-    
-    # Stop at first '='
-    if "=" in label:
-        base_label = label.split("=")[0]
-    else:
-        base_label = label
-    
-    # Handle edge cases
-    if not base_label:
-        return dict(zip(col_names, [""] * len(col_names)))
-    
-    # Determine the portion excluding the last reserved part
-    if len(base_label) > last_chars_as_remaining:
-        core_part = base_label[:-last_chars_as_remaining]
-        remaining_part = base_label[-last_chars_as_remaining:]
-    else:
-        core_part = ""
-        remaining_part = base_label
-    
-    # Perform normal splits on core_part
-    parts, start = [], 0
-    for length in split_lengths:
-        part = core_part[start:start + length]
-        parts.append(part)
-        start += length
-    
-    # Add Remaining
-    parts.append(remaining_part)
-    
-    # Pad if short
-    while len(parts) < len(col_names):
-        parts.append("")
-    
-    return dict(zip(col_names, parts))
+def read_excel_safe(file_path):
+    """Read Excel using openpyxl engine for .xlsx"""
+    return pd.ExcelFile(file_path, engine="openpyxl")
 
 # ------------------------------------------------------
-# 📂 PROCESS ALL FILES
+# 🚀 Main Execution
 # ------------------------------------------------------
+def main():
+    input_files = input_folder.list_paths_in_partition()
+    if not input_files:
+        raise FileNotFoundError("❌ No files found in input folder!")
 
-file_list = input_folder.list_paths_in_partition()
-print(f"Found {len(file_list)} files to process.\n")
+    for excel_file_info in input_files:
+        file_name = os.path.basename(excel_file_info)
 
-for path in file_list:
-    filename = os.path.basename(path)
-    print(f"⚙️ Processing file: {filename}")
+        # Download file to temporary location
+        with input_folder.get_download_stream(excel_file_info) as stream:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+                tmp.write(stream.read())
+                tmp_path = tmp.name
 
-    # 🔍 Get config for file
-    config = None
-    for key in file_config.keys():
-        if key.lower() in filename.lower():
-            config = file_config[key]
-            break
+        xls = read_excel_safe(tmp_path)
 
-    if config is None:
-        print(f"⚠️ No specific config for {filename}, using default settings.")
-        config = {
-            "label_column": default_label_column,
-            "split_lengths": default_split_lengths,
-            "last_chars_as_remaining": default_last_chars_as_remaining,
-            "col_names": default_col_names
-        }
+        for sheet_name in xls.sheet_names:
 
-    label_column = config["label_column"]
-    split_lengths = config["split_lengths"]
-    last_chars_as_remaining = config["last_chars_as_remaining"]
-    col_names = config["col_names"]
+            # Skip sheets in the exception list
+            if sheet_name in EXCEPTION_SHEETS:
+                print(f"⏩ Skipping sheet '{sheet_name}' as it is in the exception list")
+                continue
 
-    # ------------------------------------------------------
-    # 📥 READ FILE
-    # ------------------------------------------------------
-    with input_folder.get_download_stream(filename) as f:
-        if filename.lower().endswith(".csv"):
-            df = pd.read_csv(f)
-        elif filename.lower().endswith((".xls", ".xlsx")):
-            df = pd.read_excel(f)
-        else:
-            print(f"⚠️ Unsupported file type, skipping: {filename}")
-            continue
+            df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
 
-    # ------------------------------------------------------
-    # 🧩 APPLY SPLIT LOGIC
-    # ------------------------------------------------------
-    if label_column not in df.columns:
-        print(f"⚠️ Column '{label_column}' not found in {filename}. Skipping.")
-        continue
+            # Row 7 (index 6) contains labels
+            label_row_index = 6
+            labels_row = df_raw.iloc[label_row_index]
 
-    split_df = df[label_column].apply(
-        lambda x: pd.Series(split_label(x, split_lengths, col_names, last_chars_as_remaining))
-    )
-    final_df = pd.concat([df, split_df], axis=1)
+            tidy_data_list = []
 
-    # ------------------------------------------------------
-    # 💾 SAVE TO OUTPUT FOLDER
-    # ------------------------------------------------------
-    temp_path = os.path.join("/tmp", filename)
-    if filename.lower().endswith(".csv"):
-        final_df.to_csv(temp_path, index=False, encoding="utf-8-sig")
-    else:
-        final_df.to_excel(temp_path, index=False)
+            # Loop through all columns to find labels
+            for col in range(df_raw.shape[1]):
+                label = labels_row[col]
 
-    with open(temp_path, "rb") as f:
-        output_folder.upload_stream(filename, f)
+                # Only process columns that have a label
+                if pd.notna(label):
+                    if col + 1 < df_raw.shape[1]:
+                        dates = df_raw.iloc[label_row_index + 1:, col]
+                        values = df_raw.iloc[label_row_index + 1:, col + 1]
 
-    print(f"✅ Saved processed file: {filename}\n")
+                        # Remove rows where dates or values are missing
+                        mask = dates.notna() & values.notna()
+                        dates = dates[mask]
+                        values = values[mask]
 
-print("🎯 All files processed successfully.")
+                        temp_df = pd.DataFrame({
+                            "Date": dates,
+                            "Label": label,
+                            "Value": values
+                        })
+                        tidy_data_list.append(temp_df)
+
+            if not tidy_data_list:
+                print(f"⚠️ No valid data found in sheet '{sheet_name}'")
+                continue
+
+            # Concatenate all label blocks into one tidy DataFrame
+            final_df = pd.concat(tidy_data_list, ignore_index=True)
+
+            # Convert Date column to datetime
+            final_df["Date"] = pd.to_datetime(final_df["Date"], errors='coerce')
+
+            # Optional: sort by Date
+            final_df = final_df.sort_values("Date").reset_index(drop=True)
+
+            # Save to CSV in Dataiku output folder using the sheet name
+            safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+                final_df.to_csv(tmp_file.name, index=False)
+                with open(tmp_file.name, "rb") as f:
+                    output_folder.upload_stream(f"{safe_sheet_name}.csv", f)
+                os.remove(tmp_file.name)
+
+            print(f"✅ Sheet '{sheet_name}' saved as CSV: {safe_sheet_name}.csv")
+
+        # Cleanup temporary Excel
+        os.remove(tmp_path)
+        print(f"✅ Processing complete for file: {file_name}")
+
+# ------------------------------------------------------
+if __name__ == "__main__":
+    main()
