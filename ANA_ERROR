@@ -10,13 +10,10 @@ use_dataiku = True  # 🔄 Switch between Dataiku and local
 
 if use_dataiku:
     input_folder = dataiku.Folder("XXXXXXX")       # Input CSV files
-    match_folder = dataiku.Folder("XXXXXXX")       # For matched output
-    notmatch_folder = dataiku.Folder("XXXXXXX")    # For unmatched output
+    output_folder = dataiku.Folder("XXXXXXX")      # Output folder (with Match_Flag + Mismatch_Reason)
 else:
     input_folder_path = r"C:\path\to\input"
-    match_folder_path = r"C:\path\to\match"
-    notmatch_folder_path = r"C:\path\to\notmatch"
-
+    output_folder_path = r"C:\path\to\output"
 
 # ------------------------------------------------------
 # 🧩 Helper function
@@ -36,50 +33,37 @@ def process_file(file_path, file_name):
         ("AB4 Category", "C4 Category"),
     ]
 
-    match_rows = []
-    notmatch_rows = []
-
-    for _, row in df.iterrows():
-        is_match = True
+    # --- Function to check matches and collect mismatch reasons ---
+    def check_match(row):
+        mismatches = []
         for col_a, col_b in mappings:
             if col_a in df.columns and col_b in df.columns:
-                val_a = str(row[col_a]).strip() if not pd.isna(row[col_a]) else ""
-                val_b = str(row[col_b]).strip() if not pd.isna(row[col_b]) else ""
+                val_a = str(row[col_a]).strip().lower() if not pd.isna(row[col_a]) else ""
+                val_b = str(row[col_b]).strip().lower() if not pd.isna(row[col_b]) else ""
                 if val_a != val_b:
-                    is_match = False
-                    break
-        if is_match:
-            match_rows.append(row.to_dict())
+                    mismatches.append(f"{col_a} vs {col_b}")
+        if mismatches:
+            return False, ", ".join(mismatches)
         else:
-            notmatch_rows.append(row.to_dict())
+            return True, ""
 
-    match_df = pd.DataFrame(match_rows)
-    notmatch_df = pd.DataFrame(notmatch_rows)
+    # --- Apply logic to each row ---
+    results = df.apply(lambda r: check_match(r), axis=1)
+    df["Match_Flag"] = [res[0] for res in results]
+    df["Mismatch_Reason"] = [res[1] for res in results]
 
-    # File names with suffix
-    match_file_name = os.path.splitext(file_name)[0] + "_match.csv"
-    notmatch_file_name = os.path.splitext(file_name)[0] + "_notmatch.csv"
+    # --- Save output file ---
+    output_file_name = os.path.splitext(file_name)[0] + "_matchflag_reason.csv"
 
-    # ✅ Save only if there are rows
     if use_dataiku:
-        if not match_df.empty:
-            buffer = io.StringIO()
-            match_df.to_csv(buffer, index=False)
-            match_folder.upload_stream(match_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
-
-        if not notmatch_df.empty:
-            buffer = io.StringIO()
-            notmatch_df.to_csv(buffer, index=False)
-            notmatch_folder.upload_stream(notmatch_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
+        buffer = io.StringIO()
+        df.to_csv(buffer, index=False)
+        output_folder.upload_stream(output_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
     else:
-        os.makedirs(match_folder_path, exist_ok=True)
-        os.makedirs(notmatch_folder_path, exist_ok=True)
-        if not match_df.empty:
-            match_df.to_csv(os.path.join(match_folder_path, match_file_name), index=False)
-        if not notmatch_df.empty:
-            notmatch_df.to_csv(os.path.join(notmatch_folder_path, notmatch_file_name), index=False)
+        os.makedirs(output_folder_path, exist_ok=True)
+        df.to_csv(os.path.join(output_folder_path, output_file_name), index=False)
 
-    print(f"✅ {file_name}: {len(match_df)} matched, {len(notmatch_df)} not matched")
+    print(f"✅ {file_name}: Processed {len(df)} rows (Match_Flag + Mismatch_Reason added).")
 
 
 # ------------------------------------------------------
