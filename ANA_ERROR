@@ -1,41 +1,40 @@
-import re
-import os
-import sys
-import shutil
-import tempfile
 import pandas as pd
 import dataiku
+import tempfile
+import os
+import re
 from openpyxl import load_workbook
 
 # ------------------------------------------------------
-# 🔧 CONFIGURATION
+# ⚙️ CONFIGURATION
 # ------------------------------------------------------
-SHEET_NAME_PATTERN = r'COMPUTED[_ ]?DATA'
+input_folder = dataiku.Folder("XXXXXXX")   # Input folder with Excel files
+output_folder = dataiku.Folder("XXXXXXX")  # Output folder for consolidated result
 
-input_folder = dataiku.Folder("XXXXXXX")     # 📂 Replace with your input folder ID
-output_folder = dataiku.Folder("XXXXXXX")    # 📂 Replace with your output folder ID
+SHEET_NAME_PATTERN = r"COMPUTED\s*DATA"  # Match Computed Data sheet name
 
 # ------------------------------------------------------
-# 🧠 HELPER FUNCTIONS
+# 🧠 Helper Functions
 # ------------------------------------------------------
-def log(msg):
-    print(f"[LOG] {msg}", file=sys.stderr, flush=True)
-
-
-def extract_date_from_filename(filename):
-    """Extract date pattern like 01-Aug-25"""
-    match = re.search(r'\d{2}-[A-Za-z]{3}-\d{2}', filename)
-    return match.group(0) if match else ""
-
-
 def get_cell_address(row_idx, col_idx):
-    """Convert numeric indices to Excel-style cell address"""
-    from openpyxl.utils import get_column_letter
-    return f"{get_column_letter(col_idx + 1)}{row_idx + 1}"
+    """Return Excel-style cell address (A1, B2, etc.)."""
+    letters = ""
+    col = col_idx + 1
+    while col:
+        col, remainder = divmod(col - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return f"{letters}{row_idx + 1}"
 
+def log(msg):
+    print(msg)
+
+def extract_file_date(filename):
+    """Extract date pattern from filename like 01-Aug-25."""
+    match = re.search(r"(\d{1,2}-[A-Za-z]{3}-\d{2,4})", filename)
+    return match.group(1) if match else None
 
 # ------------------------------------------------------
-# 📄 MAIN EXCEL PARSING FUNCTION
+# 🔍 Main Extraction Logic
 # ------------------------------------------------------
 def analyze_computed_data(filepath, filename, file_date):
     wb = load_workbook(filepath, data_only=True)
@@ -51,108 +50,68 @@ def analyze_computed_data(filepath, filename, file_date):
         return []
 
     ws = wb[sheet_name]
-
     records = []
-    df5_flag = False
 
-    # We want rows 2, 3, 4 (Excel) → indexes 1, 2, 3
+    # Rows 2, 3, 4 → zero-based indices 1, 2, 3
     for r_idx in [1, 2, 3]:
         row = ws[r_idx]
         for c_idx, cell in enumerate(row):
             value = str(cell.value).strip() if cell.value is not None else ""
             if value:
                 cell_address = get_cell_address(r_idx, c_idx)
+
+                # ✅ DF-5 Flag Logic:
+                # True if the cell value matches "DF-5" (case-insensitive) and is in Excel row 2
+                df5_flag = (value.strip().upper() == "DF-5" and (r_idx + 1 == 2))
+
                 records.append({
                     "FileName": filename,
                     "FileDate": file_date,
                     "RowNumber": r_idx + 1,
                     "CellLocation": cell_address,
-                    "Value": value
+                    "Value": value,
+                    "DF-5 Flag": df5_flag
                 })
-
-        # Check for DF-5 keyword presence
-        row_values = [str(c.value).upper() if c.value else "" for c in row]
-        if "DF-5" in "".join(row_values):
-            df5_flag = True
-
-    # Add one summary line per file
-    records.append({
-        "FileName": filename,
-        "FileDate": file_date,
-        "RowNumber": "",
-        "CellLocation": "",
-        "Value": "",
-        "DF-5 Flag": df5_flag
-    })
 
     return records
 
-
 # ------------------------------------------------------
-# 🚀 MAIN FUNCTION
+# 🚀 Main Execution
 # ------------------------------------------------------
 def main():
-    try:
-        log("🔍 Scanning top-level input folder for ORIGAMI Excel files...")
+    all_records = []
 
-        all_files = input_folder.list_paths_in_partition()
-        excel_files = [
-            f for f in all_files
-            if "/" not in f.strip("/")
-            and os.path.basename(f).startswith("ORIGAMI")
-            and f.lower().endswith((".xlsx", ".xls"))
-        ]
+    for path in input_folder.list_paths_in_partition():
+        if path.lower().endswith(".xlsx"):
+            with input_folder.get_download_stream(path) as stream:
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+                temp_file.write(stream.read())
+                temp_file.close()
 
-        if not excel_files:
-            raise Exception("❌ No ORIGAMI Excel files found at top level.")
+                filename = os.path.basename(path)
+                file_date = extract_file_date(filename)
 
-        all_records = []
+                records = analyze_computed_data(temp_file.name, filename, file_date)
+                all_records.extend(records)
+                os.remove(temp_file.name)
 
-        for path in excel_files:
-            file_name = os.path.basename(path)
-            log(f"📘 Processing: {file_name}")
+    # Create consolidated DataFrame
+    df = pd.DataFrame(all_records)
 
-            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_file:
-                with input_folder.get_download_stream(path) as stream:
-                    shutil.copyfileobj(stream, tmp_file)
-                tmp_path = tmp_file.name
+    if not df.empty:
+        output_path = os.path.join(tempfile.gettempdir(), "computed_data_summary.csv")
+        df.to_csv(output_path, index=False, encoding="utf-8-sig")
 
-            file_date = extract_date_from_filename(file_name)
-            file_records = analyze_computed_data(tmp_path, file_name, file_date)
-            all_records.extend(file_records)
+        # Save to Dataiku output folder
+        with open(output_path, "rb") as f:
+            output_folder.upload_stream("computed_data_summary.csv", f)
 
-            os.remove(tmp_path)
-
-        if not all_records:
-            log("⚠️ No data extracted from any file.")
-            return
-
-        df_out = pd.DataFrame(all_records)
-
-        # Ensure consistent column ordering
-        columns = ["FileName", "FileDate", "RowNumber", "CellLocation", "Value", "DF-5 Flag"]
-        for col in columns:
-            if col not in df_out.columns:
-                df_out[col] = ""
-        df_out = df_out[columns]
-
-        # Save consolidated CSV
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_csv:
-            df_out.to_csv(tmp_csv.name, index=False)
-            out_name = "computed_data_flags_summary.csv"
-            with open(tmp_csv.name, 'rb') as f_out:
-                output_folder.upload_stream(out_name, f_out)
-            os.remove(tmp_csv.name)
-
-        log(f"✅ Consolidated summary saved: {out_name} ({len(df_out)} rows)")
-
-    except Exception as e:
-        log(f"🔥 ERROR: {str(e)}")
-        raise
-
+        log(f"✅ Consolidated file saved to Dataiku output folder.")
+    else:
+        log("⚠️ No valid data found across all files.")
 
 # ------------------------------------------------------
-# 🏁 ENTRYPOINT
+# 🏁 Run
 # ------------------------------------------------------
 if __name__ == "__main__":
     main()
