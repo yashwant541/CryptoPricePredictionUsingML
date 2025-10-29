@@ -7,151 +7,106 @@ import re
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXXXX")      # 📥 Input folder (both files here)
-output_folder = dataiku.Folder("YYYYYYYYY")     # 📤 Output folder
-
-# Files to compare (exact names inside the Dataiku folder)
-file_1 = "Rates_File_A.xlsx"
-file_2 = "Rates_File_B.xlsx"
-
-# Column mappings for each file
-file1_columns = {
-    "type_col": "Class",          # or "Type"
-    "tenure_col": "Tenor",        # or "Tenure"
-    "date_col": "Date",
-    "rate_col": "Rate"
-}
-
-file2_columns = {
-    "type_col": "Category",       # or "Type"
-    "tenure_col": "Tenor",
-    "date_col": "Date",
-    "rate_col": "Rate"
-}
+input_folder_1 = dataiku.Folder("XXXXXXXXX")     # 📥 Folder 1 (e.g. old rates)
+input_folder_2 = dataiku.Folder("YYYYYYYYY")     # 📥 Folder 2 (e.g. new rates)
+output_folder = dataiku.Folder("ZZZZZZZZZ")      # 📤 Output folder
 
 # ------------------------------------------------------
-# 🧩 Helper Functions
+# 🧠 Global Variables (edit these for your run)
 # ------------------------------------------------------
+file_1_name = "old_rates.csv"      # file name in folder 1
+file_2_name = "new_rates.csv"      # file name in folder 2
 
-def read_file_from_dataiku(folder, filename):
-    """Read a CSV or Excel file from a Dataiku folder."""
-    paths = folder.list_paths_in_partition()
-    match_path = next((p for p in paths if filename in p), None)
-    if not match_path:
-        raise FileNotFoundError(f"❌ {filename} not found in input folder!")
+# Columns for file 1
+date_col_1 = "Date"
+type_col_1 = "Type"
+tenure_col_1 = "Tenure"
+rate_col_1 = "Rate"
 
-    with folder.get_download_stream(match_path) as stream:
-        ext = os.path.splitext(filename)[1].lower()
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            tmp.write(stream.read())
-            tmp_path = tmp.name
+# Columns for file 2
+date_col_2 = "Date"
+type_col_2 = "Type"
+tenure_col_2 = "Tenure"
+rate_col_2 = "Rate"
 
-        if ext == ".csv":
-            df = pd.read_csv(tmp_path)
-        elif ext in [".xls", ".xlsx"]:
-            df = pd.read_excel(tmp_path)
-        else:
-            raise ValueError(f"Unsupported file format: {ext}")
-
-        os.remove(tmp_path)
-        return df
-
-
-def normalize_tenure(value):
-    """Standardize Tenure values for comparison."""
-    if pd.isna(value):
+# ------------------------------------------------------
+# 🧩 Helper Function — Normalize Tenure
+# ------------------------------------------------------
+def normalize_tenure(val):
+    """Normalize Tenure strings like 'O/N' → 'ON', '1Y ' → '1Y'."""
+    if pd.isna(val):
         return None
-
-    val = str(value).strip().upper()
-
-    # --- 🔹 Handle special text tenures ---
-    special_map = {
-        "O/N": "ON", "ON": "ON",       # Overnight
-        "T/N": "TN", "TN": "TN",       # Tomorrow/Next
-        "S/N": "SN", "SN": "SN",       # Spot/Next
-        "SPOT": "SP", "SP": "SP",      # Spot
-        "CALL": "CALL",
-        "TOD": "TOD",                  # Today
-        "TOM": "TOM"                   # Tomorrow
-    }
-    if val in special_map:
-        return special_map[val]
-
-    # --- 🔹 Handle numeric tenures ---
-    match = re.match(r"([\d\.]+)\s*(Y|YEAR|YEARS|M|MONTH|MONTHS|D|DAY|DAYS|W|WEEK|WEEKS)?", val)
-    if match:
-        num = float(match.group(1))
-        unit = match.group(2)
-        if not unit:
-            return f"{int(num)}M"
-        unit = unit[0].upper()
-
-        if unit == "Y":
-            months = int(num * 12)
-            return f"{months}M"
-        elif unit == "M":
-            return f"{int(num)}M"
-        elif unit == "W":
-            days = int(num * 7)
-            return f"{days}D"
-        elif unit == "D":
-            return f"{int(num)}D"
-
+    val = str(val).strip().upper()
+    val = re.sub(r'[^A-Z0-9]', '', val)  # remove special chars like '/', '-', etc.
     return val
-
-
-def prepare_dataframe(df, mapping):
-    """Standardize column names and normalize Tenure."""
-    df = df.rename(columns={
-        mapping["type_col"]: "Type",
-        mapping["tenure_col"]: "Tenure",
-        mapping["date_col"]: "Date",
-        mapping["rate_col"]: "Rate"
-    })[["Type", "Tenure", "Date", "Rate"]]
-
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df["Tenure_Normalized"] = df["Tenure"].apply(normalize_tenure)
-    return df
-
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
-
 def main():
-    print("📥 Reading files from Dataiku...")
+    # -------------------------------
+    # 📥 Load files from both folders
+    # -------------------------------
+    def load_file(folder, filename):
+        for path in folder.list_paths_in_partition():
+            if os.path.basename(path) == filename:
+                with folder.get_download_stream(path) as stream:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
+                        tmp.write(stream.read())
+                        tmp_path = tmp.name
+                if filename.lower().endswith(".csv"):
+                    df = pd.read_csv(tmp_path)
+                elif filename.lower().endswith((".xls", ".xlsx")):
+                    df = pd.read_excel(tmp_path)
+                else:
+                    raise ValueError(f"Unsupported file type: {filename}")
+                os.remove(tmp_path)
+                return df
+        raise FileNotFoundError(f"❌ File '{filename}' not found in folder {folder.get_id()}!")
 
-    df1 = read_file_from_dataiku(input_folder, file_1)
-    df2 = read_file_from_dataiku(input_folder, file_2)
+    print("📂 Reading files...")
+    df1 = load_file(input_folder_1, file_1_name)
+    df2 = load_file(input_folder_2, file_2_name)
 
-    print("🧹 Preparing dataframes...")
-    df1 = prepare_dataframe(df1, file1_columns)
-    df2 = prepare_dataframe(df2, file2_columns)
+    # -------------------------------
+    # 🧹 Clean + Normalize Columns
+    # -------------------------------
+    df1["__Date"] = pd.to_datetime(df1[date_col_1], errors="coerce")
+    df2["__Date"] = pd.to_datetime(df2[date_col_2], errors="coerce")
 
-    print("🔄 Comparing data by Date + Type + Normalized Tenure...")
+    df1["__Type"] = df1[type_col_1].astype(str).str.strip().str.upper()
+    df2["__Type"] = df2[type_col_2].astype(str).str.strip().str.upper()
+
+    df1["__Tenure"] = df1[tenure_col_1].apply(normalize_tenure)
+    df2["__Tenure"] = df2[tenure_col_2].apply(normalize_tenure)
+
+    df1["__Rate"] = pd.to_numeric(df1[rate_col_1], errors="coerce")
+    df2["__Rate"] = pd.to_numeric(df2[rate_col_2], errors="coerce")
+
+    # -------------------------------
+    # 🔗 Merge and Compare
+    # -------------------------------
     merged_df = pd.merge(
-        df1, df2,
-        on=["Date", "Type", "Tenure_Normalized"],
+        df1,
+        df2,
         how="outer",
+        left_on=["__Date", "__Type", "__Tenure"],
+        right_on=["__Date", "__Type", "__Tenure"],
         suffixes=("_File1", "_File2")
     )
 
-    merged_df["Match"] = merged_df["Rate_File1"] == merged_df["Rate_File2"]
+    merged_df["Match"] = merged_df["__Rate_File1"].eq(merged_df["__Rate_File2"])
 
-    # ------------------------------------------------------
-    # 💾 Save comparison result to output folder
-    # ------------------------------------------------------
-    output_filename = "Rate_Comparison_Result.xlsx"
-    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_out:
-        merged_df.to_excel(tmp_out.name, index=False)
-
+    # -------------------------------
+    # 💾 Save result to Dataiku output
+    # -------------------------------
+    with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
+        merged_df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
         with open(tmp_out.name, "rb") as f:
-            output_folder.upload_stream(output_filename, f)
+            output_folder.upload_stream("comparison_result.csv", f)
+        os.remove(tmp_out.name)
 
-    os.remove(tmp_out.name)
-
-    print(f"✅ Comparison completed successfully!")
-    print(f"📤 Result saved as: {output_filename}")
+    print("✅ Comparison completed and saved to output folder!")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
