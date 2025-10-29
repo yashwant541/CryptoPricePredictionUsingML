@@ -2,116 +2,156 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
+import re
 
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXXXX")      # 📥 Input folder
-output_folder = dataiku.Folder("XXXXXXXXX")     # 📤 Output folder
+input_folder = dataiku.Folder("XXXXXXXXX")      # 📥 Input folder (both files here)
+output_folder = dataiku.Folder("YYYYYYYYY")     # 📤 Output folder
 
-label_column = "Label"  # 🏷️ Column to split
+# Files to compare (exact names inside the Dataiku folder)
+file_1 = "Rates_File_A.xlsx"
+file_2 = "Rates_File_B.xlsx"
 
-# ------------------------------------------------------
-# 🧠 Per-file split configurations
-# ------------------------------------------------------
-file_config = {
-    # filename (without extension): {split lengths + new column names}
-    "file1": {"split_lengths": [2, 3], "col_names": ["Country", "Time"]},
-    "file2": {"split_lengths": [3, 2, 1], "col_names": ["Region", "Zone", "Type"]},
-    "file3": {"split_lengths": [4], "col_names": ["Code"]},
-    # Add more if needed
+# Column mappings for each file
+file1_columns = {
+    "type_col": "Class",          # or "Type"
+    "tenure_col": "Tenor",        # or "Tenure"
+    "date_col": "Date",
+    "rate_col": "Rate"
+}
+
+file2_columns = {
+    "type_col": "Category",       # or "Type"
+    "tenure_col": "Tenor",
+    "date_col": "Date",
+    "rate_col": "Rate"
 }
 
 # ------------------------------------------------------
-# 🧩 Label splitting logic
+# 🧩 Helper Functions
 # ------------------------------------------------------
-def split_label(label, split_lengths):
-    """
-    Splits from left based on split_lengths.
-    Stops at '=' and captures only part before it.
-    Anything remaining (variable length) before '=' becomes the 'Remaining' column.
-    """
-    text = str(label).split("=")[0]  # take only part before '='
-    parts, start = [], 0
 
-    for length in split_lengths:
-        parts.append(text[start:start + length])
-        start += length
+def read_file_from_dataiku(folder, filename):
+    """Read a CSV or Excel file from a Dataiku folder."""
+    paths = folder.list_paths_in_partition()
+    match_path = next((p for p in paths if filename in p), None)
+    if not match_path:
+        raise FileNotFoundError(f"❌ {filename} not found in input folder!")
 
-    # Remaining part before '='
-    remaining = text[start:] if start < len(text) else ""
-    parts.append(remaining)
-    return parts
+    with folder.get_download_stream(match_path) as stream:
+        ext = os.path.splitext(filename)[1].lower()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp.write(stream.read())
+            tmp_path = tmp.name
+
+        if ext == ".csv":
+            df = pd.read_csv(tmp_path)
+        elif ext in [".xls", ".xlsx"]:
+            df = pd.read_excel(tmp_path)
+        else:
+            raise ValueError(f"Unsupported file format: {ext}")
+
+        os.remove(tmp_path)
+        return df
+
+
+def normalize_tenure(value):
+    """Standardize Tenure values for comparison."""
+    if pd.isna(value):
+        return None
+
+    val = str(value).strip().upper()
+
+    # --- 🔹 Handle special text tenures ---
+    special_map = {
+        "O/N": "ON", "ON": "ON",       # Overnight
+        "T/N": "TN", "TN": "TN",       # Tomorrow/Next
+        "S/N": "SN", "SN": "SN",       # Spot/Next
+        "SPOT": "SP", "SP": "SP",      # Spot
+        "CALL": "CALL",
+        "TOD": "TOD",                  # Today
+        "TOM": "TOM"                   # Tomorrow
+    }
+    if val in special_map:
+        return special_map[val]
+
+    # --- 🔹 Handle numeric tenures ---
+    match = re.match(r"([\d\.]+)\s*(Y|YEAR|YEARS|M|MONTH|MONTHS|D|DAY|DAYS|W|WEEK|WEEKS)?", val)
+    if match:
+        num = float(match.group(1))
+        unit = match.group(2)
+        if not unit:
+            return f"{int(num)}M"
+        unit = unit[0].upper()
+
+        if unit == "Y":
+            months = int(num * 12)
+            return f"{months}M"
+        elif unit == "M":
+            return f"{int(num)}M"
+        elif unit == "W":
+            days = int(num * 7)
+            return f"{days}D"
+        elif unit == "D":
+            return f"{int(num)}D"
+
+    return val
+
+
+def prepare_dataframe(df, mapping):
+    """Standardize column names and normalize Tenure."""
+    df = df.rename(columns={
+        mapping["type_col"]: "Type",
+        mapping["tenure_col"]: "Tenure",
+        mapping["date_col"]: "Date",
+        mapping["rate_col"]: "Rate"
+    })[["Type", "Tenure", "Date", "Rate"]]
+
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df["Tenure_Normalized"] = df["Tenure"].apply(normalize_tenure)
+    return df
+
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
+
 def main():
-    input_files = input_folder.list_paths_in_partition()
-    if not input_files:
-        raise FileNotFoundError("❌ No files found in input folder!")
+    print("📥 Reading files from Dataiku...")
 
-    for file_info in input_files:
-        file_name = os.path.basename(file_info)
-        base_name, ext = os.path.splitext(file_name)
+    df1 = read_file_from_dataiku(input_folder, file_1)
+    df2 = read_file_from_dataiku(input_folder, file_2)
 
-        print(f"📄 Processing file: {file_name}")
+    print("🧹 Preparing dataframes...")
+    df1 = prepare_dataframe(df1, file1_columns)
+    df2 = prepare_dataframe(df2, file2_columns)
 
-        if base_name not in file_config:
-            print(f"⚠️ No configuration found for {base_name}. Skipping this file.")
-            continue
+    print("🔄 Comparing data by Date + Type + Normalized Tenure...")
+    merged_df = pd.merge(
+        df1, df2,
+        on=["Date", "Type", "Tenure_Normalized"],
+        how="outer",
+        suffixes=("_File1", "_File2")
+    )
 
-        # 🧾 Get configuration for this file
-        cfg = file_config[base_name]
-        split_lengths = cfg["split_lengths"]
-        col_names = cfg["col_names"] + ["Remaining"]
+    merged_df["Match"] = merged_df["Rate_File1"] == merged_df["Rate_File2"]
 
-        # -------------------------------
-        # 📥 Read file to temporary path
-        # -------------------------------
-        with input_folder.get_download_stream(file_info) as stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                tmp.write(stream.read())
-                tmp_path = tmp.name
+    # ------------------------------------------------------
+    # 💾 Save comparison result to output folder
+    # ------------------------------------------------------
+    output_filename = "Rate_Comparison_Result.xlsx"
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_out:
+        merged_df.to_excel(tmp_out.name, index=False)
 
-        # Read data depending on file type
-        if ext.lower() == ".csv":
-            df = pd.read_csv(tmp_path)
-        elif ext.lower() in [".xls", ".xlsx"]:
-            df = pd.read_excel(tmp_path)
-        else:
-            print(f"⚠️ Skipping unsupported file type: {file_name}")
-            os.remove(tmp_path)
-            continue
+        with open(tmp_out.name, "rb") as f:
+            output_folder.upload_stream(output_filename, f)
 
-        # -------------------------------
-        # 🧩 Apply splitting logic
-        # -------------------------------
-        if label_column not in df.columns:
-            print(f"⚠️ Column '{label_column}' not found in {file_name}. Skipping.")
-            os.remove(tmp_path)
-            continue
+    os.remove(tmp_out.name)
 
-        split_df = df[label_column].apply(lambda x: pd.Series(split_label(x, split_lengths), index=col_names))
-        final_df = pd.concat([df, split_df], axis=1)
-
-        # -------------------------------
-        # 💾 Save to output folder
-        # -------------------------------
-        with tempfile.NamedTemporaryFile(mode="w+b", suffix=ext, delete=False) as tmp_out:
-            if ext.lower() == ".csv":
-                final_df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
-            else:
-                final_df.to_excel(tmp_out.name, index=False)
-
-            with open(tmp_out.name, "rb") as f:
-                output_folder.upload_stream(file_name, f)
-
-        os.remove(tmp_path)
-        os.remove(tmp_out.name)
-        print(f"✅ Processed and saved: {file_name}")
-
-    print("🎯 All files processed successfully!")
+    print(f"✅ Comparison completed successfully!")
+    print(f"📤 Result saved as: {output_filename}")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
