@@ -1,6 +1,7 @@
 import pandas as pd
 import os
 import io
+import re
 import dataiku
 
 # ------------------------------------------------------
@@ -9,76 +10,134 @@ import dataiku
 use_dataiku = True  # 🔄 Switch between Dataiku and local
 
 if use_dataiku:
-    input_folder = dataiku.Folder("XXXXXXX")       # Input CSV files
-    output_folder = dataiku.Folder("XXXXXXX")      # Output folder (with Match_Flag + Mismatch_Reason)
+    input_folder = dataiku.Folder("XXXXXXX")       # Input: folder containing matchflag_reason files
+    output_folder = dataiku.Folder("XXXXXXX")      # Output: folder for consolidated mismatch summaries
 else:
     input_folder_path = r"C:\path\to\input"
     output_folder_path = r"C:\path\to\output"
 
 # ------------------------------------------------------
-# 🧩 Helper function
+# 🧩 Helper functions
 # ------------------------------------------------------
+
+def extract_file_date(filename):
+    """
+    Extracts the file date assuming it's between the 3rd and 4th underscore,
+    e.g. FX_Option_Match_13-Dec-2025_Results.csv → 13-Dec-2025
+    """
+    parts = filename.split('_')
+    if len(parts) >= 4:
+        possible_date = parts[3]
+        possible_date = re.sub(r'\.csv$', '', possible_date, flags=re.IGNORECASE)
+        return possible_date.strip()
+    return None
+
+
 def process_file(file_path, file_name):
+    """
+    Reads the match result CSV, finds mismatches,
+    extracts date from filename, and returns DataFrame
+    with FileName, FileDate, Category, and Mismatch Reason.
+    """
     df = pd.read_csv(file_path)
 
-    # --- Define column pair mappings ---
-    mappings = [
-        ("AB1", "C1"),
-        ("AB1 Category", "C1 Category"),
-        ("AB2", "C2"),
-        ("AB2 Category", "C2 Category"),
-        ("AB3", "C3"),
-        ("AB3 Category", "C3 Category"),
-        ("AB4", "C4"),
-        ("AB4 Category", "C4 Category"),
-    ]
+    file_date = extract_file_date(file_name)
 
-    # --- Function to check matches and collect mismatch reasons ---
-    def check_match(row):
-        mismatches = []
-        for col_a, col_b in mappings:
-            if col_a in df.columns and col_b in df.columns:
-                val_a = str(row[col_a]).strip().lower() if not pd.isna(row[col_a]) else ""
-                val_b = str(row[col_b]).strip().lower() if not pd.isna(row[col_b]) else ""
-                if val_a != val_b:
-                    mismatches.append(f"{col_a} vs {col_b}")
-        if mismatches:
-            return False, ", ".join(mismatches)
-        else:
-            return True, ""
-
-    # --- Apply logic to each row ---
-    results = df.apply(lambda r: check_match(r), axis=1)
-    df["Match_Flag"] = [res[0] for res in results]
-    df["Mismatch_Reason"] = [res[1] for res in results]
-
-    # --- Save output file ---
-    output_file_name = os.path.splitext(file_name)[0] + "_matchflag_reason.csv"
-
-    if use_dataiku:
-        buffer = io.StringIO()
-        df.to_csv(buffer, index=False)
-        output_folder.upload_stream(output_file_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
+    # --- Identify mismatches ---
+    if "Match_Flag" in df.columns:
+        mismatches = df[df["Match_Flag"] == False].copy()
+        mismatches["Mismatch Reason"] = mismatches.get("Mismatch_Reason", "Match_Flag is False")
+    elif "Match_Result" in df.columns:
+        mismatches = df[df["Match_Result"].astype(str).str.lower() != "match found"].copy()
+        mismatches["Mismatch Reason"] = "Match_Result not 'Match Found'"
     else:
-        os.makedirs(output_folder_path, exist_ok=True)
-        df.to_csv(os.path.join(output_folder_path, output_file_name), index=False)
+        return pd.DataFrame(columns=["FileName", "FileDate", "Category", "Mismatch Reason"])
 
-    print(f"✅ {file_name}: Processed {len(df)} rows (Match_Flag + Mismatch_Reason added).")
+    # --- Ensure essential columns ---
+    if "Category" not in mismatches.columns:
+        mismatches["Category"] = "Unknown"
+
+    # --- Add metadata ---
+    mismatches["FileName"] = file_name
+    mismatches["FileDate"] = file_date
+
+    return mismatches[["FileName", "FileDate", "Category", "Mismatch Reason"]]
 
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
-if use_dataiku:
-    for path in input_folder.list_paths_in_partition():
-        if path.endswith(".csv"):
-            file_name = os.path.basename(path)
-            with input_folder.get_download_stream(path) as f:
-                df = pd.read_csv(f)
-                temp_path = f"/tmp/{file_name}"
-                df.to_csv(temp_path, index=False)
-                process_file(temp_path, file_name)
-else:
-    for filename in os.listdir(input_folder_path):
-        if filename.endswith(".csv"):
-            process_file(os.path.join(input_folder_path, filename), filename)
+
+def consolidate_mismatches():
+    mismatch_records = []
+
+    if use_dataiku:
+        # --- Read all CSVs from Dataiku folder ---
+        for path in input_folder.list_paths_in_partition():
+            if path.endswith(".csv"):
+                file_name = os.path.basename(path)
+                with input_folder.get_download_stream(path) as f:
+                    df = pd.read_csv(f)
+                    temp_path = f"/tmp/{file_name}"
+                    df.to_csv(temp_path, index=False)
+                    result_df = process_file(temp_path, file_name)
+                    if not result_df.empty:
+                        mismatch_records.append(result_df)
+    else:
+        for filename in os.listdir(input_folder_path):
+            if filename.endswith(".csv"):
+                result_df = process_file(os.path.join(input_folder_path, filename), filename)
+                if not result_df.empty:
+                    mismatch_records.append(result_df)
+
+    # --- Combine all mismatches ---
+    if mismatch_records:
+        detailed_df = pd.concat(mismatch_records, ignore_index=True)
+    else:
+        detailed_df = pd.DataFrame(columns=["FileName", "FileDate", "Category", "Mismatch Reason"])
+
+    # --- Summary by File + Date + Category ---
+    summary_df = (
+        detailed_df.groupby(["FileName", "FileDate", "Category"])
+        .size()
+        .reset_index(name="Mismatch_Count")
+    )
+
+    # --- Total mismatches per file/date ---
+    total_summary = (
+        detailed_df.groupby(["FileName", "FileDate"])
+        .size()
+        .reset_index(name="Total_Mismatch_Count")
+    )
+
+    # --- Save outputs ---
+    if use_dataiku:
+        # Detailed output
+        buffer = io.StringIO()
+        detailed_df.to_csv(buffer, index=False)
+        output_folder.upload_stream("consolidated_mismatches_detailed.csv", io.BytesIO(buffer.getvalue().encode("utf-8")))
+
+        # Summary output
+        buffer = io.StringIO()
+        summary_df.to_csv(buffer, index=False)
+        output_folder.upload_stream("consolidated_mismatches_summary.csv", io.BytesIO(buffer.getvalue().encode("utf-8")))
+
+        # Total summary
+        buffer = io.StringIO()
+        total_summary.to_csv(buffer, index=False)
+        output_folder.upload_stream("consolidated_total_summary.csv", io.BytesIO(buffer.getvalue().encode("utf-8")))
+
+    else:
+        os.makedirs(output_folder_path, exist_ok=True)
+        detailed_df.to_csv(os.path.join(output_folder_path, "consolidated_mismatches_detailed.csv"), index=False)
+        summary_df.to_csv(os.path.join(output_folder_path, "consolidated_mismatches_summary.csv"), index=False)
+        total_summary.to_csv(os.path.join(output_folder_path, "consolidated_total_summary.csv"), index=False)
+
+    print(f"✅ Consolidation complete → {len(detailed_df)} detailed rows, {len(summary_df)} summaries.")
+
+
+# ------------------------------------------------------
+# ▶️ Run Script
+# ------------------------------------------------------
+if __name__ == "__main__":
+    consolidate_mismatches()
