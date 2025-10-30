@@ -14,8 +14,8 @@ output_folder = dataiku.Folder("XXXXXXX")      # 📤 Output folder
 # ------------------------------------------------------
 # 🧠 Global Variables (edit these for your run)
 # ------------------------------------------------------
-file_1_name = "HIBOR_CNH.csv"      # file name in folder 1
-file_2_name = "HIBOR HKD&CNH.csv"      # file name in folder 2
+file_1_name = "HIBOR_CNH.csv"           # file name in folder 1
+file_2_name = "HIBOR HKD&CNH.csv"       # file name in folder 2
 
 # Columns for file 1
 date_col_1 = "Date"
@@ -80,8 +80,8 @@ def main():
     df1["__Tenure"] = df1[tenure_col_1].apply(normalize_tenure)
     df2["__Tenure"] = df2[tenure_col_2].apply(normalize_tenure)
 
-    df1["__Rate"] = pd.to_numeric(df1[rate_col_1], errors="coerce")
-    df2["__Rate"] = pd.to_numeric(df2[rate_col_2], errors="coerce")
+    df1["__Rate"] = pd.to_numeric(df1[rate_col_1], errors="coerce").round(3)
+    df2["__Rate"] = pd.to_numeric(df2[rate_col_2], errors="coerce").round(3)
 
     # -------------------------------
     # 🔗 Merge and Compare
@@ -95,18 +95,26 @@ def main():
         suffixes=("_File1", "_File2")
     )
 
+    # ✅ Compare rounded rates
     merged_df["Match"] = merged_df["__Rate_File1"].eq(merged_df["__Rate_File2"])
+
+    # ➕ Add rate difference column (3 decimal precision)
+    merged_df["Rate Difference"] = (
+        (merged_df["__Rate_File2"] - merged_df["__Rate_File1"])
+        .round(3)
+    )
 
     # -------------------------------
     # 💾 Save result to Dataiku output
     # -------------------------------
+    output_filename = "comparison_result.csv"
     with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
         merged_df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
         with open(tmp_out.name, "rb") as f:
-            output_folder.upload_stream("comparison_result.csv", f)
+            output_folder.upload_stream(output_filename, f)
         os.remove(tmp_out.name)
 
-    print("✅ Comparison completed and saved to output folder!")
+    print(f"✅ Comparison completed and saved to output folder as '{output_filename}'!")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
