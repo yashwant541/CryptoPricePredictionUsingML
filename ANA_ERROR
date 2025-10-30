@@ -12,7 +12,6 @@ output_folder = dataiku.Folder("YYYYYYYYY")    # 📤 Output folder
 # ------------------------------------------------------
 # 🧠 File-Specific Operations Configuration
 # ------------------------------------------------------
-# You can mix "prefix" and "new_column" operations
 file_operations = {
     "file1.csv": {"type": "prefix", "column": "TEXT", "prefix": "TYLER "},
     "file2.csv": {"type": "prefix", "column": "MYSA", "prefix": "STEVE "},
@@ -52,13 +51,27 @@ def main():
 
         print(f"\n➡️ Processing file: {file_name}")
 
-        # Load CSV
-        df = load_file_from_folder(input_folder, file_name)
+        # Defensive key checks
+        op_type = cfg.get("type")
+        if not op_type:
+            print(f"⚠️ Missing 'type' key in config for '{file_name}', skipping.")
+            continue
+
+        # Load CSV safely
+        try:
+            df = load_file_from_folder(input_folder, file_name)
+        except Exception as e:
+            print(f"❌ Error reading {file_name}: {e}")
+            continue
 
         # Perform operation
-        if cfg["type"] == "prefix":
-            col = cfg["column"]
-            prefix = cfg["prefix"]
+        if op_type == "prefix":
+            col = cfg.get("column")
+            prefix = cfg.get("prefix", "")
+            if not col:
+                print(f"⚠️ No column specified for prefix operation in {file_name}, skipping.")
+                continue
+
             print(f"   🧩 Operation: Add prefix '{prefix}' to column '{col}'")
             if col in df.columns:
                 df[col] = df[col].fillna("").astype(str)
@@ -68,25 +81,31 @@ def main():
                 print(f"   ⚠️ Column '{col}' not found — skipping prefix addition.")
                 continue
 
-        elif cfg["type"] == "new_column":
-            col = cfg["column"]
-            value = cfg["value"]
+        elif op_type == "new_column":
+            col = cfg.get("column")
+            value = cfg.get("value", "")
+            if not col:
+                print(f"⚠️ No column name provided for new_column operation in {file_name}, skipping.")
+                continue
+
             print(f"   🧩 Operation: Create new column '{col}' with value '{value}'")
             df[col] = value
             print(f"   ✅ Column '{col}' created successfully.")
 
         else:
-            print(f"⚠️ Unknown operation type for {file_name}. Skipping.")
+            print(f"⚠️ Unknown operation type '{op_type}' for {file_name}. Skipping.")
             continue
 
         # Save modified file to output folder
-        with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
-            df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
-            with open(tmp_out.name, "rb") as f:
-                output_folder.upload_stream(file_name, f)
-            os.remove(tmp_out.name)
-
-        print(f"💾 Saved updated '{file_name}' to output folder.")
+        try:
+            with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
+                df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
+                with open(tmp_out.name, "rb") as f:
+                    output_folder.upload_stream(file_name, f)
+                os.remove(tmp_out.name)
+            print(f"💾 Saved updated '{file_name}' to output folder.")
+        except Exception as e:
+            print(f"❌ Error saving {file_name}: {e}")
 
     print("\n✅ All configured files processed successfully!")
 
