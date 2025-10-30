@@ -70,7 +70,6 @@ def normalize_tenure(val):
     for norm, variants in mapping.items():
         if val in variants:
             return norm
-
     return val
 
 # ------------------------------------------------------
@@ -117,14 +116,14 @@ def main():
     df2["__Rate"] = pd.to_numeric(df2[rate_col_2], errors="coerce").round(3)
 
     # -------------------------------
-    # 🔗 Merge and Compare
+    # 🔗 Merge and Compare (Ignore Type)
     # -------------------------------
     merged_df = pd.merge(
         df1,
         df2,
         how="outer",
-        left_on=["__Date", "__Type", "__Tenure"],
-        right_on=["__Date", "__Type", "__Tenure"],
+        left_on=["__Date", "__Tenure"],
+        right_on=["__Date", "__Tenure"],
         suffixes=(f"_{FILE1_ID}", f"_{FILE2_ID}")
     )
 
