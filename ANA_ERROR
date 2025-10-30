@@ -12,10 +12,13 @@ input_folder_2 = dataiku.Folder("XXXXXXX")     # 📥 Folder 2 (e.g. new rates)
 output_folder = dataiku.Folder("XXXXXXX")      # 📤 Output folder
 
 # ------------------------------------------------------
-# 🧠 Global Variables (edit these for your run)
+# 🧠 Global Variables — Edit for your run
 # ------------------------------------------------------
-file_1_name = "HIBOR_CNH.csv"           # file name in folder 1
-file_2_name = "HIBOR HKD&CNH.csv"       # file name in folder 2
+FILE1_ID = "OLD_FILE"             # Identifier for File 1 (rename if needed)
+FILE2_ID = "NEW_FILE"             # Identifier for File 2 (rename if needed)
+
+file_1_name = "HIBOR_CNH.csv"           # File in folder 1
+file_2_name = "HIBOR HKD&CNH.csv"       # File in folder 2
 
 # Columns for file 1
 date_col_1 = "Date"
@@ -30,6 +33,17 @@ tenure_col_2 = "Tenor"
 rate_col_2 = "Fixing Rate"
 
 # ------------------------------------------------------
+# 📅 Dummy Public Holiday List (MM/DD/YYYY format)
+# ------------------------------------------------------
+public_holidays = pd.to_datetime([
+    "01/01/2024",
+    "02/10/2024",
+    "03/29/2024",
+    "05/01/2024",
+    "12/25/2024"
+])
+
+# ------------------------------------------------------
 # 🧩 Helper Function — Normalize Tenure
 # ------------------------------------------------------
 def normalize_tenure(val):
@@ -39,7 +53,6 @@ def normalize_tenure(val):
     val = str(val).strip().upper()
     val = re.sub(r'[^A-Z0-9]', '', val)  # remove special chars like '/', '-', etc.
 
-    # ✅ Map all common forms to standardized short tenors
     mapping = {
         "ON": ["ON", "O/N", "1D", "DAY1", "OD", "OVERNIGHT", "SPOT"],
         "TN": ["TN", "T/N", "TOMNEXT", "TOMORROWNEXT"],
@@ -97,7 +110,6 @@ def main():
     df1["__Type"] = df1[type_col_1].astype(str).str.strip().str.upper()
     df2["__Type"] = df2[type_col_2].astype(str).str.strip().str.upper()
 
-    # ✅ Apply normalization to both tenure columns
     df1["__Tenure"] = df1[tenure_col_1].apply(normalize_tenure)
     df2["__Tenure"] = df2[tenure_col_2].apply(normalize_tenure)
 
@@ -113,17 +125,35 @@ def main():
         how="outer",
         left_on=["__Date", "__Type", "__Tenure"],
         right_on=["__Date", "__Type", "__Tenure"],
-        suffixes=("_File1", "_File2")
+        suffixes=(f"_{FILE1_ID}", f"_{FILE2_ID}")
     )
 
     # ✅ Compare rounded rates
-    merged_df["Match"] = merged_df["__Rate_File1"].eq(merged_df["__Rate_File2"])
+    merged_df["Match"] = merged_df[f"__Rate_{FILE1_ID}"].eq(merged_df[f"__Rate_{FILE2_ID}"])
 
     # ➕ Add rate difference column (3 decimal precision)
     merged_df["Rate Difference"] = (
-        (merged_df["__Rate_File2"] - merged_df["__Rate_File1"])
+        (merged_df[f"__Rate_{FILE2_ID}"] - merged_df[f"__Rate_{FILE1_ID}"])
         .round(3)
     )
+
+    # ------------------------------------------------------
+    # 💬 Add DA_Comment for Unmatched Rows
+    # ------------------------------------------------------
+    def da_comment(row):
+        if pd.isna(row["__Date"]):
+            return "Missing Date"
+        if row["__Date"] in public_holidays:
+            return "Public Holiday"
+        if pd.isna(row[f"__Rate_{FILE1_ID}"]) and not pd.isna(row[f"__Rate_{FILE2_ID}"]):
+            return f"Missing in {FILE1_ID}"
+        if pd.isna(row[f"__Rate_{FILE2_ID}"]) and not pd.isna(row[f"__Rate_{FILE1_ID}"]):
+            return f"Missing in {FILE2_ID}"
+        if not row["Match"]:
+            return "Rate Mismatch"
+        return ""
+
+    merged_df["DA_Comment"] = merged_df.apply(da_comment, axis=1)
 
     # -------------------------------
     # 💾 Save result to Dataiku output
