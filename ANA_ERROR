@@ -2,112 +2,111 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
+import re
 
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXXXX")     # 📥 Input folder
-output_folder = dataiku.Folder("YYYYYYYYY")    # 📤 Output folder
+input_folder_1 = dataiku.Folder("XXXXXXX")     # 📥 Folder 1 (e.g. old rates)
+input_folder_2 = dataiku.Folder("XXXXXXX")     # 📥 Folder 2 (e.g. new rates)
+output_folder = dataiku.Folder("XXXXXXX")      # 📤 Output folder
 
 # ------------------------------------------------------
-# 🧠 File-Specific Operations Configuration
+# 🧠 Global Variables (edit these for your run)
 # ------------------------------------------------------
-file_operations = {
-    "file1.csv": {"type": "prefix", "column": "TEXT", "prefix": "TYLER "},
-    "file2.csv": {"type": "prefix", "column": "MYSA", "prefix": "STEVE "},
-    "file3.csv": {"type": "new_column", "column": "TYPE", "value": "MIBOR"},
-    "file4.csv": {"type": "prefix", "column": "DESC", "prefix": "ALEX "},
-    "file5.csv": {"type": "prefix", "column": "TITLE", "prefix": "MORGAN "}
-}
+file_1_name = "HIBOR_CNH.csv"      # file name in folder 1
+file_2_name = "HIBOR HKD&CNH.csv"      # file name in folder 2
+
+# Columns for file 1
+date_col_1 = "Date"
+type_col_1 = "Currency"
+tenure_col_1 = "Tenure"
+rate_col_1 = "Value"
+
+# Columns for file 2
+date_col_2 = "Date"
+type_col_2 = "Fixing Index"
+tenure_col_2 = "Tenor"
+rate_col_2 = "Fixing Rate"
 
 # ------------------------------------------------------
-# 🧩 Helper Function — Load CSV file from Dataiku folder
+# 🧩 Helper Function — Normalize Tenure
 # ------------------------------------------------------
-def load_file_from_folder(folder, filename):
-    """Find and load a CSV file from a Dataiku folder."""
-    for path in folder.list_paths_in_partition():
-        if os.path.basename(path) == filename:
-            with folder.get_download_stream(path) as stream:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-                    tmp.write(stream.read())
-                    tmp_path = tmp.name
-            df = pd.read_csv(tmp_path, dtype=str)  # keep all values as strings
-            os.remove(tmp_path)
-            return df
-    raise FileNotFoundError(f"❌ File '{filename}' not found in folder {folder.get_id()}!")
+def normalize_tenure(val):
+    """Normalize Tenure strings like 'O/N' → 'ON', '1Y ' → '1Y'."""
+    if pd.isna(val):
+        return None
+    val = str(val).strip().upper()
+    val = re.sub(r'[^A-Z0-9]', '', val)  # remove special chars like '/', '-', etc.
+    return val
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
 def main():
-    print("📂 Scanning input folder for files...")
-    all_files = [os.path.basename(p) for p in input_folder.list_paths_in_partition()]
-    print(f"🔍 Found {len(all_files)} file(s): {all_files}")
+    # -------------------------------
+    # 📥 Load files from both folders
+    # -------------------------------
+    def load_file(folder, filename):
+        for path in folder.list_paths_in_partition():
+            if os.path.basename(path) == filename:
+                with folder.get_download_stream(path) as stream:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
+                        tmp.write(stream.read())
+                        tmp_path = tmp.name
+                if filename.lower().endswith(".csv"):
+                    df = pd.read_csv(tmp_path)
+                elif filename.lower().endswith((".xls", ".xlsx")):
+                    df = pd.read_excel(tmp_path)
+                else:
+                    raise ValueError(f"Unsupported file type: {filename}")
+                os.remove(tmp_path)
+                return df
+        raise FileNotFoundError(f"❌ File '{filename}' not found in folder {folder.get_id()}!")
 
-    for file_name, cfg in file_operations.items():
-        if file_name not in all_files:
-            print(f"⚠️ Skipping '{file_name}' — not found in folder.")
-            continue
+    print("📂 Reading files...")
+    df1 = load_file(input_folder_1, file_1_name)
+    df2 = load_file(input_folder_2, file_2_name)
 
-        print(f"\n➡️ Processing file: {file_name}")
+    # -------------------------------
+    # 🧹 Clean + Normalize Columns
+    # -------------------------------
+    df1["__Date"] = pd.to_datetime(df1[date_col_1], errors="coerce")
+    df2["__Date"] = pd.to_datetime(df2[date_col_2], errors="coerce")
 
-        # Defensive key checks
-        op_type = cfg.get("type")
-        if not op_type:
-            print(f"⚠️ Missing 'type' key in config for '{file_name}', skipping.")
-            continue
+    df1["__Type"] = df1[type_col_1].astype(str).str.strip().str.upper()
+    df2["__Type"] = df2[type_col_2].astype(str).str.strip().str.upper()
 
-        # Load CSV safely
-        try:
-            df = load_file_from_folder(input_folder, file_name)
-        except Exception as e:
-            print(f"❌ Error reading {file_name}: {e}")
-            continue
+    df1["__Tenure"] = df1[tenure_col_1].apply(normalize_tenure)
+    df2["__Tenure"] = df2[tenure_col_2].apply(normalize_tenure)
 
-        # Perform operation
-        if op_type == "prefix":
-            col = cfg.get("column")
-            prefix = cfg.get("prefix", "")
-            if not col:
-                print(f"⚠️ No column specified for prefix operation in {file_name}, skipping.")
-                continue
+    df1["__Rate"] = pd.to_numeric(df1[rate_col_1], errors="coerce")
+    df2["__Rate"] = pd.to_numeric(df2[rate_col_2], errors="coerce")
 
-            print(f"   🧩 Operation: Add prefix '{prefix}' to column '{col}'")
-            if col in df.columns:
-                df[col] = df[col].fillna("").astype(str)
-                df[col] = prefix + df[col]
-                print(f"   ✅ Prefix added successfully.")
-            else:
-                print(f"   ⚠️ Column '{col}' not found — skipping prefix addition.")
-                continue
+    # -------------------------------
+    # 🔗 Merge and Compare
+    # -------------------------------
+    merged_df = pd.merge(
+        df1,
+        df2,
+        how="outer",
+        left_on=["__Date", "__Type", "__Tenure"],
+        right_on=["__Date", "__Type", "__Tenure"],
+        suffixes=("_File1", "_File2")
+    )
 
-        elif op_type == "new_column":
-            col = cfg.get("column")
-            value = cfg.get("value", "")
-            if not col:
-                print(f"⚠️ No column name provided for new_column operation in {file_name}, skipping.")
-                continue
+    merged_df["Match"] = merged_df["__Rate_File1"].eq(merged_df["__Rate_File2"])
 
-            print(f"   🧩 Operation: Create new column '{col}' with value '{value}'")
-            df[col] = value
-            print(f"   ✅ Column '{col}' created successfully.")
+    # -------------------------------
+    # 💾 Save result to Dataiku output
+    # -------------------------------
+    with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
+        merged_df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
+        with open(tmp_out.name, "rb") as f:
+            output_folder.upload_stream("comparison_result.csv", f)
+        os.remove(tmp_out.name)
 
-        else:
-            print(f"⚠️ Unknown operation type '{op_type}' for {file_name}. Skipping.")
-            continue
-
-        # Save modified file to output folder
-        try:
-            with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
-                df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
-                with open(tmp_out.name, "rb") as f:
-                    output_folder.upload_stream(file_name, f)
-                os.remove(tmp_out.name)
-            print(f"💾 Saved updated '{file_name}' to output folder.")
-        except Exception as e:
-            print(f"❌ Error saving {file_name}: {e}")
-
-    print("\n✅ All configured files processed successfully!")
+    print("✅ Comparison completed and saved to output folder!")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
