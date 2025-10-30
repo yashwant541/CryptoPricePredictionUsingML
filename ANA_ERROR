@@ -33,11 +33,31 @@ rate_col_2 = "Fixing Rate"
 # 🧩 Helper Function — Normalize Tenure
 # ------------------------------------------------------
 def normalize_tenure(val):
-    """Normalize Tenure strings like 'O/N' → 'ON', '1Y ' → '1Y'."""
+    """Normalize Tenure strings like 'O/N' → 'ON', 'T/N' → 'TN', '1Y' → '12M', etc."""
     if pd.isna(val):
         return None
     val = str(val).strip().upper()
     val = re.sub(r'[^A-Z0-9]', '', val)  # remove special chars like '/', '-', etc.
+
+    # ✅ Map all common forms to standardized short tenors
+    mapping = {
+        "ON": ["ON", "O/N", "1D", "DAY1", "OD", "OVERNIGHT", "SPOT"],
+        "TN": ["TN", "T/N", "TOMNEXT", "TOMORROWNEXT"],
+        "1W": ["1W", "7D", "ONEWEEK"],
+        "2W": ["2W", "14D", "TWOWEEK"],
+        "1M": ["1M", "30D", "ONEMONTH"],
+        "2M": ["2M", "60D", "TWOMONTH"],
+        "3M": ["3M", "90D", "THREEMONTH"],
+        "6M": ["6M", "180D", "SIXMONTH"],
+        "9M": ["9M", "270D", "NINEMONTH"],
+        "12M": ["12M", "1Y", "1YR", "1YEAR", "ONEYEAR"],
+        "24M": ["24M", "2Y", "2YR", "2YEAR", "TWOYEAR"]
+    }
+
+    for norm, variants in mapping.items():
+        if val in variants:
+            return norm
+
     return val
 
 # ------------------------------------------------------
@@ -77,6 +97,7 @@ def main():
     df1["__Type"] = df1[type_col_1].astype(str).str.strip().str.upper()
     df2["__Type"] = df2[type_col_2].astype(str).str.strip().str.upper()
 
+    # ✅ Apply normalization to both tenure columns
     df1["__Tenure"] = df1[tenure_col_1].apply(normalize_tenure)
     df2["__Tenure"] = df2[tenure_col_2].apply(normalize_tenure)
 
