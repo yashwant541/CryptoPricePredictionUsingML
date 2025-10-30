@@ -2,111 +2,83 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
-import re
 
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder_1 = dataiku.Folder("XXXXXXXXX")     # 📥 Folder 1 (e.g. old rates)
-input_folder_2 = dataiku.Folder("YYYYYYYYY")     # 📥 Folder 2 (e.g. new rates)
-output_folder = dataiku.Folder("ZZZZZZZZZ")      # 📤 Output folder
+input_folder = dataiku.Folder("XXXXXXXXX")     # 📥 Input folder
+output_folder = dataiku.Folder("YYYYYYYYY")    # 📤 Output folder
 
 # ------------------------------------------------------
-# 🧠 Global Variables (edit these for your run)
+# 🧠 File-Specific Prefix Configuration
 # ------------------------------------------------------
-file_1_name = "old_rates.csv"      # file name in folder 1
-file_2_name = "new_rates.csv"      # file name in folder 2
-
-# Columns for file 1
-date_col_1 = "Date"
-type_col_1 = "Type"
-tenure_col_1 = "Tenure"
-rate_col_1 = "Rate"
-
-# Columns for file 2
-date_col_2 = "Date"
-type_col_2 = "Type"
-tenure_col_2 = "Tenure"
-rate_col_2 = "Rate"
+# Each file gets its own target column + prefix
+file_prefix_config = {
+    "file1.csv": {"column": "TEXT", "prefix": "TYLER "},
+    "file2.csv": {"column": "MYSA", "prefix": "STEVE "},
+    "file3.csv": {"column": "NAME", "prefix": "JENNY "},
+    "file4.csv": {"column": "DESC", "prefix": "ALEX "},
+    "file5.csv": {"column": "TITLE", "prefix": "MORGAN "}
+}
 
 # ------------------------------------------------------
-# 🧩 Helper Function — Normalize Tenure
+# 🧩 Helper Function — Load CSV file from Dataiku folder
 # ------------------------------------------------------
-def normalize_tenure(val):
-    """Normalize Tenure strings like 'O/N' → 'ON', '1Y ' → '1Y'."""
-    if pd.isna(val):
-        return None
-    val = str(val).strip().upper()
-    val = re.sub(r'[^A-Z0-9]', '', val)  # remove special chars like '/', '-', etc.
-    return val
+def load_file_from_folder(folder, filename):
+    """Find and load a CSV file from a Dataiku folder."""
+    for path in folder.list_paths_in_partition():
+        if os.path.basename(path) == filename:
+            with folder.get_download_stream(path) as stream:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+                    tmp.write(stream.read())
+                    tmp_path = tmp.name
+            df = pd.read_csv(tmp_path, dtype=str)  # keep all as string
+            os.remove(tmp_path)
+            return df
+    raise FileNotFoundError(f"❌ File '{filename}' not found in folder {folder.get_id()}!")
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
 def main():
-    # -------------------------------
-    # 📥 Load files from both folders
-    # -------------------------------
-    def load_file(folder, filename):
-        for path in folder.list_paths_in_partition():
-            if os.path.basename(path) == filename:
-                with folder.get_download_stream(path) as stream:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
-                        tmp.write(stream.read())
-                        tmp_path = tmp.name
-                if filename.lower().endswith(".csv"):
-                    df = pd.read_csv(tmp_path)
-                elif filename.lower().endswith((".xls", ".xlsx")):
-                    df = pd.read_excel(tmp_path)
-                else:
-                    raise ValueError(f"Unsupported file type: {filename}")
-                os.remove(tmp_path)
-                return df
-        raise FileNotFoundError(f"❌ File '{filename}' not found in folder {folder.get_id()}!")
+    print("📂 Scanning input folder for files...")
+    all_files = [os.path.basename(p) for p in input_folder.list_paths_in_partition()]
+    print(f"🔍 Found {len(all_files)} file(s): {all_files}")
 
-    print("📂 Reading files...")
-    df1 = load_file(input_folder_1, file_1_name)
-    df2 = load_file(input_folder_2, file_2_name)
+    for file_name, cfg in file_prefix_config.items():
+        if file_name not in all_files:
+            print(f"⚠️ Skipping '{file_name}' — not found in folder.")
+            continue
 
-    # -------------------------------
-    # 🧹 Clean + Normalize Columns
-    # -------------------------------
-    df1["__Date"] = pd.to_datetime(df1[date_col_1], errors="coerce")
-    df2["__Date"] = pd.to_datetime(df2[date_col_2], errors="coerce")
+        column = cfg["column"]
+        prefix = cfg["prefix"]
 
-    df1["__Type"] = df1[type_col_1].astype(str).str.strip().str.upper()
-    df2["__Type"] = df2[type_col_2].astype(str).str.strip().str.upper()
+        print(f"\n➡️ Processing file: {file_name}")
+        print(f"   Target column: {column}")
+        print(f"   Prefix: '{prefix}'")
 
-    df1["__Tenure"] = df1[tenure_col_1].apply(normalize_tenure)
-    df2["__Tenure"] = df2[tenure_col_2].apply(normalize_tenure)
+        # Load CSV
+        df = load_file_from_folder(input_folder, file_name)
 
-    df1["__Rate"] = pd.to_numeric(df1[rate_col_1], errors="coerce")
-    df2["__Rate"] = pd.to_numeric(df2[rate_col_2], errors="coerce")
+        # Apply prefix
+        if column in df.columns:
+            df[column] = df[column].fillna("").astype(str)
+            df[column] = prefix + df[column]
+            print(f"✅ Prefix added successfully for column '{column}'")
+        else:
+            print(f"⚠️ Column '{column}' not found in {file_name}, skipping.")
+            continue
 
-    # -------------------------------
-    # 🔗 Merge and Compare
-    # -------------------------------
-    merged_df = pd.merge(
-        df1,
-        df2,
-        how="outer",
-        left_on=["__Date", "__Type", "__Tenure"],
-        right_on=["__Date", "__Type", "__Tenure"],
-        suffixes=("_File1", "_File2")
-    )
+        # Save modified CSV to output folder
+        with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
+            df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
+            with open(tmp_out.name, "rb") as f:
+                output_folder.upload_stream(file_name, f)
+            os.remove(tmp_out.name)
 
-    merged_df["Match"] = merged_df["__Rate_File1"].eq(merged_df["__Rate_File2"])
+        print(f"💾 Saved updated '{file_name}' to output folder.")
 
-    # -------------------------------
-    # 💾 Save result to Dataiku output
-    # -------------------------------
-    with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
-        merged_df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
-        with open(tmp_out.name, "rb") as f:
-            output_folder.upload_stream("comparison_result.csv", f)
-        os.remove(tmp_out.name)
-
-    print("✅ Comparison completed and saved to output folder!")
+    print("\n✅ All configured files processed successfully!")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
