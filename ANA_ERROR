@@ -6,28 +6,33 @@ import os
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("IEHxZtxh")      # 📥 Input folder (Excel files)
-output_folder = dataiku.Folder("dyonHS8r")     # 📤 Output folder (cleaned CSVs)
+input_folder = dataiku.Folder("IEHxZtxh")      # 📥 Input folder
+output_folder = dataiku.Folder("dyonHS8r")     # 📤 Output folder
 
 # ------------------------------------------------------
 # 🧩 Helper Function
 # ------------------------------------------------------
 def clean_table(df):
-    """Clean and forward-fill merged-like cells"""
-    # Drop completely empty rows and columns
-    df = df.dropna(how='all').dropna(axis=1, how='all')
+    """Cleans, fills merged cells, and prepares final structured table"""
 
-    # Clean column names
+    # Drop completely empty rows & columns
+    df = df.dropna(how="all").dropna(axis=1, how="all")
+
+    # Strip column names
     df.columns = df.columns.astype(str).str.strip()
 
-    # Forward-fill merged cell columns
-    cols_to_ffill = ['Period', 'Approval Date', 'Benchmark(s)']
-    existing_cols = [c for c in cols_to_ffill if c in df.columns]
-    df[existing_cols] = df[existing_cols].ffill()
+    # 🔹 Forward-fill Period, Benchmark(s)
+    cols_to_ffill = [col for col in ["Period", "Benchmark(s)"] if col in df.columns]
+    df[cols_to_ffill] = df[cols_to_ffill].ffill()
 
-    # Drop rows without meaningful data
-    if 'Tenor' in df.columns and 'MVT' in df.columns:
-        df = df.dropna(subset=['Tenor', 'MVT'], how='all')
+    # 🔹 Approval Date → forward-fill until next actual date
+    if "Approval Date" in df.columns:
+        df["Approval Date"] = df["Approval Date"].ffill()
+
+    # 🔹 Drop rows that are completely blank for Tenor/MVT
+    key_cols = [c for c in ["Tenor", "MVT"] if c in df.columns]
+    if key_cols:
+        df = df.dropna(subset=key_cols, how="all")
 
     return df
 
@@ -50,36 +55,37 @@ def main():
                 tmp.write(stream.read())
                 tmp_path = tmp.name
 
-        # Read Excel file
+        # Load Excel workbook
         xls = pd.ExcelFile(tmp_path, engine="openpyxl")
         print(f"📘 Found sheets: {xls.sheet_names}")
 
         for sheet_name in xls.sheet_names:
             print(f"🔹 Reading sheet: {sheet_name}")
-            
-            # Read the sheet — skip the first empty row
+
+            # Read, skip first empty row
             df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, skiprows=1, engine="openpyxl")
 
-            # Drop the first column if it's entirely empty (blank first column)
+            # Drop first column if it's blank
             if df_raw.shape[1] > 0 and df_raw.iloc[:, 0].isna().all():
                 df_raw = df_raw.drop(df_raw.columns[0], axis=1)
 
+            # Skip empty sheets
             if df_raw.empty:
                 print(f"⚠️ Sheet '{sheet_name}' is empty, skipping.")
                 continue
 
-            # Clean and format the table
+            # Clean and format
             df_clean = clean_table(df_raw)
 
             if df_clean.empty:
                 print(f"⚠️ No valid data found in sheet '{sheet_name}', skipping.")
                 continue
 
-            # Create output filename (filename + sheet name)
+            # Output file name → filename + sheet name
             safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
             output_filename = f"{base_name}_{safe_sheet_name}_cleaned.csv"
 
-            # Save cleaned CSV to output folder
+            # Write to temporary CSV then upload to Dataiku
             with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_csv:
                 df_clean.to_csv(tmp_csv.name, index=False)
                 tmp_csv.close()
@@ -89,11 +95,10 @@ def main():
 
             print(f"✅ Saved cleaned sheet → {output_filename}")
 
-        # Remove temp Excel file
         os.remove(tmp_path)
         print(f"🏁 Completed processing file: {file_name}")
 
-    print("\n🎉 All Excel sheets processed and saved to Dataiku output folder successfully!")
+    print("\n🎉 All Excel sheets processed and saved successfully!")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
