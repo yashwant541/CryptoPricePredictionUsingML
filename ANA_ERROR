@@ -21,16 +21,16 @@ def clean_table(df):
     # Strip column names
     df.columns = df.columns.astype(str).str.strip()
 
-    # 🔹 Forward-fill Period, Benchmark(s)
+    # 🔹 Forward-fill Period and Benchmark(s)
     cols_to_ffill = [col for col in ["Period", "Benchmark(s)"] if col in df.columns]
     df[cols_to_ffill] = df[cols_to_ffill].ffill()
 
-    # 🔹 Approval Date → forward-fill until next actual date
-    if "Approval Date" in df.columns:
-        df["Approval Date"] = df["Approval Date"].ffill()
+    # 🔹 Approval Date → fill down only within each Period group
+    if "Period" in df.columns and "Approval Date" in df.columns:
+        df["Approval Date"] = df.groupby("Period")["Approval Date"].ffill()
 
-    # 🔹 Drop rows that are completely blank for Tenor/MVT
-    key_cols = [c for c in ["Tenor", "MVT"] if c in df.columns]
+    # 🔹 Drop rows where all key fields are missing
+    key_cols = [c for c in ["Tenor", "MVT", "MVT (Before)"] if c in df.columns]
     if key_cols:
         df = df.dropna(subset=key_cols, how="all")
 
@@ -62,7 +62,7 @@ def main():
         for sheet_name in xls.sheet_names:
             print(f"🔹 Reading sheet: {sheet_name}")
 
-            # Read, skip first empty row
+            # Read Excel (skip first empty row)
             df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, skiprows=1, engine="openpyxl")
 
             # Drop first column if it's blank
@@ -74,7 +74,7 @@ def main():
                 print(f"⚠️ Sheet '{sheet_name}' is empty, skipping.")
                 continue
 
-            # Clean and format
+            # Clean and structure
             df_clean = clean_table(df_raw)
 
             if df_clean.empty:
@@ -85,7 +85,7 @@ def main():
             safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
             output_filename = f"{base_name}_{safe_sheet_name}_cleaned.csv"
 
-            # Write to temporary CSV then upload to Dataiku
+            # Save cleaned output to Dataiku folder
             with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_csv:
                 df_clean.to_csv(tmp_csv.name, index=False)
                 tmp_csv.close()
