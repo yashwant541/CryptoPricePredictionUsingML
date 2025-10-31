@@ -9,28 +9,23 @@ import os
 input_folder = dataiku.Folder("IEHxZtxh")      # 📥 Input folder (Excel files)
 output_folder = dataiku.Folder("dyonHS8r")     # 📤 Output folder (cleaned CSVs)
 
-# List of sheet names to skip (if needed)
-EXCEPTION_SHEETS = ["Tracking Sheet", "FXO VOLS FBIL Realtime", "FXO VOLS Refinitiv Realtime"]
-
 # ------------------------------------------------------
 # 🧩 Helper Function
 # ------------------------------------------------------
 def clean_table(df):
     """Clean and forward-fill the merged cells"""
-    # Drop fully empty rows
+    # Drop completely empty rows
     df = df.dropna(how='all')
 
-    # Clean column names
+    # Clean up column names
     df.columns = df.columns.str.strip()
 
-    # Identify which columns exist before filling
+    # Forward-fill merged cell columns
     cols_to_ffill = ['Period', 'Approval Date', 'Benchmark(s)']
     existing_cols = [c for c in cols_to_ffill if c in df.columns]
-
-    # Forward fill for merged-like structure
     df[existing_cols] = df[existing_cols].ffill()
 
-    # Drop rows that are still completely empty in key columns
+    # Drop rows that have no relevant values
     if 'Tenor' in df.columns and 'MVT' in df.columns:
         df = df.dropna(subset=['Tenor', 'MVT'], how='all')
 
@@ -48,22 +43,17 @@ def main():
         file_name = os.path.basename(file_path)
         print(f"\n📄 Processing file: {file_name}")
 
-        # Download file temporarily
+        # Download Excel file temporarily
         with input_folder.get_download_stream(file_path) as stream:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
                 tmp.write(stream.read())
                 tmp_path = tmp.name
 
-        # Read Excel file safely
+        # Read Excel file
         xls = pd.ExcelFile(tmp_path, engine="openpyxl")
         print(f"📘 Found sheets: {xls.sheet_names}")
 
         for sheet_name in xls.sheet_names:
-            # Skip unwanted sheets
-            if sheet_name in EXCEPTION_SHEETS:
-                print(f"⏩ Skipping sheet '{sheet_name}' (in exception list)")
-                continue
-
             print(f"🔹 Reading sheet: {sheet_name}")
             df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, engine="openpyxl")
 
@@ -71,11 +61,11 @@ def main():
                 print(f"⚠️ Sheet '{sheet_name}' is empty, skipping.")
                 continue
 
-            # Clean and transform table
+            # Clean and transform
             df_clean = clean_table(df_raw)
 
             if df_clean.empty:
-                print(f"⚠️ No valid rows found in sheet '{sheet_name}', skipping.")
+                print(f"⚠️ No valid data in sheet '{sheet_name}', skipping.")
                 continue
 
             # Save cleaned CSV to output folder
@@ -90,7 +80,7 @@ def main():
             os.remove(tmp_csv.name)
             print(f"✅ Saved cleaned sheet → {safe_name}_cleaned.csv")
 
-        # Cleanup downloaded Excel file
+        # Remove temp Excel file
         os.remove(tmp_path)
         print(f"🏁 Completed processing file: {file_name}")
 
