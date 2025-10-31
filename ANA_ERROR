@@ -4,30 +4,22 @@ import tempfile
 import os
 
 # ------------------------------------------------------
-# 🔧 Configuration — Replace with your Dataiku folder IDs
+# 🔧 Configuration — Replace with your actual folder IDs
 # ------------------------------------------------------
 input_folder = dataiku.Folder("XXXXXXX")     # 📥 Input Excel folder
-output_folder = dataiku.Folder("XXXXXXX")    # 📤 Output Excel folder
+output_folder = dataiku.Folder("YYYYYYY")    # 📤 Output Excel folder
 
 # ------------------------------------------------------
 # 🧠 Helper — Clean merged-style Excel data
 # ------------------------------------------------------
 def clean_excel_sheet(df):
-    """Forward fill merged columns and clean up whitespace."""
     if df.empty:
         return df
-    
-    # Drop completely empty rows
     df.dropna(how='all', inplace=True)
-    
-    # Forward-fill key columns if they exist
     for col in ['Period', 'Approval Date', 'Benchmark(s)']:
         if col in df.columns:
             df[col] = df[col].ffill()
-    
-    # Clean whitespace
     df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
-    
     return df
 
 # ------------------------------------------------------
@@ -37,6 +29,7 @@ def main():
     print("📂 Reading Excel files from Dataiku input folder...")
 
     input_files = input_folder.list_paths_in_partition()
+    print("📄 Files found:", input_files)
 
     for file_path in input_files:
         if not file_path.lower().endswith((".xlsx", ".xls")):
@@ -46,38 +39,32 @@ def main():
         base_name = os.path.splitext(file_name)[0]
         print(f"🔍 Processing {file_name}...")
 
-        # Create temporary local copies
         with input_folder.get_download_stream(file_path) as excel_stream:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_excel:
                 tmp_excel.write(excel_stream.read())
                 tmp_excel.flush()
 
-                # Read Excel file
                 excel = pd.ExcelFile(tmp_excel.name)
 
                 for sheet in excel.sheet_names:
                     try:
                         df = pd.read_excel(tmp_excel.name, sheet_name=sheet)
                         cleaned_df = clean_excel_sheet(df)
-                        
-                        # Create temp output Excel file
+
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_output:
                             cleaned_df.to_excel(tmp_output.name, index=False)
-                            
-                            # Upload to Dataiku output folder
                             output_filename = f"{base_name}_{sheet}.xlsx"
+                            print(f"📤 Uploading {output_filename} ...")
+
                             with open(tmp_output.name, "rb") as f:
-                                output_folder.upload_stream(output_filename, f)
-                            
-                            print(f"✅ {output_filename} saved successfully.")
-                            
-                            # Cleanup temp output file
+                                output_folder.upload_stream(output_filename, f, overwrite=True)
+
+                            print(f"✅ Saved to output folder: {output_filename}")
                             os.remove(tmp_output.name)
-                    
+
                     except Exception as e:
                         print(f"⚠️ Error processing sheet '{sheet}' in {file_name}: {e}")
 
-        # Cleanup input temp file
         if os.path.exists(tmp_excel.name):
             os.remove(tmp_excel.name)
 
