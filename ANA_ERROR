@@ -2,89 +2,119 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
+from datetime import datetime
 
 # ------------------------------------------------------
-# 🔧 Configuration — Replace with your actual folder IDs
+# 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXX")     # 📥 Input Excel folder
-output_folder = dataiku.Folder("YYYYYYY")    # 📤 Output CSV folder
+input_folder = dataiku.Folder("XXXXXXXX")      # 📥 Input folder
+output_folder = dataiku.Folder("XXXXXXXX")    # 📤 Output folder
+
+# List of sheet names to skip
+EXCEPTION_SHEETS = ["Tracking Sheet", "FXO VOLS FBIL Realtime", "FXO VOLS Refinitiv Realtime"]  # add any sheet names you want to ignore
 
 # ------------------------------------------------------
-# 🧠 Helper — Clean merged-style Excel data
+# 🧠 Helper Functions
 # ------------------------------------------------------
-def clean_excel_sheet(df):
-    """Forward fill merged columns and clean up whitespace."""
-    if df.empty:
-        return df
-    df.dropna(how='all', inplace=True)
-    for col in ['Period', 'Approval Date', 'Benchmark(s)']:
-        if col in df.columns:
-            df[col] = df[col].ffill()
-    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
-    return df
+def looks_like_date(val):
+    """Check if a value looks like a date"""
+    if isinstance(val, (pd.Timestamp, datetime)):
+        return True
+    if isinstance(val, str):
+        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
+            try:
+                datetime.strptime(val.strip(), fmt)
+                return True
+            except:
+                continue
+    return False
+
+def read_excel_safe(file_path):
+    """Read Excel using openpyxl engine for .xlsx"""
+    return pd.ExcelFile(file_path, engine="openpyxl")
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
 def main():
-    print("📂 Reading Excel files from Dataiku input folder...")
-
     input_files = input_folder.list_paths_in_partition()
-    print("📄 Files found:", input_files)
+    if not input_files:
+        raise FileNotFoundError("❌ No files found in input folder!")
 
-    for file_path in input_files:
-        # Only process Excel files
-        if not file_path.lower().endswith((".xlsx", ".xls")):
-            continue
+    for excel_file_info in input_files:
+        file_name = os.path.basename(excel_file_info)
 
-        file_name = os.path.basename(file_path)
-        base_name = os.path.splitext(file_name)[0]
-        print(f"🔍 Processing {file_name}...")
+        # Download file to temporary location
+        with input_folder.get_download_stream(excel_file_info) as stream:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+                tmp.write(stream.read())
+                tmp_path = tmp.name
 
-        # Download Excel file to temp location
-        with input_folder.get_download_stream(file_path) as excel_stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_excel:
-                excel_stream.seek(0)
-                tmp_excel.write(excel_stream.read())
-                tmp_excel.flush()
-                tmp_excel_path = tmp_excel.name
+        xls = read_excel_safe(tmp_path)
 
-        # ✅ Use openpyxl explicitly
-        excel = pd.ExcelFile(tmp_excel_path, engine="openpyxl")
+        for sheet_name in xls.sheet_names:
 
-        for sheet in excel.sheet_names:
-            try:
-                df = pd.read_excel(tmp_excel_path, sheet_name=sheet, engine="openpyxl")
-                cleaned_df = clean_excel_sheet(df)
+            # Skip sheets in the exception list
+            if sheet_name in EXCEPTION_SHEETS:
+                print(f"⏩ Skipping sheet '{sheet_name}' as it is in the exception list")
+                continue
 
-                # Create a temporary CSV file
-                tmp_csv_path = os.path.join(tempfile.gettempdir(), f"{base_name}_{sheet}.csv")
-                
-                # Save cleaned data as CSV
-                cleaned_df.to_csv(tmp_csv_path, index=False, encoding="utf-8-sig")
-                
-                # Upload to Dataiku output folder
-                output_filename = f"{base_name}_{sheet}.csv"
-                with open(tmp_csv_path, "rb") as f:
-                    output_folder.upload_stream(output_filename, f, overwrite=True)
-                
-                print(f"✅ Uploaded: {output_filename}")
+            df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
 
-                # Cleanup temp CSV file
-                os.remove(tmp_csv_path)
+            # Row 7 (index 6) contains labels
+            label_row_index = 6
+            labels_row = df_raw.iloc[label_row_index]
 
-            except Exception as e:
-                print(f"⚠️ Error processing sheet '{sheet}' in {file_name}: {e}")
+            tidy_data_list = []
 
-        # Cleanup Excel temp file
-        if os.path.exists(tmp_excel_path):
-            os.remove(tmp_excel_path)
+            # Loop through all columns to find labels
+            for col in range(df_raw.shape[1]):
+                label = labels_row[col]
 
-    # List uploaded files for verification
-    print("\n📁 Output folder contents:")
-    print(output_folder.list_paths_in_partition())
+                # Only process columns that have a label
+                if pd.notna(label):
+                    if col + 1 < df_raw.shape[1]:
+                        dates = df_raw.iloc[label_row_index + 1:, col]
+                        values = df_raw.iloc[label_row_index + 1:, col + 1]
 
-    print("🏁 All Excel sheets processed and saved as CSV successfully!")
+                        # Remove rows where dates or values are missing
+                        mask = dates.notna() & values.notna()
+                        dates = dates[mask]
+                        values = values[mask]
+
+                        temp_df = pd.DataFrame({
+                            "Date": dates,
+                            "Label": label,
+                            "Value": values
+                        })
+                        tidy_data_list.append(temp_df)
+
+            if not tidy_data_list:
+                print(f"⚠️ No valid data found in sheet '{sheet_name}'")
+                continue
+
+            # Concatenate all label blocks into one tidy DataFrame
+            final_df = pd.concat(tidy_data_list, ignore_index=True)
+
+            # Convert Date column to datetime
+            final_df["Date"] = pd.to_datetime(final_df["Date"], errors='coerce')
+
+            # Optional: sort by Date
+            final_df = final_df.sort_values("Date").reset_index(drop=True)
+
+            # Save to CSV in Dataiku output folder using the sheet name
+            safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+                final_df.to_csv(tmp_file.name, index=False)
+                with open(tmp_file.name, "rb") as f:
+                    output_folder.upload_stream(f"{safe_sheet_name}.csv", f)
+                os.remove(tmp_file.name)
+
+            print(f"✅ Sheet '{sheet_name}' saved as CSV: {safe_sheet_name}.csv")
+
+        # Cleanup temporary Excel
+        os.remove(tmp_path)
+        print(f"✅ Processing complete for file: {file_name}")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
