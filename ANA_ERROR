@@ -2,53 +2,44 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
-import pdfplumber
 
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXX")     # 📥 Input PDF folder
+input_folder = dataiku.Folder("XXXXXXX")     # 📥 Input Excel folder
 output_folder = dataiku.Folder("XXXXXXX")    # 📤 Output Excel folder
 
 # ------------------------------------------------------
-# 🧠 Helper — Extract tables from PDF and save as Excel
+# 🧠 Helper — Clean merged-style Excel data
 # ------------------------------------------------------
-def extract_tables_from_pdf(pdf_path, output_path):
-    """Extracts all tables from a PDF and saves them as sheets in an Excel file."""
-    tables = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages, start=1):
-            page_tables = page.extract_tables()
-            for t_index, table in enumerate(page_tables, start=1):
-                if table:
-                    df = pd.DataFrame(table)
-                    # Try to treat first row as header if it looks like one
-                    if len(df) > 1 and all(isinstance(x, str) for x in df.iloc[0]):
-                        df.columns = df.iloc[0]
-                        df = df[1:]
-                    df.reset_index(drop=True, inplace=True)
-                    tables.append(df)
-
-    if not tables:
-        return 0  # no tables found
-
-    # Save all tables into one Excel file (each on a separate sheet)
-    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-        for i, df in enumerate(tables, start=1):
-            sheet_name = f"Table_{i}"
-            df.to_excel(writer, sheet_name=sheet_name, index=False)
-    return len(tables)
+def clean_excel_sheet(df):
+    """Forward fill merged columns and clean up whitespace."""
+    if df.empty:
+        return df
+    
+    # Drop completely empty rows
+    df.dropna(how='all', inplace=True)
+    
+    # Forward-fill key columns if they exist
+    for col in ['Period', 'Approval Date', 'Benchmark(s)']:
+        if col in df.columns:
+            df[col] = df[col].ffill()
+    
+    # Clean whitespace
+    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    
+    return df
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
 def main():
-    print("📂 Reading PDFs from Dataiku input folder...")
+    print("📂 Reading Excel files from Dataiku input folder...")
 
     input_files = input_folder.list_paths_in_partition()
 
     for file_path in input_files:
-        if not file_path.lower().endswith(".pdf"):
+        if not file_path.lower().endswith((".xlsx", ".xls")):
             continue
 
         file_name = os.path.basename(file_path)
@@ -56,28 +47,41 @@ def main():
         print(f"🔍 Processing {file_name}...")
 
         # Create temporary local copies
-        with input_folder.get_download_stream(file_path) as pdf_stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
-                tmp_pdf.write(pdf_stream.read())
-                tmp_pdf.flush()
+        with input_folder.get_download_stream(file_path) as excel_stream:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_excel:
+                tmp_excel.write(excel_stream.read())
+                tmp_excel.flush()
 
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_xlsx:
-                    num_tables = extract_tables_from_pdf(tmp_pdf.name, tmp_xlsx.name)
+                # Read Excel file
+                excel = pd.ExcelFile(tmp_excel.name)
 
-                    if num_tables > 0:
-                        with open(tmp_xlsx.name, "rb") as f:
-                            output_folder.upload_stream(f"{base_name}.xlsx", f)
-                        print(f"✅ {file_name}: Extracted {num_tables} table(s).")
-                    else:
-                        print(f"⚠️ {file_name}: No tables found.")
+                for sheet in excel.sheet_names:
+                    try:
+                        df = pd.read_excel(tmp_excel.name, sheet_name=sheet)
+                        cleaned_df = clean_excel_sheet(df)
+                        
+                        # Create temp output Excel file
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_output:
+                            cleaned_df.to_excel(tmp_output.name, index=False)
+                            
+                            # Upload to Dataiku output folder
+                            output_filename = f"{base_name}_{sheet}.xlsx"
+                            with open(tmp_output.name, "rb") as f:
+                                output_folder.upload_stream(output_filename, f)
+                            
+                            print(f"✅ {output_filename} saved successfully.")
+                            
+                            # Cleanup temp output file
+                            os.remove(tmp_output.name)
+                    
+                    except Exception as e:
+                        print(f"⚠️ Error processing sheet '{sheet}' in {file_name}: {e}")
 
-        # Clean up temp files
-        if os.path.exists(tmp_pdf.name):
-            os.remove(tmp_pdf.name)
-        if os.path.exists(tmp_xlsx.name):
-            os.remove(tmp_xlsx.name)
+        # Cleanup input temp file
+        if os.path.exists(tmp_excel.name):
+            os.remove(tmp_excel.name)
 
-    print("🏁 Extraction completed for all PDF files!")
+    print("🏁 All Excel sheets processed and saved successfully!")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
