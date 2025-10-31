@@ -13,19 +13,19 @@ output_folder = dataiku.Folder("dyonHS8r")     # 📤 Output folder (cleaned CSV
 # 🧩 Helper Function
 # ------------------------------------------------------
 def clean_table(df):
-    """Clean and forward-fill the merged cells"""
-    # Drop completely empty rows
-    df = df.dropna(how='all')
+    """Clean and forward-fill merged-like cells"""
+    # Drop completely empty rows and columns
+    df = df.dropna(how='all').dropna(axis=1, how='all')
 
-    # Clean up column names
-    df.columns = df.columns.str.strip()
+    # Clean column names
+    df.columns = df.columns.astype(str).str.strip()
 
     # Forward-fill merged cell columns
     cols_to_ffill = ['Period', 'Approval Date', 'Benchmark(s)']
     existing_cols = [c for c in cols_to_ffill if c in df.columns]
     df[existing_cols] = df[existing_cols].ffill()
 
-    # Drop rows that have no relevant values
+    # Drop rows without meaningful data
     if 'Tenor' in df.columns and 'MVT' in df.columns:
         df = df.dropna(subset=['Tenor', 'MVT'], how='all')
 
@@ -41,6 +41,7 @@ def main():
 
     for file_path in input_files:
         file_name = os.path.basename(file_path)
+        base_name = os.path.splitext(file_name)[0]
         print(f"\n📄 Processing file: {file_name}")
 
         # Download Excel file temporarily
@@ -55,30 +56,38 @@ def main():
 
         for sheet_name in xls.sheet_names:
             print(f"🔹 Reading sheet: {sheet_name}")
-            df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, engine="openpyxl")
+            
+            # Read the sheet — skip the first empty row
+            df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, skiprows=1, engine="openpyxl")
+
+            # Drop the first column if it's entirely empty (blank first column)
+            if df_raw.shape[1] > 0 and df_raw.iloc[:, 0].isna().all():
+                df_raw = df_raw.drop(df_raw.columns[0], axis=1)
 
             if df_raw.empty:
                 print(f"⚠️ Sheet '{sheet_name}' is empty, skipping.")
                 continue
 
-            # Clean and transform
+            # Clean and format the table
             df_clean = clean_table(df_raw)
 
             if df_clean.empty:
-                print(f"⚠️ No valid data in sheet '{sheet_name}', skipping.")
+                print(f"⚠️ No valid data found in sheet '{sheet_name}', skipping.")
                 continue
 
+            # Create output filename (filename + sheet name)
+            safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
+            output_filename = f"{base_name}_{safe_sheet_name}_cleaned.csv"
+
             # Save cleaned CSV to output folder
-            safe_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
-            tmp_csv = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8")
-            df_clean.to_csv(tmp_csv.name, index=False)
-            tmp_csv.close()
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_csv:
+                df_clean.to_csv(tmp_csv.name, index=False)
+                tmp_csv.close()
+                with open(tmp_csv.name, "rb") as f:
+                    output_folder.upload_stream(output_filename, f)
+                os.remove(tmp_csv.name)
 
-            with open(tmp_csv.name, "rb") as f:
-                output_folder.upload_stream(f"{safe_name}_cleaned.csv", f)
-
-            os.remove(tmp_csv.name)
-            print(f"✅ Saved cleaned sheet → {safe_name}_cleaned.csv")
+            print(f"✅ Saved cleaned sheet → {output_filename}")
 
         # Remove temp Excel file
         os.remove(tmp_path)
