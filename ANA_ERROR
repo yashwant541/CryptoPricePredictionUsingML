@@ -10,31 +10,59 @@ input_folder = dataiku.Folder("IEHxZtxh")      # 📥 Input folder
 output_folder = dataiku.Folder("dyonHS8r")     # 📤 Output folder
 
 # ------------------------------------------------------
-# 🧩 Helper Function
+# 🧩 Helper Functions
 # ------------------------------------------------------
+def fill_approval_dates(df):
+    """
+    Fill 'Approval Date' downward until the next Period value appears.
+    """
+    if "Period" not in df.columns or "Approval Date" not in df.columns:
+        return df
+
+    current_date = None
+    for i in range(len(df)):
+        # When there's a new approval date, update it
+        if pd.notna(df.at[i, "Approval Date"]):
+            current_date = df.at[i, "Approval Date"]
+
+        # When there's a new Period, we start a new section but reuse current_date
+        if pd.notna(df.at[i, "Period"]):
+            # keep same date if not overwritten by a new one
+            if pd.isna(df.at[i, "Approval Date"]) and current_date is not None:
+                df.at[i, "Approval Date"] = current_date
+        else:
+            # continue filling down
+            if pd.isna(df.at[i, "Approval Date"]) and current_date is not None:
+                df.at[i, "Approval Date"] = current_date
+
+    return df
+
+
 def clean_table(df):
     """Cleans, fills merged cells, and prepares final structured table"""
 
     # Drop completely empty rows & columns
     df = df.dropna(how="all").dropna(axis=1, how="all")
 
-    # Strip column names
+    # Clean column names
     df.columns = df.columns.astype(str).str.strip()
 
     # 🔹 Forward-fill Period and Benchmark(s)
-    cols_to_ffill = [col for col in ["Period", "Benchmark(s)"] if col in df.columns]
-    df[cols_to_ffill] = df[cols_to_ffill].ffill()
+    for col in ["Period", "Benchmark(s)"]:
+        if col in df.columns:
+            df[col] = df[col].ffill()
 
-    # 🔹 Approval Date → fill down only within each Period group
-    if "Period" in df.columns and "Approval Date" in df.columns:
-        df["Approval Date"] = df.groupby("Period")["Approval Date"].ffill()
+    # 🔹 Fill Approval Date until next Period
+    if "Approval Date" in df.columns:
+        df = fill_approval_dates(df)
 
-    # 🔹 Drop rows where all key fields are missing
+    # 🔹 Drop rows where Tenor/MVT are blank
     key_cols = [c for c in ["Tenor", "MVT", "MVT (Before)"] if c in df.columns]
     if key_cols:
         df = df.dropna(subset=key_cols, how="all")
 
     return df
+
 
 # ------------------------------------------------------
 # 🚀 Main Execution
