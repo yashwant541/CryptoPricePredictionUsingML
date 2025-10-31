@@ -2,169 +2,82 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
-import re
+import pdfplumber
 
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder_1 = dataiku.Folder("XXXXXXX")     # 📥 Folder 1 (e.g. old rates)
-input_folder_2 = dataiku.Folder("XXXXXXX")     # 📥 Folder 2 (e.g. new rates)
-output_folder = dataiku.Folder("XXXXXXX")      # 📤 Output folder
+input_folder = dataiku.Folder("XXXXXXX")     # 📥 Input PDF folder
+output_folder = dataiku.Folder("XXXXXXX")    # 📤 Output Excel folder
 
 # ------------------------------------------------------
-# 🧠 Global Variables — Edit for your run
+# 🧠 Helper — Extract tables from PDF and save as Excel
 # ------------------------------------------------------
-FILE1_ID = "OLD_FILE"             # Identifier for File 1 (rename if needed)
-FILE2_ID = "NEW_FILE"             # Identifier for File 2 (rename if needed)
+def extract_tables_from_pdf(pdf_path, output_path):
+    """Extracts all tables from a PDF and saves them as sheets in an Excel file."""
+    tables = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            page_tables = page.extract_tables()
+            for t_index, table in enumerate(page_tables, start=1):
+                if table:
+                    df = pd.DataFrame(table)
+                    # Try to treat first row as header if it looks like one
+                    if len(df) > 1 and all(isinstance(x, str) for x in df.iloc[0]):
+                        df.columns = df.iloc[0]
+                        df = df[1:]
+                    df.reset_index(drop=True, inplace=True)
+                    tables.append(df)
 
-file_1_name = "HIBOR_CNH.csv"           # File in folder 1
-file_2_name = "HIBOR HKD&CNH.csv"       # File in folder 2
+    if not tables:
+        return 0  # no tables found
 
-# Columns for file 1
-date_col_1 = "Date"
-type_col_1 = "Currency"
-tenure_col_1 = "Tenure"
-rate_col_1 = "Value"
-
-# Columns for file 2
-date_col_2 = "Date"
-type_col_2 = "Fixing Index"
-tenure_col_2 = "Tenor"
-rate_col_2 = "Fixing Rate"
-
-# ------------------------------------------------------
-# 📅 Dummy Public Holiday List (MM/DD/YYYY format)
-# ------------------------------------------------------
-public_holidays = pd.to_datetime([
-    "01/01/2024",
-    "02/10/2024",
-    "03/29/2024",
-    "05/01/2024",
-    "12/25/2024"
-])
-
-# ------------------------------------------------------
-# 🧩 Helper Function — Normalize Tenure
-# ------------------------------------------------------
-def normalize_tenure(val):
-    """Normalize Tenure strings like 'O/N' → 'ON', 'T/N' → 'TN', '1Y' → '12M', etc."""
-    if pd.isna(val):
-        return None
-    val = str(val).strip().upper()
-    val = re.sub(r'[^A-Z0-9]', '', val)  # remove special chars like '/', '-', etc.
-
-    mapping = {
-        "ON": ["ON", "O/N", "1D", "DAY1", "OD", "OVERNIGHT", "SPOT"],
-        "TN": ["TN", "T/N", "TOMNEXT", "TOMORROWNEXT"],
-        "1W": ["1W", "7D", "ONEWEEK"],
-        "2W": ["2W", "14D", "TWOWEEK"],
-        "1M": ["1M", "30D", "ONEMONTH"],
-        "2M": ["2M", "60D", "TWOMONTH"],
-        "3M": ["3M", "90D", "THREEMONTH"],
-        "6M": ["6M", "180D", "SIXMONTH"],
-        "9M": ["9M", "270D", "NINEMONTH"],
-        "12M": ["12M", "1Y", "1YR", "1YEAR", "ONEYEAR"],
-        "24M": ["24M", "2Y", "2YR", "2YEAR", "TWOYEAR"]
-    }
-
-    for norm, variants in mapping.items():
-        if val in variants:
-            return norm
-    return val
+    # Save all tables into one Excel file (each on a separate sheet)
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        for i, df in enumerate(tables, start=1):
+            sheet_name = f"Table_{i}"
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    return len(tables)
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
 def main():
-    # -------------------------------
-    # 📥 Load files from both folders
-    # -------------------------------
-    def load_file(folder, filename):
-        for path in folder.list_paths_in_partition():
-            if os.path.basename(path) == filename:
-                with folder.get_download_stream(path) as stream:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
-                        tmp.write(stream.read())
-                        tmp_path = tmp.name
-                if filename.lower().endswith(".csv"):
-                    df = pd.read_csv(tmp_path)
-                elif filename.lower().endswith((".xls", ".xlsx")):
-                    df = pd.read_excel(tmp_path)
-                else:
-                    raise ValueError(f"Unsupported file type: {filename}")
-                os.remove(tmp_path)
-                return df
-        raise FileNotFoundError(f"❌ File '{filename}' not found in folder {folder.get_id()}!")
+    print("📂 Reading PDFs from Dataiku input folder...")
 
-    print("📂 Reading files...")
-    df1 = load_file(input_folder_1, file_1_name)
-    df2 = load_file(input_folder_2, file_2_name)
+    input_files = input_folder.list_paths_in_partition()
 
-    # -------------------------------
-    # 🧹 Clean + Normalize Columns
-    # -------------------------------
-    df1["__Date"] = pd.to_datetime(df1[date_col_1], errors="coerce")
-    df2["__Date"] = pd.to_datetime(df2[date_col_2], errors="coerce")
+    for file_path in input_files:
+        if not file_path.lower().endswith(".pdf"):
+            continue
 
-    df1["__Type"] = df1[type_col_1].astype(str).str.strip().str.upper()
-    df2["__Type"] = df2[type_col_2].astype(str).str.strip().str.upper()
+        file_name = os.path.basename(file_path)
+        base_name = os.path.splitext(file_name)[0]
+        print(f"🔍 Processing {file_name}...")
 
-    df1["__Tenure"] = df1[tenure_col_1].apply(normalize_tenure)
-    df2["__Tenure"] = df2[tenure_col_2].apply(normalize_tenure)
+        # Create temporary local copies
+        with input_folder.get_download_stream(file_path) as pdf_stream:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+                tmp_pdf.write(pdf_stream.read())
+                tmp_pdf.flush()
 
-    df1["__Rate"] = pd.to_numeric(df1[rate_col_1], errors="coerce").round(3)
-    df2["__Rate"] = pd.to_numeric(df2[rate_col_2], errors="coerce").round(3)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_xlsx:
+                    num_tables = extract_tables_from_pdf(tmp_pdf.name, tmp_xlsx.name)
 
-    # -------------------------------
-    # 🔗 Merge and Compare (Ignore Type)
-    # -------------------------------
-    merged_df = pd.merge(
-        df1,
-        df2,
-        how="outer",
-        left_on=["__Date", "__Tenure"],
-        right_on=["__Date", "__Tenure"],
-        suffixes=(f"_{FILE1_ID}", f"_{FILE2_ID}")
-    )
+                    if num_tables > 0:
+                        with open(tmp_xlsx.name, "rb") as f:
+                            output_folder.upload_stream(f"{base_name}.xlsx", f)
+                        print(f"✅ {file_name}: Extracted {num_tables} table(s).")
+                    else:
+                        print(f"⚠️ {file_name}: No tables found.")
 
-    # ✅ Compare rounded rates
-    merged_df["Match"] = merged_df[f"__Rate_{FILE1_ID}"].eq(merged_df[f"__Rate_{FILE2_ID}"])
+        # Clean up temp files
+        if os.path.exists(tmp_pdf.name):
+            os.remove(tmp_pdf.name)
+        if os.path.exists(tmp_xlsx.name):
+            os.remove(tmp_xlsx.name)
 
-    # ➕ Add rate difference column (3 decimal precision)
-    merged_df["Rate Difference"] = (
-        (merged_df[f"__Rate_{FILE2_ID}"] - merged_df[f"__Rate_{FILE1_ID}"])
-        .round(3)
-    )
-
-    # ------------------------------------------------------
-    # 💬 Add DA_Comment for Unmatched Rows
-    # ------------------------------------------------------
-    def da_comment(row):
-        if pd.isna(row["__Date"]):
-            return "Missing Date"
-        if row["__Date"] in public_holidays:
-            return "Public Holiday"
-        if pd.isna(row[f"__Rate_{FILE1_ID}"]) and not pd.isna(row[f"__Rate_{FILE2_ID}"]):
-            return f"Missing in {FILE1_ID}"
-        if pd.isna(row[f"__Rate_{FILE2_ID}"]) and not pd.isna(row[f"__Rate_{FILE1_ID}"]):
-            return f"Missing in {FILE2_ID}"
-        if not row["Match"]:
-            return "Rate Mismatch"
-        return ""
-
-    merged_df["DA_Comment"] = merged_df.apply(da_comment, axis=1)
-
-    # -------------------------------
-    # 💾 Save result to Dataiku output
-    # -------------------------------
-    output_filename = "comparison_result.csv"
-    with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
-        merged_df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
-        with open(tmp_out.name, "rb") as f:
-            output_folder.upload_stream(output_filename, f)
-        os.remove(tmp_out.name)
-
-    print(f"✅ Comparison completed and saved to output folder as '{output_filename}'!")
+    print("🏁 Extraction completed for all PDF files!")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
