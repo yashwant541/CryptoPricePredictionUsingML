@@ -7,7 +7,7 @@ import os
 # 🔧 Configuration — Replace with your actual folder IDs
 # ------------------------------------------------------
 input_folder = dataiku.Folder("XXXXXXX")     # 📥 Input Excel folder
-output_folder = dataiku.Folder("YYYYYYY")    # 📤 Output Excel folder
+output_folder = dataiku.Folder("YYYYYYY")    # 📤 Output CSV folder
 
 # ------------------------------------------------------
 # 🧠 Helper — Clean merged-style Excel data
@@ -33,6 +33,7 @@ def main():
     print("📄 Files found:", input_files)
 
     for file_path in input_files:
+        # Only process Excel files
         if not file_path.lower().endswith((".xlsx", ".xls")):
             continue
 
@@ -40,14 +41,15 @@ def main():
         base_name = os.path.splitext(file_name)[0]
         print(f"🔍 Processing {file_name}...")
 
-        # Create a local copy of the Excel file
+        # Download Excel file to temp location
         with input_folder.get_download_stream(file_path) as excel_stream:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_excel:
+                excel_stream.seek(0)
                 tmp_excel.write(excel_stream.read())
                 tmp_excel.flush()
                 tmp_excel_path = tmp_excel.name
 
-        # ✅ Use openpyxl engine explicitly
+        # ✅ Use openpyxl explicitly
         excel = pd.ExcelFile(tmp_excel_path, engine="openpyxl")
 
         for sheet in excel.sheet_names:
@@ -55,32 +57,34 @@ def main():
                 df = pd.read_excel(tmp_excel_path, sheet_name=sheet, engine="openpyxl")
                 cleaned_df = clean_excel_sheet(df)
 
-                # Create a clean output path
-                tmp_output_path = os.path.join(tempfile.gettempdir(), f"{base_name}_{sheet}.xlsx")
+                # Create a temporary CSV file
+                tmp_csv_path = os.path.join(tempfile.gettempdir(), f"{base_name}_{sheet}.csv")
                 
-                # Save cleaned sheet
-                cleaned_df.to_excel(tmp_output_path, index=False, engine="openpyxl")
+                # Save cleaned data as CSV
+                cleaned_df.to_csv(tmp_csv_path, index=False, encoding="utf-8-sig")
+                
+                # Upload to Dataiku output folder
+                output_filename = f"{base_name}_{sheet}.csv"
+                with open(tmp_csv_path, "rb") as f:
+                    output_folder.upload_stream(output_filename, f, overwrite=True)
+                
+                print(f"✅ Uploaded: {output_filename}")
 
-                # Upload using a fresh binary open (no with-block confusion)
-                with open(tmp_output_path, "rb") as f:
-                    output_folder.upload_stream(f"{base_name}_{sheet}.xlsx", f, overwrite=True)
-                print(f"✅ Uploaded: {base_name}_{sheet}.xlsx")
-
-                # Cleanup local output file
-                os.remove(tmp_output_path)
+                # Cleanup temp CSV file
+                os.remove(tmp_csv_path)
 
             except Exception as e:
                 print(f"⚠️ Error processing sheet '{sheet}' in {file_name}: {e}")
 
-        # Cleanup input temp file
+        # Cleanup Excel temp file
         if os.path.exists(tmp_excel_path):
             os.remove(tmp_excel_path)
 
-    # List what was uploaded
+    # List uploaded files for verification
     print("\n📁 Output folder contents:")
     print(output_folder.list_paths_in_partition())
 
-    print("🏁 All Excel sheets processed and saved successfully!")
+    print("🏁 All Excel sheets processed and saved as CSV successfully!")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
