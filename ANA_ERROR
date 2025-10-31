@@ -41,18 +41,21 @@ def main():
 
         with input_folder.get_download_stream(file_path) as excel_stream:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_excel:
+                excel_stream.seek(0)
                 tmp_excel.write(excel_stream.read())
                 tmp_excel.flush()
 
-                excel = pd.ExcelFile(tmp_excel.name)
+                # ✅ Explicitly use openpyxl engine
+                excel = pd.ExcelFile(tmp_excel.name, engine="openpyxl")
 
                 for sheet in excel.sheet_names:
                     try:
-                        df = pd.read_excel(tmp_excel.name, sheet_name=sheet)
+                        df = pd.read_excel(tmp_excel.name, sheet_name=sheet, engine="openpyxl")
                         cleaned_df = clean_excel_sheet(df)
 
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_output:
-                            cleaned_df.to_excel(tmp_output.name, index=False)
+                            cleaned_df.to_excel(tmp_output.name, index=False, engine="openpyxl")
+
                             output_filename = f"{base_name}_{sheet}.xlsx"
                             print(f"📤 Uploading {output_filename} ...")
 
@@ -67,6 +70,10 @@ def main():
 
         if os.path.exists(tmp_excel.name):
             os.remove(tmp_excel.name)
+
+    # Optional: list output folder content
+    print("\n📁 Output folder contents:")
+    print(output_folder.list_paths_in_partition())
 
     print("🏁 All Excel sheets processed and saved successfully!")
 
