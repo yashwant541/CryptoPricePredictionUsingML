@@ -13,6 +13,7 @@ output_folder = dataiku.Folder("YYYYYYY")    # 📤 Output Excel folder
 # 🧠 Helper — Clean merged-style Excel data
 # ------------------------------------------------------
 def clean_excel_sheet(df):
+    """Forward fill merged columns and clean up whitespace."""
     if df.empty:
         return df
     df.dropna(how='all', inplace=True)
@@ -39,39 +40,43 @@ def main():
         base_name = os.path.splitext(file_name)[0]
         print(f"🔍 Processing {file_name}...")
 
+        # Create a local copy of the Excel file
         with input_folder.get_download_stream(file_path) as excel_stream:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_excel:
-                excel_stream.seek(0)
                 tmp_excel.write(excel_stream.read())
                 tmp_excel.flush()
+                tmp_excel_path = tmp_excel.name
 
-                # ✅ Explicitly use openpyxl engine
-                excel = pd.ExcelFile(tmp_excel.name, engine="openpyxl")
+        # ✅ Use openpyxl engine explicitly
+        excel = pd.ExcelFile(tmp_excel_path, engine="openpyxl")
 
-                for sheet in excel.sheet_names:
-                    try:
-                        df = pd.read_excel(tmp_excel.name, sheet_name=sheet, engine="openpyxl")
-                        cleaned_df = clean_excel_sheet(df)
+        for sheet in excel.sheet_names:
+            try:
+                df = pd.read_excel(tmp_excel_path, sheet_name=sheet, engine="openpyxl")
+                cleaned_df = clean_excel_sheet(df)
 
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_output:
-                            cleaned_df.to_excel(tmp_output.name, index=False, engine="openpyxl")
+                # Create a clean output path
+                tmp_output_path = os.path.join(tempfile.gettempdir(), f"{base_name}_{sheet}.xlsx")
+                
+                # Save cleaned sheet
+                cleaned_df.to_excel(tmp_output_path, index=False, engine="openpyxl")
 
-                            output_filename = f"{base_name}_{sheet}.xlsx"
-                            print(f"📤 Uploading {output_filename} ...")
+                # Upload using a fresh binary open (no with-block confusion)
+                with open(tmp_output_path, "rb") as f:
+                    output_folder.upload_stream(f"{base_name}_{sheet}.xlsx", f, overwrite=True)
+                print(f"✅ Uploaded: {base_name}_{sheet}.xlsx")
 
-                            with open(tmp_output.name, "rb") as f:
-                                output_folder.upload_stream(output_filename, f, overwrite=True)
+                # Cleanup local output file
+                os.remove(tmp_output_path)
 
-                            print(f"✅ Saved to output folder: {output_filename}")
-                            os.remove(tmp_output.name)
+            except Exception as e:
+                print(f"⚠️ Error processing sheet '{sheet}' in {file_name}: {e}")
 
-                    except Exception as e:
-                        print(f"⚠️ Error processing sheet '{sheet}' in {file_name}: {e}")
+        # Cleanup input temp file
+        if os.path.exists(tmp_excel_path):
+            os.remove(tmp_excel_path)
 
-        if os.path.exists(tmp_excel.name):
-            os.remove(tmp_excel.name)
-
-    # Optional: list output folder content
+    # List what was uploaded
     print("\n📁 Output folder contents:")
     print(output_folder.list_paths_in_partition())
 
