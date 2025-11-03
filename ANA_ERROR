@@ -7,8 +7,8 @@ from datetime import datetime
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("IEHxZtxh")      # 📥 Input folder
-output_folder = dataiku.Folder("dyonHS8r")    # 📤 Output folder
+input_folder = dataiku.Folder("XXXXXXXXX")      # 📥 Input folder
+output_folder = dataiku.Folder("XXXXXXXXX")    # 📤 Output folder
 
 # List of sheet names to skip
 EXCEPTION_SHEETS = ["Tracking Sheet", "FXO VOLS FBIL Realtime", "FXO VOLS Refinitiv Realtime"]
