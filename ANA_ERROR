@@ -40,75 +40,104 @@ def read_excel_safe(file_path):
 
 
 # ------------------------------------------------------
-# 🧩 Custom logic for IN-type files
+# 🧩 Custom logic for IN-type (Bid/Ask) files
 # ------------------------------------------------------
 def process_in_type_file(tmp_path, file_name):
     xls = read_excel_safe(tmp_path)
+    all_data = []  # collect data from all sheets into one CSV
+
     for sheet_name in xls.sheet_names:
 
         if sheet_name in EXCEPTION_SHEETS:
             print(f"⏩ Skipping sheet '{sheet_name}' (exception list)")
             continue
 
-        # Read full sheet with no header
         df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
 
-        # Header at row index 8, data starts at 9
+        # Header at row index 8, data starts at index 9
         header_row_index = 8
         data_start_index = 9
-
-        # Extract header row to find structure (we ignore header text, but use for alignment)
-        header_row = df_raw.iloc[header_row_index]
         df_data = df_raw.iloc[data_start_index:].reset_index(drop=True)
+        header_row = df_raw.iloc[header_row_index]
 
-        # Identify all chunks: each [Date, Bid, Ask] group separated by 1 empty column
         num_cols = df_data.shape[1]
-        chunks = []
         col = 0
+        chunks = []
+
         while col < num_cols:
-            # Check if there are 3 valid columns (non-empty)
-            if col + 2 < num_cols:
-                col_block = df_data.iloc[:, col:col + 3]
-                # If first column (Date) is not entirely NaN → it's a valid chunk
-                if not col_block.iloc[:, 0].isna().all():
-                    col_block.columns = ["Date", "Bid", "Ask"]
-                    chunks.append(col_block)
-                col += 4  # Skip next empty separator column
-            else:
+            # Skip empty columns
+            if col + 2 >= num_cols:
                 break
 
+            # Identify possible Date/Bid/Ask block
+            possible_date_col = df_data.iloc[:, col]
+            if not possible_date_col.notna().any():
+                col += 1
+                continue
+
+            # Extract three-column block
+            block = df_data.iloc[:, col:col + 3].copy()
+            block.columns = ["Date", "Bid", "Ask"]
+
+            # Try to get label from row above header
+            label_row_index = header_row_index - 1
+            label = None
+            if label_row_index >= 0 and col < df_raw.shape[1]:
+                label = df_raw.iloc[label_row_index, col]
+            if not isinstance(label, str) or label.strip() == "":
+                label = header_row[col] if pd.notna(header_row[col]) else "Unknown Label"
+
+            # Clean and compute average
+            block["Bid"] = pd.to_numeric(block["Bid"], errors="coerce")
+            block["Ask"] = pd.to_numeric(block["Ask"], errors="coerce")
+            block["Value"] = (block["Bid"] + block["Ask"]) / 2
+            block["Value"] = block["Value"].round(4)
+
+            # Keep only valid rows
+            block = block[block["Date"].notna() & block["Value"].notna()]
+            if block.empty:
+                col += 1
+                continue
+
+            # Build final structure
+            temp_df = pd.DataFrame({
+                "Date": pd.to_datetime(block["Date"], errors="coerce"),
+                "Label": label,
+                "Value": block["Value"]
+            }).dropna(subset=["Date"])
+
+            chunks.append(temp_df)
+            col += 4  # skip separator blank column
+
         if not chunks:
-            print(f"⚠️ No Bid/Ask data found in sheet '{sheet_name}' for file '{file_name}'")
+            print(f"⚠️ No valid Bid/Ask blocks found in sheet '{sheet_name}' of {file_name}")
             continue
 
-        # Combine all Bid/Ask blocks
-        final_df = pd.concat(chunks, ignore_index=True)
+        combined = pd.concat(chunks, ignore_index=True)
+        all_data.append(combined)
 
-        # Drop rows where all are NaN
-        final_df = final_df.dropna(how="all")
+    if not all_data:
+        print(f"⚠️ No valid data found for special file: {file_name}")
+        return
 
-        # Clean and convert Date column
-        final_df["Date"] = pd.to_datetime(final_df["Date"], errors='coerce')
+    final_df = pd.concat(all_data, ignore_index=True)
+    final_df = final_df.sort_values("Date").reset_index(drop=True)
 
-        # Sort by Date
-        final_df = final_df.sort_values("Date").reset_index(drop=True)
+    # Save single CSV for entire file
+    safe_file_name = os.path.splitext(file_name)[0]
+    output_name = f"{safe_file_name}.csv"
 
-        # Save as CSV to Dataiku output folder
-        safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
-        safe_file_name = os.path.splitext(file_name)[0]
-        output_name = f"{safe_file_name}_{safe_sheet_name}.csv"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+        final_df.to_csv(tmp_file.name, index=False)
+        with open(tmp_file.name, "rb") as f:
+            output_folder.upload_stream(output_name, f)
+        os.remove(tmp_file.name)
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-            final_df.to_csv(tmp_file.name, index=False)
-            with open(tmp_file.name, "rb") as f:
-                output_folder.upload_stream(output_name, f)
-            os.remove(tmp_file.name)
-
-        print(f"✅ Processed IN-type file '{file_name}' — sheet '{sheet_name}' saved as {output_name}")
+    print(f"✅ Special Bid/Ask file '{file_name}' saved as single CSV: {output_name}")
 
 
 # ------------------------------------------------------
-# 🚀 Main Execution
+# 🚀 Main Execution (original logic retained)
 # ------------------------------------------------------
 def main():
     input_files = input_folder.list_paths_in_partition()
@@ -119,13 +148,12 @@ def main():
         file_name = os.path.basename(excel_file_info)
         print(f"\n📘 Processing file: {file_name}")
 
-        # Download to temp file
         with input_folder.get_download_stream(excel_file_info) as stream:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
                 tmp.write(stream.read())
                 tmp_path = tmp.name
 
-        # Check if file matches special IN-type rule
+        # Apply special logic for IN-type (Bid/Ask) files
         if any(tag in file_name for tag in SPECIAL_BID_ASK_FILES):
             process_in_type_file(tmp_path, file_name)
             os.remove(tmp_path)
@@ -134,7 +162,6 @@ def main():
         # ---------- Original Logic ----------
         xls = read_excel_safe(tmp_path)
         for sheet_name in xls.sheet_names:
-
             if sheet_name in EXCEPTION_SHEETS:
                 print(f"⏩ Skipping sheet '{sheet_name}' as it is in the exception list")
                 continue
