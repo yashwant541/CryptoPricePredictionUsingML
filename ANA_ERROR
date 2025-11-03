@@ -6,61 +6,64 @@ import os
 # ------------------------------------------------------
 # 🔧 Configuration
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXX")   # 📥 Folder containing MVT pivot files
-output_folder = dataiku.Folder("YYYYYY")  # 📤 Folder for filtered outputs
+input_folder = dataiku.Folder("XXXXXX")   # 📥 Folder containing the 3 MVT pivot outputs
+output_folder = dataiku.Folder("YYYYYY")  # 📤 Folder to save filtered outputs
 
 # ------------------------------------------------------
-# 🧠 Helper: Keep only first + change rows, sorted by date
+# 🧠 Helper: Keep only first + change rows, sorted oldest → latest
 # ------------------------------------------------------
 def keep_change_rows(df):
     df = df.copy()
 
-    # Try to parse the Date column (handles dd-mm-yyyy or similar)
+    # Parse and sort by date (handle formats like dd-mm-yyyy)
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
     df = df.sort_values(by="Date").reset_index(drop=True)
 
-    # Compare each row with previous across tenor columns
+    # Compare each row with the previous row across tenor columns
     change_mask = (df.iloc[:, 1:] != df.iloc[:, 1:].shift()).any(axis=1)
 
-    # Keep first row and rows where any tenor changed
+    # Always keep first row + rows where MVT changed
     keep_rows = change_mask | (df.index == 0)
-    filtered_df = df.loc[keep_rows].reset_index(drop=True)
+    filtered = df.loc[keep_rows].reset_index(drop=True)
 
-    # Convert date back to original string format for clarity
-    filtered_df["Date"] = filtered_df["Date"].dt.strftime("%d-%m-%Y")
+    # Format date back to string for output
+    filtered["Date"] = filtered["Date"].dt.strftime("%d-%m-%Y")
 
-    return filtered_df
+    return filtered
 
 # ------------------------------------------------------
-# Process each file
+# 🚀 Process each file in input folder
 # ------------------------------------------------------
 for file_info in input_folder.list_paths_in_partition():
     filename = os.path.basename(file_info)
 
-    # Only process pivot outputs (xlsx/csv)
+    # Process only Excel or CSV files
     if not (filename.lower().endswith(".xlsx") or filename.lower().endswith(".csv")):
         continue
 
-    print(f"📄 Processing: {filename}")
+    print(f"📄 Processing file: {filename}")
 
-    # Read the file
+    # Read input file
     with input_folder.get_download_stream(filename) as stream:
         if filename.lower().endswith(".xlsx"):
             df = pd.read_excel(stream, dtype=str)
         else:
             df = pd.read_csv(stream, dtype=str)
 
-    # Convert numeric tenor columns
+    # Convert numeric columns (skip Date)
     for col in df.columns[1:]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Keep only relevant rows
+    # Apply change detection logic
     filtered_df = keep_change_rows(df)
 
     # --------------------------------------------------
     # 💾 Save filtered output
     # --------------------------------------------------
-    output_filename = filename.replace(".xlsx", "_Filtered.xlsx").replace(".csv", "_Filtered.csv")
+    output_filename = (
+        filename.replace(".xlsx", "_Filtered.xlsx")
+                .replace(".csv", "_Filtered.csv")
+    )
     tmp_dir = tempfile.mkdtemp()
     tmp_path = os.path.join(tmp_dir, output_filename)
 
