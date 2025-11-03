@@ -14,7 +14,8 @@ output_folder = dataiku.Folder("XXXXXXXX")      # 📤 Output folder
 EXCEPTION_SHEETS = ["Tracking Sheet", "FXO VOLS FBIL Realtime", "FXO VOLS Refinitiv Realtime"]
 
 # Sheets that follow the special Bid/Ask structure (configurable)
-SPECIAL_SHEETS = ["IN", "INR", "INFXO", "IN_FX", "IN_FWD"]  # you can add more names here
+SPECIAL_SHEETS = ["IN", "INR", "INFXO", "IN_FX", "IN_FWD"]  # You can add more identifiers here
+
 
 # ------------------------------------------------------
 # 🧠 Helper Functions
@@ -78,25 +79,21 @@ def main():
 
                 # Start reading from row 10 (index 9)
                 df_data = df_raw.iloc[9:].reset_index(drop=True)
-
-                # Identify columns that look like date, bid, ask, or value
                 df_data.columns = [f"col_{i}" for i in range(df_data.shape[1])]
 
                 tidy_data_list = []
-                current_label = None
                 has_bidask = False
 
-                # Loop through columns to find data chunks separated by blank columns
                 col_index = 0
                 while col_index < df_data.shape[1]:
                     col_series = df_data.iloc[:, col_index]
 
-                    # Skip fully empty columns
+                    # Skip empty columns
                     if col_series.dropna().empty:
                         col_index += 1
                         continue
 
-                    # Try to detect a date column
+                    # Detect a date column
                     if col_series.apply(looks_like_date).sum() > 0:
                         next_cols = df_data.iloc[:, col_index + 1:col_index + 3]
                         possible_cols = list(next_cols.columns)
@@ -109,10 +106,7 @@ def main():
                                 "Bid": df_data.iloc[:, col_index + 1],
                                 "Ask": df_data.iloc[:, col_index + 2],
                             })
-
-                            # Drop rows with missing dates
                             temp_df = temp_df[temp_df["Date"].notna()]
-
                             temp_df["Value"] = (pd.to_numeric(temp_df["Bid"], errors="coerce") + pd.to_numeric(temp_df["Ask"], errors="coerce")) / 2
                             print(f"✅ Found Bid/Ask columns — Doing average of Bid and Ask — Average value now is ≈ {round(temp_df['Value'].mean(skipna=True), 6)}")
 
@@ -125,12 +119,9 @@ def main():
                             temp_df = temp_df[temp_df["Date"].notna()]
                             print(f"⚠️ No Ask column found — using single Value column.")
 
-                        # Assign a label name (custom if not found)
-                        label_guess = f"Label_{col_index}"
-                        temp_df["Label"] = label_guess
+                        temp_df["Label"] = f"Label_{col_index}"
                         tidy_data_list.append(temp_df)
-
-                        col_index += 3  # move past this chunk
+                        col_index += 3
                     else:
                         col_index += 1
 
@@ -150,8 +141,6 @@ def main():
             else:
                 # Normal processing (your original logic)
                 df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
-
-                # Row 7 (index 6) contains labels
                 label_row_index = 6
                 labels_row = df_raw.iloc[label_row_index]
 
@@ -182,10 +171,10 @@ def main():
                 final_df = final_df.sort_values("Date").reset_index(drop=True)
 
             # ------------------------------------------------------
-            # 💾 Save the output
+            # 💾 Save output as the sheet name only
             # ------------------------------------------------------
             safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
-            output_filename = f"{os.path.splitext(file_name)[0]}_{safe_sheet_name}.csv"
+            output_filename = f"{safe_sheet_name}.csv"
 
             with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
                 final_df.to_csv(tmp_file.name, index=False)
