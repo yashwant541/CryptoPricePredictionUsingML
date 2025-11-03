@@ -7,8 +7,8 @@ import openpyxl
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("KdCsh8Rm")      # 📥 Input folder with multiple files
-output_folder = dataiku.Folder("bUfeS3hF")     # 📤 Output folder
+input_folder = dataiku.Folder("XXXXXXX")      # 📥 Input folder with multiple files
+output_folder = dataiku.Folder("XXXXXXX")     # 📤 Output folder
 
 # ------------------------------------------------------
 # 🎯 Hardcoded tenor sequences per filename
