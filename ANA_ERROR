@@ -12,13 +12,11 @@ output_folder = dataiku.Folder("XXXXXX")    # 📤 Output folder
 # ------------------------------------------------------
 # 🧠 File-Specific Operations Configuration
 # ------------------------------------------------------
-# You can mix "prefix" and "new_column" operations
 file_operations = {
     "HIBOR_CNH.csv": {"type": "prefix", "column": "Currency", "prefix": "HIBOR "},
     "HIBOR_HKD.csv": {"type": "prefix", "column": "Currency", "prefix": "HIBOR "},
-    "MIBOR.csv": {"type": "new_column", "column": "TYPE", "value": "MIBOR"}
-    #"FXO_VOLS_Refinitiv.csv": {"column": "DESC", "prefix": "ALEX "},
-    "FXO_VOLS_FBIL.csv"
+    "MIBOR.csv": {"type": "new_column", "column": "TYPE", "value": "MIBOR"},
+    "FXO_VOLS_FBIL.csv": {"type": "none"}  # ✅ No change, just process and save
 }
 
 
@@ -38,6 +36,7 @@ def load_file_from_folder(folder, filename):
             return df
     raise FileNotFoundError(f"❌ File '{filename}' not found in folder {folder.get_id()}!")
 
+
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
@@ -53,13 +52,12 @@ def main():
 
         print(f"\n➡️ Processing file: {file_name}")
 
-        # Defensive key checks
         op_type = cfg.get("type")
         if not op_type:
             print(f"⚠️ Missing 'type' key in config for '{file_name}', skipping.")
             continue
 
-        # Load CSV safely
+        # Load file
         try:
             df = load_file_from_folder(input_folder, file_name)
         except Exception as e:
@@ -94,11 +92,14 @@ def main():
             df[col] = value
             print(f"   ✅ Column '{col}' created successfully.")
 
+        elif op_type == "none":
+            print(f"   🧩 Operation: No changes applied to '{file_name}' (passthrough).")
+
         else:
             print(f"⚠️ Unknown operation type '{op_type}' for {file_name}. Skipping.")
             continue
 
-        # Save modified file to output folder
+        # Save output
         try:
             with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
                 df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
@@ -110,6 +111,7 @@ def main():
             print(f"❌ Error saving {file_name}: {e}")
 
     print("\n✅ All configured files processed successfully!")
+
 
 # ------------------------------------------------------
 if __name__ == "__main__":
