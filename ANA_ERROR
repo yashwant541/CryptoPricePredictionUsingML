@@ -2,7 +2,6 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
-import openpyxl
 
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
@@ -19,12 +18,12 @@ tenor_sequences = {
         "RRVOL1W", "RRVOL1M", "RRVOL3M", "RRVOL6M", "RRVOL1Y",
         "BFVOL1W", "BFVOL1M", "BFVOL3M", "BFVOL6M", "BFVOL1Y"
     ],
-    "Singapore.csv": ["O/N","1W","2W","1M","2M","3M","6M","12M"],
-    "Guava.csv": ["2W","1M","3M"]
+    "Singapore.csv": ["O/N", "1W", "2W", "1M", "2M", "3M", "6M", "12M"],
+    "Guava.csv": ["2W", "1M", "3M"]
 }
 
 # ------------------------------------------------------
-# Process each file in the order of the tenor mapping
+# 🚀 Process each file in the order of the tenor mapping
 # ------------------------------------------------------
 available_paths = input_folder.list_paths_in_partition()
 
@@ -37,7 +36,7 @@ for filename, valid_tenors in tenor_sequences.items():
 
     print(f"📄 Processing: {filename}")
 
-    # Read CSV (schema is same for all files)
+    # Read CSV file
     with input_folder.get_download_stream(file_path) as stream:
         df = pd.read_csv(stream, dtype=str)
 
@@ -50,7 +49,7 @@ for filename, valid_tenors in tenor_sequences.items():
         if col not in df.columns:
             raise ValueError(f"❌ Missing expected column '{col}' in {filename}")
 
-    # Clean MVT values (remove ' vol' text and convert to numeric)
+    # Clean MVT values (remove 'vol' text and convert to numeric)
     df["Material Variance Threshold (bps)"] = (
         df["Material Variance Threshold (bps)"]
         .astype(str)
@@ -81,15 +80,16 @@ for filename, valid_tenors in tenor_sequences.items():
     pivot = pivot.reset_index()
     pivot = pivot[["Date"] + valid_tenors]
 
-    # --- Save output ---
-    output_filename = os.path.splitext(filename)[0] + "_Tenor_MVT.xlsx"
+    # --- Save output as UTF-8 CSV ---
+    output_filename = os.path.splitext(filename)[0] + "_Tenor_MVT.csv"
     tmp_dir = tempfile.mkdtemp()
     tmp_path = os.path.join(tmp_dir, output_filename)
-    pivot.to_excel(tmp_path, index=False)
+    pivot.to_csv(tmp_path, index=False, encoding="utf-8")  # ✅ UTF-8 encoded output
 
+    # Upload to Dataiku output folder
     with open(tmp_path, "rb") as f:
         output_folder.upload_stream(output_filename, f)
 
-    print(f"✅ Saved output: {output_filename}")
+    print(f"✅ Saved UTF-8 CSV output: {output_filename}")
 
 print("🎉 All files processed successfully.")
