@@ -18,7 +18,7 @@ def keep_change_rows(df):
     df = df.sort_values(by="Date")
     df = df.reset_index(drop=True)
 
-    # Compare each row with the previous row across all tenor columns
+    # Compare each row with the previous row across all tenor columns (excluding Date)
     change_mask = (df.iloc[:, 1:] != df.iloc[:, 1:].shift()).any(axis=1)
 
     # Always keep the first row + rows where any tenor MVT value changes
@@ -26,12 +26,12 @@ def keep_change_rows(df):
     return df.loc[keep_rows].reset_index(drop=True)
 
 # ------------------------------------------------------
-# Process each file
+# 🚀 Process each file
 # ------------------------------------------------------
 for file_path in input_folder.list_paths_in_partition():
     filename = os.path.basename(file_path)
 
-    # Process only Excel or CSV pivot outputs
+    # Process only Excel or CSV files
     if not (filename.lower().endswith(".xlsx") or filename.lower().endswith(".csv")):
         continue
 
@@ -45,6 +45,7 @@ for file_path in input_folder.list_paths_in_partition():
         shutil.copyfileobj(stream, tmp_input)
     tmp_input.close()
 
+    # Read into DataFrame
     if filename.lower().endswith(".xlsx"):
         df = pd.read_excel(tmp_input.name, dtype=str)
     else:
@@ -53,8 +54,18 @@ for file_path in input_folder.list_paths_in_partition():
     os.unlink(tmp_input.name)  # clean temp file
 
     # --------------------------------------------------
-    # 🔢 Convert numeric columns (skip Date)
+    # 🧹 Sort by Date and convert numeric columns
     # --------------------------------------------------
+    if "Date" not in df.columns:
+        print(f"⚠️ Skipping {filename} — 'Date' column missing.")
+        continue
+
+    # Try to convert date column properly
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.dropna(subset=["Date"])  # remove invalid dates
+    df = df.sort_values(by="Date").reset_index(drop=True)
+
+    # Convert all other columns to numeric
     for col in df.columns[1:]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -64,22 +75,17 @@ for file_path in input_folder.list_paths_in_partition():
     filtered_df = keep_change_rows(df)
 
     # --------------------------------------------------
-    # 💾 Save filtered output
+    # 💾 Save filtered output as CSV
     # --------------------------------------------------
-    output_filename = (
-        filename.replace(".xlsx", "_Filtered.xlsx").replace(".csv", "_Filtered.csv")
-    )
+    output_filename = os.path.splitext(filename)[0] + "_Filtered.csv"
     tmp_dir = tempfile.mkdtemp()
     tmp_path = os.path.join(tmp_dir, output_filename)
 
-    if filename.lower().endswith(".xlsx"):
-        filtered_df.to_excel(tmp_path, index=False)
-    else:
-        filtered_df.to_csv(tmp_path, index=False)
+    filtered_df.to_csv(tmp_path, index=False)
 
     with open(tmp_path, "rb") as f:
         output_folder.upload_stream(output_filename, f)
 
     print(f"✅ Saved filtered output: {output_filename}")
 
-print("🎯 Completed filtering — only date-change rows kept.")
+print("🎯 Completed filtering — only date-change rows kept and saved as CSV.")
