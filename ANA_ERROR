@@ -6,92 +6,110 @@ import os
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXXXX")      # 📥 Input folder
-output_folder = dataiku.Folder("XXXXXXXXX")     # 📤 Output folder
+input_folder = dataiku.Folder("XXXXXX")     # 📥 Input folder
+output_folder = dataiku.Folder("XXXXXX")    # 📤 Output folder
 
 # ------------------------------------------------------
-# 🧾 Global Variable — Input file to process
+# 🧠 File-Specific Operations Configuration
 # ------------------------------------------------------
-FILENAME_TO_PROCESS = "Filename.csv"  # 👈 Change this filename as needed
+# You can mix "prefix" and "new_column" operations
+file_operations = {
+    "HIBOR_CNH.csv": {"type": "prefix", "column": "Currency", "prefix": "HIBOR "},
+    "HIBOR_HKD.csv": {"type": "prefix", "column": "Currency", "prefix": "HIBOR "},
+    "MIBOR.csv": {"type": "new_column", "column": "TYPE", "value": "MIBOR"}
+    #"FXO_VOLS_Refinitiv.csv": {"column": "DESC", "prefix": "ALEX "},
+    "FXO_VOLS_FBIL.csv"
+}
 
+
+# ------------------------------------------------------
+# 🧩 Helper Function — Load CSV file from Dataiku folder
+# ------------------------------------------------------
+def load_file_from_folder(folder, filename):
+    """Find and load a CSV file from a Dataiku folder."""
+    for path in folder.list_paths_in_partition():
+        if os.path.basename(path) == filename:
+            with folder.get_download_stream(path) as stream:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+                    tmp.write(stream.read())
+                    tmp_path = tmp.name
+            df = pd.read_csv(tmp_path, dtype=str)  # keep all values as strings
+            os.remove(tmp_path)
+            return df
+    raise FileNotFoundError(f"❌ File '{filename}' not found in folder {folder.get_id()}!")
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
 def main():
-    # Get list of input files
-    input_files = input_folder.list_paths_in_partition()
-    if not input_files:
-        raise FileNotFoundError("❌ No files found in input folder!")
+    print("📂 Scanning input folder for files...")
+    all_files = [os.path.basename(p) for p in input_folder.list_paths_in_partition()]
+    print(f"🔍 Found {len(all_files)} file(s): {all_files}")
 
-    processed = False
-
-    for file_path in input_files:
-        file_name = os.path.basename(file_path)
-        print(f"\n📄 Checking file: {file_name}")
-
-        # Only process the matching file
-        if file_name.lower() != FILENAME_TO_PROCESS.lower():
-            print(f"⏩ Skipping {file_name} (not '{FILENAME_TO_PROCESS}')")
+    for file_name, cfg in file_operations.items():
+        if file_name not in all_files:
+            print(f"⚠️ Skipping '{file_name}' — not found in folder.")
             continue
 
-        print(f"✅ Found target file: {file_name}")
+        print(f"\n➡️ Processing file: {file_name}")
 
-        # ------------------------------------------------------
-        # 📥 Download the file to a temporary location
-        # ------------------------------------------------------
-        with input_folder.get_download_stream(file_path) as stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-                tmp.write(stream.read())
-                tmp_path = tmp.name
+        # Defensive key checks
+        op_type = cfg.get("type")
+        if not op_type:
+            print(f"⚠️ Missing 'type' key in config for '{file_name}', skipping.")
+            continue
 
-        # ------------------------------------------------------
-        # 🧠 Read data and process
-        # ------------------------------------------------------
-        df = pd.read_csv(tmp_path, dtype=str)  # preserve text formatting
+        # Load CSV safely
+        try:
+            df = load_file_from_folder(input_folder, file_name)
+        except Exception as e:
+            print(f"❌ Error reading {file_name}: {e}")
+            continue
 
-        if "Tenor" not in df.columns:
-            raise ValueError(f"❌ Column 'Tenor' not found in file {file_name}")
+        # Perform operation
+        if op_type == "prefix":
+            col = cfg.get("column")
+            prefix = cfg.get("prefix", "")
+            if not col:
+                print(f"⚠️ No column specified for prefix operation in {file_name}, skipping.")
+                continue
 
-        # Split logic
-        df["Tenure"] = df["Tenor"].astype(str).str[-2:]
-        df["Type"] = (
-            df["Tenor"]
-            .astype(str)
-            .str[:-2]
-            .str.replace("VOL", "", regex=False)
-            .str.strip()
-        )
+            print(f"   🧩 Operation: Add prefix '{prefix}' to column '{col}'")
+            if col in df.columns:
+                df[col] = df[col].fillna("").astype(str)
+                df[col] = prefix + df[col]
+                print(f"   ✅ Prefix added successfully.")
+            else:
+                print(f"   ⚠️ Column '{col}' not found — skipping prefix addition.")
+                continue
 
-        # ------------------------------------------------------
-        # 🔁 Replace Type values based on mapping
-        # ------------------------------------------------------
-        type_mapping = {
-            "ATM": "O",
-            "BF": "SG"
-        }
-        df["Type"] = df["Type"].replace(type_mapping)
+        elif op_type == "new_column":
+            col = cfg.get("column")
+            value = cfg.get("value", "")
+            if not col:
+                print(f"⚠️ No column name provided for new_column operation in {file_name}, skipping.")
+                continue
 
-        # ------------------------------------------------------
-        # 💾 Save processed file to output folder
-        # ------------------------------------------------------
-        output_filename = file_name.replace(".csv", "_Processed.csv")
+            print(f"   🧩 Operation: Create new column '{col}' with value '{value}'")
+            df[col] = value
+            print(f"   ✅ Column '{col}' created successfully.")
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8-sig") as tmp_file:
-            df.to_csv(tmp_file.name, index=False)
-            with open(tmp_file.name, "rb") as f:
-                output_folder.upload_stream(output_filename, f)
-            os.remove(tmp_file.name)
+        else:
+            print(f"⚠️ Unknown operation type '{op_type}' for {file_name}. Skipping.")
+            continue
 
-        os.remove(tmp_path)
-        processed = True
-        print(f"✅ Processed and saved as: {output_filename}")
+        # Save modified file to output folder
+        try:
+            with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
+                df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
+                with open(tmp_out.name, "rb") as f:
+                    output_folder.upload_stream(file_name, f)
+                os.remove(tmp_out.name)
+            print(f"💾 Saved updated '{file_name}' to output folder.")
+        except Exception as e:
+            print(f"❌ Error saving {file_name}: {e}")
 
-    if not processed:
-        print(f"⚠️ No file named '{FILENAME_TO_PROCESS}' was found in the input folder.")
-    else:
-        print("\n🏁 Completed processing successfully.")
-
+    print("\n✅ All configured files processed successfully!")
 
 # ------------------------------------------------------
 if __name__ == "__main__":
