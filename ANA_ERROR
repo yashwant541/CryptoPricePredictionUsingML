@@ -79,8 +79,9 @@ def process_bid_ask_file(df, filename):
         # Debug logs
         non_null_count = sub_df["Value"].notna().sum()
         if non_null_count > 0:
+            avg_sample = sub_df["Value"].dropna().head(3).tolist()
             print(f"✅ Doing average of Bid and Ask for {non_null_count} rows.")
-            print(f"💡 Average value sample: {sub_df['Value'].dropna().head(3).tolist()}")
+            print(f"💡 Average value sample: {avg_sample}")
         else:
             print(f"⚠️ Found empty Bid/Ask values for '{label}'")
 
@@ -115,41 +116,59 @@ for file_path in input_folder.list_paths_in_partition():
     print(f"📄 Processing file: {filename}")
     print("=" * 40)
 
-    # Handle Excel or CSV
-    if ext.lower() in [".xlsx", ".xls"]:
-        xls = pd.ExcelFile(input_folder.get_download_stream(file_path))
-        for sheet_name in xls.sheet_names:
-            print(f"📘 Reading sheet: {sheet_name}")
-            df = pd.read_excel(xls, sheet_name=sheet_name, header=None)
+    # Download to temporary file first (avoids io.UnsupportedOperation)
+    with input_folder.get_download_stream(file_path) as stream:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp.write(stream.read())
+            tmp_path = tmp.name
 
-            # Special Bid/Ask files
+    try:
+        # Handle Excel files
+        if ext.lower() in [".xlsx", ".xls"]:
+            xls = pd.ExcelFile(tmp_path)
+            for sheet_name in xls.sheet_names:
+                print(f"📘 Reading sheet: {sheet_name}")
+                df = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None)
+
+                if any(sp in file_name_no_ext for sp in special_filenames):
+                    print(f"🔹 Detected special Bid/Ask file type: {file_name_no_ext}")
+                    output_df = process_bid_ask_file(df, filename)
+                else:
+                    # Normal logic
+                    df = df.dropna(how="all")
+                    if df.shape[1] >= 3:
+                        df.columns = ["Date", "Label", "Value"]
+                    output_df = df
+
+                # Save to output
+                out_filename = f"{file_name_no_ext}_{sheet_name}.csv"
+                with tempfile.NamedTemporaryFile(mode="w", delete=False, newline='', encoding="utf-8") as tmp_out:
+                    output_df.to_csv(tmp_out.name, index=False)
+                    with open(tmp_out.name, "rb") as f:
+                        output_folder.upload_stream(out_filename, f)
+                    os.remove(tmp_out.name)
+
+                print(f"💾 Saved output: {out_filename}")
+
+        elif ext.lower() == ".csv":
+            df = pd.read_csv(tmp_path)
             if any(sp in file_name_no_ext for sp in special_filenames):
-                print(f"🔹 Detected special Bid/Ask file type: {file_name_no_ext}")
+                print(f"🔹 Detected special Bid/Ask CSV file: {file_name_no_ext}")
                 output_df = process_bid_ask_file(df, filename)
             else:
-                # Normal file logic (keep original behavior)
-                df = df.dropna(how="all")
-                if df.shape[1] >= 3:
-                    df.columns = ["Date", "Label", "Value"]
                 output_df = df
 
-            # Save file as filename + sheetname
-            out_filename = f"{file_name_no_ext}_{sheet_name}.csv"
-            with output_folder.get_writer(out_filename) as writer:
-                output_df.to_csv(writer, index=False)
+            out_filename = f"{file_name_no_ext}.csv"
+            with tempfile.NamedTemporaryFile(mode="w", delete=False, newline='', encoding="utf-8") as tmp_out:
+                output_df.to_csv(tmp_out.name, index=False)
+                with open(tmp_out.name, "rb") as f:
+                    output_folder.upload_stream(out_filename, f)
+                os.remove(tmp_out.name)
+
             print(f"💾 Saved output: {out_filename}")
 
-    elif ext.lower() == ".csv":
-        df = pd.read_csv(input_folder.get_download_stream(file_path))
-        if any(sp in file_name_no_ext for sp in special_filenames):
-            print(f"🔹 Detected special Bid/Ask CSV file: {file_name_no_ext}")
-            output_df = process_bid_ask_file(df, filename)
-        else:
-            output_df = df
-
-        out_filename = f"{file_name_no_ext}.csv"
-        with output_folder.get_writer(out_filename) as writer:
-            output_df.to_csv(writer, index=False)
-        print(f"💾 Saved output: {out_filename}")
+    finally:
+        # Clean up temp Excel
+        os.remove(tmp_path)
 
 print("\n✅ All files processed successfully.\n")
