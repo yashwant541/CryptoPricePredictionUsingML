@@ -19,8 +19,8 @@ tenor_sequences = {
         "RRVOL1W", "RRVOL1M", "RRVOL3M", "RRVOL6M", "RRVOL1Y",
         "BFVOL1W", "BFVOL1M", "BFVOL3M", "BFVOL6M", "BFVOL1Y"
     ],
-    "HIBOR HKD&CNH.csv": ["O/N","1W","2W","1M","2M","3M","6M","12M"],
-    "MIBOR.csv": ["2W","1M","3M"]
+    "HIBOR HKD&CNH.csv": ["O/N", "1W", "2W", "1M", "2M", "3M", "6M", "12M"],
+    "MIBOR.csv": ["2W", "1M", "3M"]
 }
 
 # ------------------------------------------------------
@@ -72,22 +72,43 @@ for filename, valid_tenors in tenor_sequences.items():
         aggfunc="first"
     )
 
-    # Add any missing tenors as empty columns
+    # Add any missing tenor columns as empty
     for tenor in valid_tenors:
         if tenor not in pivot.columns:
             pivot[tenor] = pd.NA
 
-    # Order columns as per hardcoded tenor sequence
+    # Order columns properly
     pivot = pivot.reset_index()
     pivot = pivot[["Date"] + valid_tenors]
 
-    # --- Save output as UTF-8 CSV ---
+    # ------------------------------------------------------
+    # 🧩 Special handling for HIBOR HKD&CNH — duplicate outputs
+    # ------------------------------------------------------
+    if filename == "HIBOR HKD&CNH.csv":
+        fixing_indices = ["HIBOR_HKD", "HIBOR_CNH"]
+
+        for fixing in fixing_indices:
+            output_filename = f"{fixing}_Tenor_MVT.csv"
+            tmp_dir = tempfile.mkdtemp()
+            tmp_path = os.path.join(tmp_dir, output_filename)
+            pivot.to_csv(tmp_path, index=False, encoding="utf-8")
+
+            # Upload to Dataiku output folder
+            with open(tmp_path, "rb") as f:
+                output_folder.upload_stream(output_filename, f)
+
+            print(f"✅ Saved UTF-8 CSV output: {output_filename}")
+
+        continue  # Move to next file after handling this one
+
+    # ------------------------------------------------------
+    # 🧠 Default processing for other files
+    # ------------------------------------------------------
     output_filename = os.path.splitext(filename)[0] + "_Tenor_MVT.csv"
     tmp_dir = tempfile.mkdtemp()
     tmp_path = os.path.join(tmp_dir, output_filename)
-    pivot.to_csv(tmp_path, index=False, encoding="utf-8")  # ✅ UTF-8 encoded output
+    pivot.to_csv(tmp_path, index=False, encoding="utf-8")
 
-    # Upload to Dataiku output folder
     with open(tmp_path, "rb") as f:
         output_folder.upload_stream(output_filename, f)
 
