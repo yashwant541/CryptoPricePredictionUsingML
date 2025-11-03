@@ -6,113 +6,54 @@ import os
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXX")     # 📥 Input folder
-output_folder = dataiku.Folder("XXXXXX")    # 📤 Output folder
+input_folder = dataiku.Folder("XXXXXX")      # 📥 Input folder with multiple files
+output_folder = dataiku.Folder("YYYYYY")     # 📤 Output folder
 
 # ------------------------------------------------------
-# 🧠 File-Specific Operations Configuration
+# 🎯 Hardcoded tenor sequences per filename
 # ------------------------------------------------------
-file_operations = {
-    "HIBOR_CNH.csv": {"type": "prefix", "column": "Currency", "prefix": "HIBOR "},
-    "HIBOR_HKD.csv": {"type": "prefix", "column": "Currency", "prefix": "HIBOR "},
-    "MIBOR.csv": {"type": "new_column", "column": "TYPE", "value": "MIBOR"},
-    "FXO_VOLS_FBIL.csv": {"type": "none"}  # ✅ No change, just process and save
+tenor_sequences = {
+    "ATM_Vol.csv": [
+        "ATMVOL1W", "ATMVOL1M", "ATMVOL3M", "ATMVOL6M", "ATMVOL1Y"
+    ],
+    "RR_Vol.csv": [
+        "RRVOL1W", "RRVOL1M", "RRVOL3M", "RRVOL6M", "RRVOL1Y"
+    ],
+    "BF_Vol.csv": [
+        "BFVOL1W", "BFVOL1M", "BFVOL3M", "BFVOL6M", "BFVOL1Y"
+    ]
 }
 
-
 # ------------------------------------------------------
-# 🧩 Helper Function — Load CSV file from Dataiku folder
+# 🧠 Processing each file
 # ------------------------------------------------------
-def load_file_from_folder(folder, filename):
-    """Find and load a CSV file from a Dataiku folder."""
-    for path in folder.list_paths_in_partition():
-        if os.path.basename(path) == filename:
-            with folder.get_download_stream(path) as stream:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-                    tmp.write(stream.read())
-                    tmp_path = tmp.name
-            df = pd.read_csv(tmp_path, dtype=str)  # keep all values as strings
-            os.remove(tmp_path)
-            return df
-    raise FileNotFoundError(f"❌ File '{filename}' not found in folder {folder.get_id()}!")
+for file_info in input_folder.list_paths_in_partition():
+    filename = os.path.basename(file_info)
+    
+    # skip non-CSV files
+    if not filename.lower().endswith(".csv"):
+        continue
+    
+    with input_folder.get_download_stream(filename) as stream:
+        df = pd.read_csv(stream)
+    
+    print(f"Processing file: {filename}")
+    
+    # 🧩 Get valid tenors for this file (hardcoded)
+    valid_tenors = tenor_sequences.get(filename, [])
+    
+    # 🧠 Build table: Tenor as columns, Material Variance Threshold as values
+    result_df = pd.DataFrame(columns=valid_tenors)
+    
+    # Fill thresholds — assuming you’ll fill them later or default 0
+    result_df.loc[0] = [0 for _ in valid_tenors]
+    
+    # Save output
+    output_filename = filename.replace(".csv", "_thresholds.csv")
+    temp_path = os.path.join(tempfile.gettempdir(), output_filename)
+    result_df.to_csv(temp_path, index=False)
+    
+    with open(temp_path, "rb") as f:
+        output_folder.upload_stream(output_filename, f)
 
-
-# ------------------------------------------------------
-# 🚀 Main Execution
-# ------------------------------------------------------
-def main():
-    print("📂 Scanning input folder for files...")
-    all_files = [os.path.basename(p) for p in input_folder.list_paths_in_partition()]
-    print(f"🔍 Found {len(all_files)} file(s): {all_files}")
-
-    for file_name, cfg in file_operations.items():
-        if file_name not in all_files:
-            print(f"⚠️ Skipping '{file_name}' — not found in folder.")
-            continue
-
-        print(f"\n➡️ Processing file: {file_name}")
-
-        op_type = cfg.get("type")
-        if not op_type:
-            print(f"⚠️ Missing 'type' key in config for '{file_name}', skipping.")
-            continue
-
-        # Load file
-        try:
-            df = load_file_from_folder(input_folder, file_name)
-        except Exception as e:
-            print(f"❌ Error reading {file_name}: {e}")
-            continue
-
-        # Perform operation
-        if op_type == "prefix":
-            col = cfg.get("column")
-            prefix = cfg.get("prefix", "")
-            if not col:
-                print(f"⚠️ No column specified for prefix operation in {file_name}, skipping.")
-                continue
-
-            print(f"   🧩 Operation: Add prefix '{prefix}' to column '{col}'")
-            if col in df.columns:
-                df[col] = df[col].fillna("").astype(str)
-                df[col] = prefix + df[col]
-                print(f"   ✅ Prefix added successfully.")
-            else:
-                print(f"   ⚠️ Column '{col}' not found — skipping prefix addition.")
-                continue
-
-        elif op_type == "new_column":
-            col = cfg.get("column")
-            value = cfg.get("value", "")
-            if not col:
-                print(f"⚠️ No column name provided for new_column operation in {file_name}, skipping.")
-                continue
-
-            print(f"   🧩 Operation: Create new column '{col}' with value '{value}'")
-            df[col] = value
-            print(f"   ✅ Column '{col}' created successfully.")
-
-        elif op_type == "none":
-            print(f"   🧩 Operation: No changes applied to '{file_name}' (passthrough).")
-
-        else:
-            print(f"⚠️ Unknown operation type '{op_type}' for {file_name}. Skipping.")
-            continue
-
-        # Save output
-        try:
-            with tempfile.NamedTemporaryFile(mode="w+b", suffix=".csv", delete=False) as tmp_out:
-                df.to_csv(tmp_out.name, index=False, encoding="utf-8-sig")
-                with open(tmp_out.name, "rb") as f:
-                    output_folder.upload_stream(file_name, f)
-                os.remove(tmp_out.name)
-            print(f"💾 Saved updated '{file_name}' to output folder.")
-        except Exception as e:
-            print(f"❌ Error saving {file_name}: {e}")
-
-    print("\n✅ All configured files processed successfully!")
-
-
-# ------------------------------------------------------
-if __name__ == "__main__":
-    main()
+print("✅ All files processed and saved to output folder.")
