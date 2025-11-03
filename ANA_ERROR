@@ -2,199 +2,67 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
-from datetime import datetime
 
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
 input_folder = dataiku.Folder("XXXXXXXXX")      # 📥 Input folder
-output_folder = dataiku.Folder("XXXXXXXXX")    # 📤 Output folder
-
-# Sheets to skip
-EXCEPTION_SHEETS = ["Tracking Sheet", "FXO VOLS FBIL Realtime", "FXO VOLS Refinitiv Realtime"]
-
-# Sheets with special Bid/Ask layout
-SPECIAL_SHEETS = ["FXO VOLS FBIL"]
-
-
-# ------------------------------------------------------
-# 🧠 Helper Functions
-# ------------------------------------------------------
-def looks_like_date(val):
-    """Check if a value looks like a date."""
-    if isinstance(val, (pd.Timestamp, datetime)):
-        return True
-    if isinstance(val, str):
-        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
-            try:
-                datetime.strptime(val.strip(), fmt)
-                return True
-            except:
-                continue
-    return False
-
-
-def read_excel_safe(file_path):
-    """Read Excel safely using openpyxl."""
-    return pd.ExcelFile(file_path, engine="openpyxl")
-
-
-def sheet_is_special(sheet_name):
-    """Check if a sheet matches any of the special identifiers."""
-    return any(key.lower() in sheet_name.lower() for key in SPECIAL_SHEETS)
+output_folder = dataiku.Folder("XXXXXXXXX")     # 📤 Output folder
 
 
 # ------------------------------------------------------
 # 🚀 Main Execution
 # ------------------------------------------------------
 def main():
+    # Get list of input files
     input_files = input_folder.list_paths_in_partition()
     if not input_files:
         raise FileNotFoundError("❌ No files found in input folder!")
 
-    for excel_file_info in input_files:
-        file_name = os.path.basename(excel_file_info)
-        print(f"\n📘 Processing file: {file_name}")
+    for file_path in input_files:
+        file_name = os.path.basename(file_path)
+        print(f"\n📄 Processing file: {file_name}")
 
-        # Download to temporary file
-        with input_folder.get_download_stream(excel_file_info) as stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+        # Only process Filename.csv (as per your requirement)
+        if file_name.lower() != "filename.csv":
+            print(f"⏩ Skipping {file_name} (not 'Filename.csv')")
+            continue
+
+        # ------------------------------------------------------
+        # 📥 Download the file to a temporary location
+        # ------------------------------------------------------
+        with input_folder.get_download_stream(file_path) as stream:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
                 tmp.write(stream.read())
                 tmp_path = tmp.name
 
-        xls = read_excel_safe(tmp_path)
+        # ------------------------------------------------------
+        # 🧠 Read data and process
+        # ------------------------------------------------------
+        df = pd.read_csv(tmp_path, dtype=str)  # preserve text formatting
 
-        for sheet_name in xls.sheet_names:
-            if sheet_name in EXCEPTION_SHEETS:
-                print(f"⏩ Skipping sheet '{sheet_name}' (exception list)")
-                continue
+        if "Tenor" not in df.columns:
+            raise ValueError(f"❌ Column 'Tenor' not found in file {file_name}")
 
-            print(f"\n📄 Processing sheet: {sheet_name}")
+        # Split into Tenure (rightmost 2 chars) and Type (remaining part without 'VOL')
+        df["Tenure"] = df["Tenor"].astype(str).str[-2:]
+        df["Type"] = df["Tenor"].astype(str).str[:-2].str.replace("VOL", "", regex=False).str.strip()
 
-            # ------------------------------------------------------
-            # SPECIAL SHEETS (Bid/Ask layout)
-            # ------------------------------------------------------
-            if sheet_is_special(sheet_name):
-                print(f"⚙️  Detected special Bid/Ask structure in '{sheet_name}'")
+        # ------------------------------------------------------
+        # 💾 Save processed file to output folder
+        # ------------------------------------------------------
+        output_filename = file_name.replace(".csv", "_Processed.csv")
 
-                df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
-
-                # Labels in row 7 (index 6)
-                labels_row = df_raw.iloc[6]
-                data_start_row = 9  # actual data starts from row 10 (index 9)
-                df_data = df_raw.iloc[data_start_row:].reset_index(drop=True)
-                df_data.columns = [f"col_{i}" for i in range(df_data.shape[1])]
-
-                tidy_data_list = []
-                has_bidask = False
-
-                # Identify columns that correspond to non-empty labels in row 7
-                for col_idx, label in enumerate(labels_row):
-                    if pd.isna(label):
-                        continue
-
-                    # Find the next columns for Bid/Ask
-                    if col_idx + 1 < df_data.shape[1]:
-                        col_series = df_data.iloc[:, col_idx]
-
-                        # Skip if column empty
-                        if col_series.dropna().empty:
-                            continue
-
-                        # Detect date column
-                        if col_series.apply(looks_like_date).sum() > 0:
-                            next_cols = df_data.iloc[:, col_idx + 1:col_idx + 3]
-
-                            # Case A: Bid + Ask columns
-                            if next_cols.shape[1] >= 2 and not df_data.iloc[:, col_idx + 1].dropna().empty and not df_data.iloc[:, col_idx + 2].dropna().empty:
-                                has_bidask = True
-                                temp_df = pd.DataFrame({
-                                    "Date": df_data.iloc[:, col_idx],
-                                    "Bid": df_data.iloc[:, col_idx + 1],
-                                    "Ask": df_data.iloc[:, col_idx + 2]
-                                })
-                                temp_df = temp_df[temp_df["Date"].notna()]
-                                temp_df["Value"] = (
-                                    pd.to_numeric(temp_df["Bid"], errors="coerce") +
-                                    pd.to_numeric(temp_df["Ask"], errors="coerce")
-                                ) / 2
-                                print(f"✅ {label}: Found Bid/Ask columns — Doing average — Avg ≈ {round(temp_df['Value'].mean(skipna=True), 6)}")
-
-                            # Case B: Only one Value column
-                            else:
-                                temp_df = pd.DataFrame({
-                                    "Date": df_data.iloc[:, col_idx],
-                                    "Value": df_data.iloc[:, col_idx + 1]
-                                })
-                                temp_df = temp_df[temp_df["Date"].notna()]
-                                print(f"⚠️ {label}: Only single Value column found.")
-
-                            temp_df["Label"] = str(label).strip()
-                            tidy_data_list.append(temp_df)
-
-                if not tidy_data_list:
-                    print(f"⚠️ No valid data found in special sheet '{sheet_name}'")
-                    continue
-
-                final_df = pd.concat(tidy_data_list, ignore_index=True)
-                final_df["Date"] = pd.to_datetime(final_df["Date"], errors="coerce")
-                final_df = final_df.dropna(subset=["Date", "Value"]).sort_values("Date").reset_index(drop=True)
-
-                if has_bidask:
-                    print(f"✅ Confirmed: Bid/Ask values were found for '{sheet_name}'")
-                else:
-                    print(f"⚠️ No Bid/Ask values — used single Value columns")
-
-            # ------------------------------------------------------
-            # NORMAL SHEETS
-            # ------------------------------------------------------
-            else:
-                df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
-                label_row_index = 6  # row 7
-                labels_row = df_raw.iloc[label_row_index]
-
-                tidy_data_list = []
-                for col in range(df_raw.shape[1]):
-                    label = labels_row[col]
-                    if pd.notna(label):
-                        if col + 1 < df_raw.shape[1]:
-                            dates = df_raw.iloc[label_row_index + 1:, col]
-                            values = df_raw.iloc[label_row_index + 1:, col + 1]
-                            mask = dates.notna() & values.notna()
-                            dates = dates[mask]
-                            values = values[mask]
-
-                            temp_df = pd.DataFrame({
-                                "Date": dates,
-                                "Label": label,
-                                "Value": values
-                            })
-                            tidy_data_list.append(temp_df)
-
-                if not tidy_data_list:
-                    print(f"⚠️ No valid data found in sheet '{sheet_name}'")
-                    continue
-
-                final_df = pd.concat(tidy_data_list, ignore_index=True)
-                final_df["Date"] = pd.to_datetime(final_df["Date"], errors='coerce')
-                final_df = final_df.sort_values("Date").reset_index(drop=True)
-
-            # ------------------------------------------------------
-            # 💾 Save output as the sheet name only
-            # ------------------------------------------------------
-            safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
-            output_filename = f"{safe_sheet_name}.csv"
-
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-                final_df.to_csv(tmp_file.name, index=False)
-                with open(tmp_file.name, "rb") as f:
-                    output_folder.upload_stream(output_filename, f)
-                os.remove(tmp_file.name)
-
-            print(f"✅ Sheet '{sheet_name}' saved as CSV: {output_filename}")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8-sig") as tmp_file:
+            df.to_csv(tmp_file.name, index=False)
+            with open(tmp_file.name, "rb") as f:
+                output_folder.upload_stream(output_filename, f)
+            os.remove(tmp_file.name)
 
         os.remove(tmp_path)
-        print(f"🏁 Completed processing for file: {file_name}")
+        print(f"✅ Processed and saved as: {output_filename}")
+
+    print("\n🏁 Completed processing all matching files.")
 
 
 # ------------------------------------------------------
