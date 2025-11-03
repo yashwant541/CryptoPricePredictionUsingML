@@ -1,67 +1,90 @@
 import pandas as pd
 import dataiku
+import io
+import os
 
 # ------------------------------------------------------
 # ⚙️ CONFIGURATION
 # ------------------------------------------------------
-# Replace with your actual dataset names in Dataiku
-input_dataset = "MakerCheckerSuccess_Processed"   # e.g. name of the uploaded CSV dataset
-output_dataset = "CompletenesCheckResults"  # e.g. name of output dataset
+input_folder = dataiku.Folder("INPUT_FOLDER_ID")    # 📥 Replace with your input folder ID
+output_folder = dataiku.Folder("OUTPUT_FOLDER_ID")  # 📤 Replace with your output folder ID
 
 # Define the start and end date range
 start_date = "2024-09-01"
 end_date = "2025-08-31"
 
-# Define the date column name in your CSV
-date_column = "FileDate"
-
 # List of holidays (YYYY-MM-DD)
 holidays = [
-    '2024-09-18', '2024-10-01', '2024-10-11', '2024-12-25', '2024-12-26', '2025-01-01', '2025-01-29', 
-    '2025-01-30', '2025-01-31', '2025-04-04', '2025-04-18', '2025-04-19', '2025-04-21', '2025-05-01', 
+    '2024-09-18', '2024-10-01', '2024-10-11', '2024-12-25', '2024-12-26', '2025-01-01', '2025-01-29',
+    '2025-01-30', '2025-01-31', '2025-04-04', '2025-04-18', '2025-04-19', '2025-04-21', '2025-05-01',
     '2025-05-05', '2025-05-31', '2025-07-01'
 ]
 
-# ------------------------------------------------------
-# 📥 READ INPUT DATASET
-# ------------------------------------------------------
-df = dataiku.Dataset(input_dataset).get_dataframe()
-
-# ------------------------------------------------------
-# 🧮 PROCESS DATA
-# ------------------------------------------------------
-# Convert 'File Date' to date
-df[date_column] = pd.to_datetime(df[date_column], errors="coerce").dt.date
-
-# Generate full date range
-date_range = pd.date_range(start=start_date, end=end_date).date
-
-# Filter only weekdays and exclude holidays
-valid_dates = [
-    d for d in date_range
-    if d.weekday() < 5 and str(d) not in holidays
+# Common possible date column names
+possible_date_columns = [
+    "FileDate", "Date", "file_date", "RunDate", "AsOfDate", "ReportDate"
 ]
 
-# Get list of available dates in the dataset
-file_dates = set(df[date_column].dropna())
-
-# Identify missing working dates
-missing_dates = [d for d in valid_dates if d not in file_dates]
-
-# Prepare result DataFrame
-result_df = pd.DataFrame(missing_dates, columns=["Missing Date"])
+# ------------------------------------------------------
+# 🧮 GENERATE VALID WORKING DATES
+# ------------------------------------------------------
+date_range = pd.date_range(start=start_date, end=end_date).date
+valid_dates = [d for d in date_range if d.weekday() < 5 and str(d) not in holidays]
 
 # ------------------------------------------------------
-# 💾 WRITE OUTPUT DATASET
+# 📂 PROCESS EACH FILE IN INPUT FOLDER
 # ------------------------------------------------------
-dataiku.Dataset(output_dataset).write_with_schema(result_df)
+input_files = input_folder.list_paths_in_partition()
+print(f"\n📁 Found {len(input_files)} files in the input folder.")
 
-# ------------------------------------------------------
-# 🪶 LOG OUTPUT
-# ------------------------------------------------------
-if result_df.empty:
-    print("\n🎉 No missing working-day dates found!")
-else:
-    print("\n📅 Missing non-weekend, non-holiday dates:")
-    for d in missing_dates:
-        print(d)
+for file_path in input_files:
+    file_name = os.path.basename(file_path)
+    print(f"\n🔍 Processing file: {file_name}")
+
+    # Read file (detect extension)
+    with input_folder.get_download_stream(file_path) as stream:
+        if file_name.lower().endswith(".csv"):
+            df = pd.read_csv(stream)
+        elif file_name.lower().endswith((".xls", ".xlsx")):
+            df = pd.read_excel(stream, engine="openpyxl")
+        else:
+            print(f"⚠️ Skipping unsupported file type: {file_name}")
+            continue
+
+    # Try to detect date column
+    date_col = None
+    for col in df.columns:
+        if col.strip() in possible_date_columns:
+            date_col = col
+            break
+        if any(keyword.lower() in col.lower() for keyword in ["date", "filedate", "asof"]):
+            date_col = col
+            break
+
+    if not date_col:
+        print(f"⚠️ No date column found in {file_name}, skipping.")
+        continue
+
+    print(f"📅 Using date column: {date_col}")
+
+    # Convert to date
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+    file_dates = set(df[date_col].dropna())
+
+    # Identify missing working dates
+    missing_dates = [d for d in valid_dates if d not in file_dates]
+    result_df = pd.DataFrame(missing_dates, columns=["Missing Date"])
+
+    # Save output file
+    output_name = f"{os.path.splitext(file_name)[0]}_completeness.csv"
+    with io.StringIO() as buffer:
+        result_df.to_csv(buffer, index=False)
+        output_folder.upload_stream(output_name, io.BytesIO(buffer.getvalue().encode("utf-8")))
+
+    # Log summary
+    if result_df.empty:
+        print(f"🎉 {file_name}: No missing working-day dates found.")
+    else:
+        print(f"📅 {file_name}: Found {len(result_df)} missing working-day dates.")
+
+print("\n✅ Completeness check finished for all files.")
