@@ -2,90 +2,94 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
-import shutil
+import openpyxl
 
 # ------------------------------------------------------
-# 🔧 Configuration
+# 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXX")   # 📥 Folder containing the 3 MVT pivot outputs
-output_folder = dataiku.Folder("YYYYYY")  # 📤 Folder to save filtered outputs
+input_folder = dataiku.Folder("KdCsh8Rm")      # 📥 Input folder with multiple files
+output_folder = dataiku.Folder("bUfeS3hF")     # 📤 Output folder
 
 # ------------------------------------------------------
-# 🧠 Helper: Keep only first + change rows
+# 🎯 Hardcoded tenor sequences per filename
 # ------------------------------------------------------
-def keep_change_rows(df):
-    df = df.copy()
-    df = df.sort_values(by="Date")
-    df = df.reset_index(drop=True)
-
-    # Compare each row with the previous row across all tenor columns (excluding Date)
-    change_mask = (df.iloc[:, 1:] != df.iloc[:, 1:].shift()).any(axis=1)
-
-    # Always keep the first row + rows where any tenor MVT value changes
-    keep_rows = change_mask | (df.index == 0)
-    return df.loc[keep_rows].reset_index(drop=True)
+tenor_sequences = {
+    "FX.csv": [
+        "ATMVOL1W", "ATMVOL1M", "ATMVOL3M", "ATMVOL6M", "ATMVOL1Y",
+        "RRVOL1W", "RRVOL1M", "RRVOL3M", "RRVOL6M", "RRVOL1Y",
+        "BFVOL1W", "BFVOL1M", "BFVOL3M", "BFVOL6M", "BFVOL1Y"
+    ],
+    "Singapore.csv": ["O/N","1W","2W","1M","2M","3M","6M","12M"],
+    "Guava.csv": ["2W","1M","3M"]
+}
 
 # ------------------------------------------------------
-# 🚀 Process each file
+# Process each file in the order of the tenor mapping
 # ------------------------------------------------------
-for file_path in input_folder.list_paths_in_partition():
-    filename = os.path.basename(file_path)
+available_paths = input_folder.list_paths_in_partition()
 
-    # Process only Excel or CSV files
-    if not (filename.lower().endswith(".xlsx") or filename.lower().endswith(".csv")):
+for filename, valid_tenors in tenor_sequences.items():
+    # Match the file path in Dataiku folder
+    file_path = next((p for p in available_paths if os.path.basename(p) == filename), None)
+    if not file_path:
+        print(f"⚠️ File not found in input folder: {filename}")
         continue
 
-    print(f"📄 Processing file: {filename}")
+    print(f"📄 Processing: {filename}")
 
-    # --------------------------------------------------
-    # 📥 Read the file safely from Dataiku stream
-    # --------------------------------------------------
-    tmp_input = tempfile.NamedTemporaryFile(delete=False)
-    with input_folder.get_download_stream(filename) as stream:
-        shutil.copyfileobj(stream, tmp_input)
-    tmp_input.close()
+    # Read CSV (schema is same for all files)
+    with input_folder.get_download_stream(file_path) as stream:
+        df = pd.read_csv(stream, dtype=str)
 
-    # Read into DataFrame
-    if filename.lower().endswith(".xlsx"):
-        df = pd.read_excel(tmp_input.name, dtype=str)
-    else:
-        df = pd.read_csv(tmp_input.name, dtype=str)
+    # Strip extra spaces from column names
+    df.columns = df.columns.str.strip()
 
-    os.unlink(tmp_input.name)  # clean temp file
+    # --- Ensure required columns exist ---
+    required_cols = ["Tenor", "Material Variance Threshold (bps)", "Date"]
+    for col in required_cols:
+        if col not in df.columns:
+            raise ValueError(f"❌ Missing expected column '{col}' in {filename}")
 
-    # --------------------------------------------------
-    # 🧹 Sort by Date and convert numeric columns
-    # --------------------------------------------------
-    if "Date" not in df.columns:
-        print(f"⚠️ Skipping {filename} — 'Date' column missing.")
-        continue
+    # Clean MVT values (remove ' vol' text and convert to numeric)
+    df["Material Variance Threshold (bps)"] = (
+        df["Material Variance Threshold (bps)"]
+        .astype(str)
+        .str.replace("vol", "", case=False)
+        .str.strip()
+    )
+    df["Material Variance Threshold (bps)"] = pd.to_numeric(
+        df["Material Variance Threshold (bps)"], errors="coerce"
+    )
 
-    # Try to convert date column properly
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df.dropna(subset=["Date"])  # remove invalid dates
-    df = df.sort_values(by="Date").reset_index(drop=True)
+    # Filter for only valid tenors
+    df_filtered = df[df["Tenor"].isin(valid_tenors)].copy()
 
-    # Convert all other columns to numeric
-    for col in df.columns[1:]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    # --- Pivot the table: Date as index, Tenor as columns, MVT as values ---
+    pivot = df_filtered.pivot_table(
+        index="Date",
+        columns="Tenor",
+        values="Material Variance Threshold (bps)",
+        aggfunc="first"
+    )
 
-    # --------------------------------------------------
-    # 🧩 Apply change-detection logic
-    # --------------------------------------------------
-    filtered_df = keep_change_rows(df)
+    # Add any missing tenors as empty columns
+    for tenor in valid_tenors:
+        if tenor not in pivot.columns:
+            pivot[tenor] = pd.NA
 
-    # --------------------------------------------------
-    # 💾 Save filtered output as CSV
-    # --------------------------------------------------
-    output_filename = os.path.splitext(filename)[0] + "_Filtered.csv"
+    # Order columns as per hardcoded tenor sequence
+    pivot = pivot.reset_index()
+    pivot = pivot[["Date"] + valid_tenors]
+
+    # --- Save output ---
+    output_filename = os.path.splitext(filename)[0] + "_Tenor_MVT.xlsx"
     tmp_dir = tempfile.mkdtemp()
     tmp_path = os.path.join(tmp_dir, output_filename)
-
-    filtered_df.to_csv(tmp_path, index=False)
+    pivot.to_excel(tmp_path, index=False)
 
     with open(tmp_path, "rb") as f:
         output_folder.upload_stream(output_filename, f)
 
-    print(f"✅ Saved filtered output: {output_filename}")
+    print(f"✅ Saved output: {output_filename}")
 
-print("🎯 Completed filtering — only date-change rows kept and saved as CSV.")
+print("🎉 All files processed successfully.")
