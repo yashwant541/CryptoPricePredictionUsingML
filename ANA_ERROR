@@ -1,193 +1,130 @@
 import pandas as pd
 import dataiku
-import tempfile
 import os
-from datetime import datetime
+import io
 
 # ------------------------------------------------------
-# 🔧 Configuration — Replace with your Dataiku folder IDs
+# 🔧 Configuration — Replace with your actual folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXXX")       # 📥 Input folder
-output_folder = dataiku.Folder("XXXXXXXX")      # 📤 Output folder
-
-# Sheets to skip
-EXCEPTION_SHEETS = ["Tracking Sheet", "FXO VOLS FBIL Realtime", "FXO VOLS Refinitiv Realtime"]
-
-# Sheets that follow the special Bid/Ask structure (configurable)
-SPECIAL_SHEETS = ["IN", "INR", "INFXO", "IN_FX", "IN_FWD"]  # You can add more identifiers here
-
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # 📥 Excel files
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID") # 📤 Output CSVs
 
 # ------------------------------------------------------
-# 🧠 Helper Functions
+# 🧠 Helper: Check if a sheet is "special" (Bid/Ask)
 # ------------------------------------------------------
-def looks_like_date(val):
-    """Check if a value looks like a date"""
-    if isinstance(val, (pd.Timestamp, datetime)):
-        return True
-    if isinstance(val, str):
-        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
-            try:
-                datetime.strptime(val.strip(), fmt)
-                return True
-            except:
-                continue
-    return False
-
-
-def read_excel_safe(file_path):
-    """Read Excel using openpyxl engine for .xlsx"""
-    return pd.ExcelFile(file_path, engine="openpyxl")
-
-
-def sheet_is_special(sheet_name):
-    """Check if a sheet name matches any of the special identifiers"""
-    return any(key.lower() in sheet_name.lower() for key in SPECIAL_SHEETS)
-
+def is_special_sheet(df):
+    headers = [str(h).lower() for h in df.columns]
+    return any("bid" in h for h in headers) or any("ask" in h for h in headers)
 
 # ------------------------------------------------------
-# 🚀 Main Execution
+# 🧠 Helper: Clean numeric safely
 # ------------------------------------------------------
-def main():
-    input_files = input_folder.list_paths_in_partition()
-    if not input_files:
-        raise FileNotFoundError("❌ No files found in input folder!")
+def to_num(v):
+    try:
+        return float(str(v).replace(',', '').strip())
+    except:
+        return None
 
-    for excel_file_info in input_files:
-        file_name = os.path.basename(excel_file_info)
+# ------------------------------------------------------
+# 🚀 Main processing
+# ------------------------------------------------------
+for file_path in input_folder.list_paths_in_partition():
+    if not file_path.lower().endswith((".xlsx", ".xls")):
+        continue
 
-        # Download file to temporary location
-        with input_folder.get_download_stream(excel_file_info) as stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-                tmp.write(stream.read())
-                tmp_path = tmp.name
+    print(f"\n📘 Processing file: {os.path.basename(file_path)}")
+    with input_folder.get_download_stream(file_path) as f:
+        excel = pd.ExcelFile(io.BytesIO(f.read()))
 
-        xls = read_excel_safe(tmp_path)
+    for sheet in excel.sheet_names:
+        print(f"  ➡️ Reading sheet: {sheet}")
+        df = pd.read_excel(excel, sheet_name=sheet, header=None)
 
-        for sheet_name in xls.sheet_names:
-            # Skip exception sheets
-            if sheet_name in EXCEPTION_SHEETS:
-                print(f"⏩ Skipping sheet '{sheet_name}' as it is in the exception list")
-                continue
+        # Skip empty sheets
+        if df.dropna(how="all").empty:
+            print(f"    ⚠️ Sheet '{sheet}' is empty — skipped.")
+            continue
 
-            print(f"\n📄 Processing sheet: {sheet_name}")
+        # Handle special BID/ASK sheets (check header row 9)
+        data_start_row = 9
+        if df.shape[0] > 9:
+            header_row = df.iloc[data_start_row - 1]
+            data = df.iloc[data_start_row:].copy()
+            data.columns = header_row
+        else:
+            print(f"    ⚠️ Sheet '{sheet}' too short to process — skipped.")
+            continue
 
-            # Special sheet processing
-            if sheet_is_special(sheet_name):
-                print(f"⚙️  Detected special Bid/Ask structure in sheet '{sheet_name}'")
+        # Detect columns
+        colnames = [str(c).strip() for c in data.columns]
+        lower_cols = [c.lower() for c in colnames]
 
-                df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
+        # Try to find Date column
+        date_col = None
+        for c in colnames:
+            if "date" in c.lower():
+                date_col = c
+                break
 
-                # Start reading from row 10 (index 9)
-                df_data = df_raw.iloc[9:].reset_index(drop=True)
-                df_data.columns = [f"col_{i}" for i in range(df_data.shape[1])]
+        if date_col is None:
+            print(f"    ⚠️ No 'Date' column found in '{sheet}' — skipped.")
+            continue
 
-                tidy_data_list = []
-                has_bidask = False
+        # Clean date column
+        data = data[[date_col] + [c for c in colnames if c != date_col]]
+        data = data.dropna(subset=[date_col])
 
-                col_index = 0
-                while col_index < df_data.shape[1]:
-                    col_series = df_data.iloc[:, col_index]
+        # Determine if special
+        special = is_special_sheet(data)
 
-                    # Skip empty columns
-                    if col_series.dropna().empty:
-                        col_index += 1
-                        continue
-
-                    # Detect a date column
-                    if col_series.apply(looks_like_date).sum() > 0:
-                        next_cols = df_data.iloc[:, col_index + 1:col_index + 3]
-                        possible_cols = list(next_cols.columns)
-
-                        # Case A: Date, Bid, Ask present
-                        if len(possible_cols) >= 2 and not df_data[possible_cols[0]].dropna().empty and not df_data[possible_cols[1]].dropna().empty:
-                            has_bidask = True
-                            temp_df = pd.DataFrame({
-                                "Date": df_data.iloc[:, col_index],
-                                "Bid": df_data.iloc[:, col_index + 1],
-                                "Ask": df_data.iloc[:, col_index + 2],
-                            })
-                            temp_df = temp_df[temp_df["Date"].notna()]
-                            temp_df["Value"] = (pd.to_numeric(temp_df["Bid"], errors="coerce") + pd.to_numeric(temp_df["Ask"], errors="coerce")) / 2
-                            print(f"✅ Found Bid/Ask columns — Doing average of Bid and Ask — Average value now is ≈ {round(temp_df['Value'].mean(skipna=True), 6)}")
-
-                        # Case B: Date, Value only
-                        else:
-                            temp_df = pd.DataFrame({
-                                "Date": df_data.iloc[:, col_index],
-                                "Value": df_data.iloc[:, col_index + 1],
-                            })
-                            temp_df = temp_df[temp_df["Date"].notna()]
-                            print(f"⚠️ No Ask column found — using single Value column.")
-
-                        temp_df["Label"] = f"Label_{col_index}"
-                        tidy_data_list.append(temp_df)
-                        col_index += 3
-                    else:
-                        col_index += 1
-
-                if not tidy_data_list:
-                    print(f"⚠️ No valid data found in special sheet '{sheet_name}'")
-                    continue
-
-                final_df = pd.concat(tidy_data_list, ignore_index=True)
-                final_df["Date"] = pd.to_datetime(final_df["Date"], errors="coerce")
-                final_df = final_df.dropna(subset=["Date", "Value"]).sort_values("Date").reset_index(drop=True)
-
-                if has_bidask:
-                    print(f"✅ Confirmed: Bid/Ask values were found for '{sheet_name}'")
-                else:
-                    print(f"⚠️ Bid/Ask values not found — used single Value structure instead")
-
+        # Capture label name
+        label_name = None
+        if special:
+            # Row 7 value (index 6 in zero-based)
+            if df.shape[0] > 6:
+                label_row = df.iloc[6]
+                label_name = str(label_row.dropna().iloc[0]) if not label_row.dropna().empty else "Unknown_Label"
             else:
-                # Normal processing (your original logic)
-                df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
-                label_row_index = 6
-                labels_row = df_raw.iloc[label_row_index]
+                label_name = "Unknown_Label"
+        else:
+            # Normal sheet → take first non-date column name
+            label_candidates = [c for c in colnames if "date" not in c.lower()]
+            label_name = label_candidates[0] if label_candidates else "Unknown_Label"
 
-                tidy_data_list = []
-                for col in range(df_raw.shape[1]):
-                    label = labels_row[col]
-                    if pd.notna(label):
-                        if col + 1 < df_raw.shape[1]:
-                            dates = df_raw.iloc[label_row_index + 1:, col]
-                            values = df_raw.iloc[label_row_index + 1:, col + 1]
-                            mask = dates.notna() & values.notna()
-                            dates = dates[mask]
-                            values = values[mask]
+        # Extract value
+        output_df = pd.DataFrame()
+        output_df["Date"] = data[date_col]
 
-                            temp_df = pd.DataFrame({
-                                "Date": dates,
-                                "Label": label,
-                                "Value": values
-                            })
-                            tidy_data_list.append(temp_df)
+        if special:
+            bid_col = next((c for c in colnames if "bid" in c.lower()), None)
+            ask_col = next((c for c in colnames if "ask" in c.lower()), None)
+            val_col = next((c for c in colnames if "value" in c.lower()), None)
 
-                if not tidy_data_list:
-                    print(f"⚠️ No valid data found in sheet '{sheet_name}'")
-                    continue
+            if bid_col and ask_col:
+                data["Avg"] = data.apply(lambda x: (to_num(x[bid_col]) + to_num(x[ask_col])) / 2 if pd.notnull(x[bid_col]) and pd.notnull(x[ask_col]) else None, axis=1)
+                output_df["Value"] = data["Avg"]
+                print(f"    ✅ Found Bid/Ask columns → Averaged. Sample avg: {output_df['Value'].dropna().head(1).tolist()}")
+            elif val_col:
+                output_df["Value"] = data[val_col]
+                print(f"    ⚠️ Found single 'Value' column only.")
+            else:
+                print(f"    ⚠️ No Bid/Ask/Value columns found — skipped.")
+                continue
+        else:
+            # Normal sheet
+            val_col = [c for c in colnames if c != date_col][0]
+            output_df["Value"] = data[val_col]
+            print(f"    ✅ Normal sheet processed. Label: {label_name}")
 
-                final_df = pd.concat(tidy_data_list, ignore_index=True)
-                final_df["Date"] = pd.to_datetime(final_df["Date"], errors='coerce')
-                final_df = final_df.sort_values("Date").reset_index(drop=True)
+        # Add label column
+        output_df["Label"] = label_name
+        output_df = output_df[["Date", "Label", "Value"]]
 
-            # ------------------------------------------------------
-            # 💾 Save output as the sheet name only
-            # ------------------------------------------------------
-            safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
-            output_filename = f"{safe_sheet_name}.csv"
+        # Save output CSV named after sheet
+        out_filename = f"{sheet}.csv"
+        with output_folder.get_writer(out_filename) as writer:
+            output_df.to_csv(writer, index=False)
 
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-                final_df.to_csv(tmp_file.name, index=False)
-                with open(tmp_file.name, "rb") as f:
-                    output_folder.upload_stream(output_filename, f)
-                os.remove(tmp_file.name)
+        print(f"    💾 Saved output: {out_filename}")
 
-            print(f"✅ Sheet '{sheet_name}' saved as CSV: {output_filename}")
-
-        os.remove(tmp_path)
-        print(f"🏁 Completed processing for file: {file_name}")
-
-
-# ------------------------------------------------------
-if __name__ == "__main__":
-    main()
+print("\n✅ All sheets processed successfully.")
