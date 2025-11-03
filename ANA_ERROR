@@ -1,150 +1,121 @@
 import pandas as pd
 import dataiku
-import io
+import tempfile
 import os
+from datetime import datetime
 
 # ------------------------------------------------------
-# ⚙️ CONFIGURATION
+# 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("INPUT_FOLDER_ID")    # 📥 Replace with your input folder ID
-output_folder = dataiku.Folder("OUTPUT_FOLDER_ID")  # 📤 Replace with your output folder ID
+input_folder = dataiku.Folder("XXXXXXXX")      # 📥 Input folder
+output_folder = dataiku.Folder("XXXXXXXX")    # 📤 Output folder
 
-# Define the start and end date range
-start_date = "2024-09-01"
-end_date = "2025-08-31"
-
-# Common possible date column names
-possible_date_columns = [
-    "FileDate", "Date", "file_date", "RunDate", "AsOfDate", "ReportDate"
-]
+# List of sheet names to skip
+EXCEPTION_SHEETS = ["Tracking Sheet", "FXO VOLS FBIL Realtime", "FXO VOLS Refinitiv Realtime"]  # add any sheet names you want to ignore
 
 # ------------------------------------------------------
-# 📂 PROCESS EACH FILE IN INPUT FOLDER
+# 🧠 Helper Functions
 # ------------------------------------------------------
-input_files = input_folder.list_paths_in_partition()
-print(f"\n📁 Found {len(input_files)} files in the input folder.")
+def looks_like_date(val):
+    """Check if a value looks like a date"""
+    if isinstance(val, (pd.Timestamp, datetime)):
+        return True
+    if isinstance(val, str):
+        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
+            try:
+                datetime.strptime(val.strip(), fmt)
+                return True
+            except:
+                continue
+    return False
 
-summary_records = []
-
-for file_path in input_files:
-    file_name = os.path.basename(file_path)
-    print(f"\n🔍 Processing file: {file_name}")
-
-    # ------------------------------------------------------
-    # 🏖️ Define holidays based on filename (HARDCODED)
-    # ------------------------------------------------------
-    if "India" in file_name:
-        holidays = [
-            "2024-10-02", "2024-10-31", "2024-12-25",
-            "2025-01-26", "2025-08-15"
-        ]
-        country = "India"
-
-    elif "HongKong" in file_name or "HK" in file_name:
-        holidays = [
-            "2024-09-18", "2024-10-01", "2024-12-25",
-            "2025-01-01", "2025-07-01"
-        ]
-        country = "HongKong"
-
-    elif "Singapore" in file_name or "SG" in file_name:
-        holidays = [
-            "2024-11-01", "2024-12-25", "2025-01-01",
-            "2025-04-18", "2025-05-01"
-        ]
-        country = "Singapore"
-
-    else:
-        holidays = [
-            "2024-09-18", "2024-10-01", "2024-10-11",
-            "2024-12-25", "2025-01-01"
-        ]
-        country = "Default"
-
-    print(f"🌍 Using holidays for: {country}")
-
-    # ------------------------------------------------------
-    # 🧮 Generate working day list for this file
-    # ------------------------------------------------------
-    date_range = pd.date_range(start=start_date, end=end_date).date
-    valid_dates = [d for d in date_range if d.weekday() < 5 and str(d) not in holidays]
-
-    # ------------------------------------------------------
-    # 📥 Read file from input folder
-    # ------------------------------------------------------
-    with input_folder.get_download_stream(file_path) as stream:
-        if file_name.lower().endswith(".csv"):
-            df = pd.read_csv(stream)
-        elif file_name.lower().endswith((".xls", ".xlsx")):
-            df = pd.read_excel(stream, engine="openpyxl")
-        else:
-            print(f"⚠️ Skipping unsupported file type: {file_name}")
-            continue
-
-    # ------------------------------------------------------
-    # 🔍 Detect date column
-    # ------------------------------------------------------
-    date_col = None
-    for col in df.columns:
-        if col.strip() in possible_date_columns:
-            date_col = col
-            break
-        if any(keyword.lower() in col.lower() for keyword in ["date", "filedate", "asof"]):
-            date_col = col
-            break
-
-    if not date_col:
-        print(f"⚠️ No date column found in {file_name}, skipping.")
-        continue
-
-    print(f"📅 Using date column: {date_col}")
-
-    # ------------------------------------------------------
-    # 🧾 Process completeness
-    # ------------------------------------------------------
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.date
-    file_dates = set(df[date_col].dropna())
-    missing_dates = [d for d in valid_dates if d not in file_dates]
-
-    result_df = pd.DataFrame(missing_dates, columns=["Missing Date"])
-    output_name = f"{os.path.splitext(file_name)[0]}_completeness.csv"
-
-    # ------------------------------------------------------
-    # 💾 Save output
-    # ------------------------------------------------------
-    with io.StringIO() as buffer:
-        result_df.to_csv(buffer, index=False)
-        output_folder.upload_stream(
-            output_name,
-            io.BytesIO(buffer.getvalue().encode("utf-8"))
-        )
-
-    # ------------------------------------------------------
-    # 📊 Summary
-    # ------------------------------------------------------
-    total_days = len(valid_dates)
-    missing_days = len(missing_dates)
-    completeness = round(((total_days - missing_days) / total_days) * 100, 2)
-
-    summary_records.append({
-        "File Name": file_name,
-        "Country": country,
-        "Total Working Days": total_days,
-        "Missing Days": missing_days,
-        "Completeness %": completeness
-    })
-
-    if missing_days == 0:
-        print(f"🎉 {file_name}: No missing working-day dates found.")
-    else:
-        print(f"📅 {file_name}: {missing_days} missing dates ({completeness}%)")
+def read_excel_safe(file_path):
+    """Read Excel using openpyxl engine for .xlsx"""
+    return pd.ExcelFile(file_path, engine="openpyxl")
 
 # ------------------------------------------------------
-# 🧾 Write Combined Summary File
+# 🚀 Main Execution
 # ------------------------------------------------------
-summary_df = pd.DataFrame(summary_records)
-with io.StringIO() as buffer:
-    summary_df.to_csv(buffer, index=False)
-    output_folder.upload_stream("completeness_summary.csv", io.BytesIO(buffer.getvalue().encode("utf-8")))
+def main():
+    input_files = input_folder.list_paths_in_partition()
+    if not input_files:
+        raise FileNotFoundError("❌ No files found in input folder!")
 
-print("\n✅ Completeness check finished for all files.")
+    for excel_file_info in input_files:
+        file_name = os.path.basename(excel_file_info)
+
+        # Download file to temporary location
+        with input_folder.get_download_stream(excel_file_info) as stream:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+                tmp.write(stream.read())
+                tmp_path = tmp.name
+
+        xls = read_excel_safe(tmp_path)
+
+        for sheet_name in xls.sheet_names:
+
+            # Skip sheets in the exception list
+            if sheet_name in EXCEPTION_SHEETS:
+                print(f"⏩ Skipping sheet '{sheet_name}' as it is in the exception list")
+                continue
+
+            df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
+
+            # Row 7 (index 6) contains labels
+            label_row_index = 6
+            labels_row = df_raw.iloc[label_row_index]
+
+            tidy_data_list = []
+
+            # Loop through all columns to find labels
+            for col in range(df_raw.shape[1]):
+                label = labels_row[col]
+
+                # Only process columns that have a label
+                if pd.notna(label):
+                    if col + 1 < df_raw.shape[1]:
+                        dates = df_raw.iloc[label_row_index + 1:, col]
+                        values = df_raw.iloc[label_row_index + 1:, col + 1]
+
+                        # Remove rows where dates or values are missing
+                        mask = dates.notna() & values.notna()
+                        dates = dates[mask]
+                        values = values[mask]
+
+                        temp_df = pd.DataFrame({
+                            "Date": dates,
+                            "Label": label,
+                            "Value": values
+                        })
+                        tidy_data_list.append(temp_df)
+
+            if not tidy_data_list:
+                print(f"⚠️ No valid data found in sheet '{sheet_name}'")
+                continue
+
+            # Concatenate all label blocks into one tidy DataFrame
+            final_df = pd.concat(tidy_data_list, ignore_index=True)
+
+            # Convert Date column to datetime
+            final_df["Date"] = pd.to_datetime(final_df["Date"], errors='coerce')
+
+            # Optional: sort by Date
+            final_df = final_df.sort_values("Date").reset_index(drop=True)
+
+            # Save to CSV in Dataiku output folder using the sheet name
+            safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+                final_df.to_csv(tmp_file.name, index=False)
+                with open(tmp_file.name, "rb") as f:
+                    output_folder.upload_stream(f"{safe_sheet_name}.csv", f)
+                os.remove(tmp_file.name)
+
+            print(f"✅ Sheet '{sheet_name}' saved as CSV: {safe_sheet_name}.csv")
+
+        # Cleanup temporary Excel
+        os.remove(tmp_path)
+        print(f"✅ Processing complete for file: {file_name}")
+
+# ------------------------------------------------------
+if __name__ == "__main__":
+    main()
