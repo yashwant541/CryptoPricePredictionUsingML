@@ -144,13 +144,15 @@ def main():
 
     for excel_file_info in input_files:
         file_name = os.path.basename(excel_file_info)
+        print(f"📂 Detected file: {file_name}")  # 👀 Debug print
+
         with input_folder.get_download_stream(excel_file_info) as stream:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
                 tmp.write(stream.read())
                 tmp_path = tmp.name
 
-        # ✅ Choose logic based on filename
-        if any(tag in file_name for tag in in_style_files):
+        # ✅ Case-insensitive match for in_style_files
+        if any(tag.lower() in file_name.lower() for tag in in_style_files):
             process_in_style_file(tmp_path, file_name)
         else:
             process_generic_file(tmp_path, file_name)
