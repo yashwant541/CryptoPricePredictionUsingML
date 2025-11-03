@@ -2,120 +2,96 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
-from datetime import datetime
+import re
 
 # ------------------------------------------------------
 # 🔧 Configuration — Replace with your Dataiku folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXXX")      # 📥 Input folder
-output_folder = dataiku.Folder("XXXXXXXX")    # 📤 Output folder
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # 📥 Input folder
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID") # 📤 Output folder
 
-# List of sheet names to skip
-EXCEPTION_SHEETS = ["Tracking Sheet", "FXO VOLS FBIL Realtime", "FXO VOLS Refinitiv Realtime"]  # add any sheet names you want to ignore
-
-# ------------------------------------------------------
-# 🧠 Helper Functions
-# ------------------------------------------------------
-def looks_like_date(val):
-    """Check if a value looks like a date"""
-    if isinstance(val, (pd.Timestamp, datetime)):
-        return True
-    if isinstance(val, str):
-        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
-            try:
-                datetime.strptime(val.strip(), fmt)
-                return True
-            except:
-                continue
-    return False
-
-def read_excel_safe(file_path):
-    """Read Excel using openpyxl engine for .xlsx"""
-    return pd.ExcelFile(file_path, engine="openpyxl")
+# 🧩 Filenames (or partial matches) that follow BID/ASK logic
+in_style_files = ["IN"]  # You can add more like ["IN", "SG", "HK"]
 
 # ------------------------------------------------------
-# 🚀 Main Execution
+# 🧠 Helper functions
 # ------------------------------------------------------
-def main():
-    input_files = input_folder.list_paths_in_partition()
-    if not input_files:
-        raise FileNotFoundError("❌ No files found in input folder!")
 
-    for excel_file_info in input_files:
-        file_name = os.path.basename(excel_file_info)
+def process_generic_file(file_path):
+    """Process normal files (single value columns)"""
+    xls = pd.ExcelFile(file_path)
+    for sheet in xls.sheet_names:
+        df = pd.read_excel(xls, sheet_name=sheet, header=None)
 
-        # Download file to temporary location
-        with input_folder.get_download_stream(excel_file_info) as stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-                tmp.write(stream.read())
-                tmp_path = tmp.name
+        # Drop empty rows and columns
+        df = df.dropna(how='all').dropna(axis=1, how='all')
+        if df.empty:
+            continue
 
-        xls = read_excel_safe(tmp_path)
+        # Find the first header row that contains "Period" or "Approval"
+        header_row = df.index[df.apply(lambda x: x.astype(str).str.contains("Period", case=False)).any(axis=1)]
+        if len(header_row) == 0:
+            continue
+        header_row = header_row[0]
 
-        for sheet_name in xls.sheet_names:
+        # Read table with correct header
+        df = pd.read_excel(xls, sheet_name=sheet, header=header_row)
 
-            # Skip sheets in the exception list
-            if sheet_name in EXCEPTION_SHEETS:
-                print(f"⏩ Skipping sheet '{sheet_name}' as it is in the exception list")
-                continue
+        # Fill Approval Date until Period value changes
+        if "Approval Date" in df.columns and "Period" in df.columns:
+            df["Approval Date"] = df["Approval Date"].ffill()
 
-            df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
+        # Save as file_name + "_" + sheet_name
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        out_name = f"{base_name}_{sheet}.csv"
 
-            # Row 7 (index 6) contains labels
-            label_row_index = 6
-            labels_row = df_raw.iloc[label_row_index]
+        tmp_path = os.path.join(tempfile.gettempdir(), out_name)
+        df.to_csv(tmp_path, index=False)
+        output_folder.upload_stream(out_name, open(tmp_path, "rb"))
 
-            tidy_data_list = []
 
-            # Loop through all columns to find labels
-            for col in range(df_raw.shape[1]):
-                label = labels_row[col]
+def process_in_style_file(file_path):
+    """Process IN-style files (with BID and ASK columns)"""
+    xls = pd.ExcelFile(file_path)
+    for sheet in xls.sheet_names:
+        df = pd.read_excel(xls, sheet_name=sheet, header=None)
 
-                # Only process columns that have a label
-                if pd.notna(label):
-                    if col + 1 < df_raw.shape[1]:
-                        dates = df_raw.iloc[label_row_index + 1:, col]
-                        values = df_raw.iloc[label_row_index + 1:, col + 1]
+        # Drop empty rows/columns
+        df = df.dropna(how='all').dropna(axis=1, how='all')
+        if df.empty:
+            continue
 
-                        # Remove rows where dates or values are missing
-                        mask = dates.notna() & values.notna()
-                        dates = dates[mask]
-                        values = values[mask]
+        # Detect header row
+        header_row = df.index[df.apply(lambda x: x.astype(str).str.contains("Period", case=False)).any(axis=1)]
+        if len(header_row) == 0:
+            continue
+        header_row = header_row[0]
 
-                        temp_df = pd.DataFrame({
-                            "Date": dates,
-                            "Label": label,
-                            "Value": values
-                        })
-                        tidy_data_list.append(temp_df)
+        df = pd.read_excel(xls, sheet_name=sheet, header=header_row)
 
-            if not tidy_data_list:
-                print(f"⚠️ No valid data found in sheet '{sheet_name}'")
-                continue
+        # Fill Approval Date by Period blocks (same logic as generic)
+        if "Approval Date" in df.columns and "Period" in df.columns:
+            df["Approval Date"] = df["Approval Date"].ffill()
 
-            # Concatenate all label blocks into one tidy DataFrame
-            final_df = pd.concat(tidy_data_list, ignore_index=True)
+        # Keep both BID and ASK columns as-is, no sorting (original order preserved)
 
-            # Convert Date column to datetime
-            final_df["Date"] = pd.to_datetime(final_df["Date"], errors='coerce')
+        # Save as file_name + "_" + sheet_name
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        out_name = f"{base_name}_{sheet}.csv"
 
-            # Optional: sort by Date
-            final_df = final_df.sort_values("Date").reset_index(drop=True)
+        tmp_path = os.path.join(tempfile.gettempdir(), out_name)
+        df.to_csv(tmp_path, index=False)
+        output_folder.upload_stream(out_name, open(tmp_path, "rb"))
 
-            # Save to CSV in Dataiku output folder using the sheet name
-            safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-                final_df.to_csv(tmp_file.name, index=False)
-                with open(tmp_file.name, "rb") as f:
-                    output_folder.upload_stream(f"{safe_sheet_name}.csv", f)
-                os.remove(tmp_file.name)
-
-            print(f"✅ Sheet '{sheet_name}' saved as CSV: {safe_sheet_name}.csv")
-
-        # Cleanup temporary Excel
-        os.remove(tmp_path)
-        print(f"✅ Processing complete for file: {file_name}")
 
 # ------------------------------------------------------
-if __name__ == "__main__":
-    main()
+# 🚀 Main execution
+# ------------------------------------------------------
+for file_info in input_folder.list_paths_in_partition():
+    file_path = input_folder.get_path(file_info)
+    file_name = os.path.basename(file_path)
+
+    if any(tag in file_name for tag in in_style_files):
+        process_in_style_file(file_path)
+    else:
+        process_generic_file(file_path)
