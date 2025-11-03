@@ -48,7 +48,7 @@ def main():
         # ------------------------------------------------------
         # 🧠 Read data and process
         # ------------------------------------------------------
-        df = pd.read_csv(tmp_path, dtype=str)  # preserve all formatting
+        df = pd.read_csv(tmp_path, dtype=str)  # preserve text formatting
 
         if "Tenor" not in df.columns:
             raise ValueError(f"❌ Column 'Tenor' not found in file {file_name}")
@@ -62,6 +62,15 @@ def main():
             .str.replace("VOL", "", regex=False)
             .str.strip()
         )
+
+        # ------------------------------------------------------
+        # 🔁 Replace Type values based on mapping
+        # ------------------------------------------------------
+        type_mapping = {
+            "ATM": "O",
+            "BF": "SG"
+        }
+        df["Type"] = df["Type"].replace(type_mapping)
 
         # ------------------------------------------------------
         # 💾 Save processed file to output folder
