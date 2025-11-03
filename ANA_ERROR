@@ -9,6 +9,11 @@ import os
 input_folder = dataiku.Folder("XXXXXXXXX")      # 📥 Input folder
 output_folder = dataiku.Folder("XXXXXXXXX")     # 📤 Output folder
 
+# ------------------------------------------------------
+# 🧾 Global Variable — Input file to process
+# ------------------------------------------------------
+FILENAME_TO_PROCESS = "Filename.csv"  # 👈 Change this filename as needed
+
 
 # ------------------------------------------------------
 # 🚀 Main Execution
@@ -19,14 +24,18 @@ def main():
     if not input_files:
         raise FileNotFoundError("❌ No files found in input folder!")
 
+    processed = False
+
     for file_path in input_files:
         file_name = os.path.basename(file_path)
-        print(f"\n📄 Processing file: {file_name}")
+        print(f"\n📄 Checking file: {file_name}")
 
-        # Only process Filename.csv (as per your requirement)
-        if file_name.lower() != "filename.csv":
-            print(f"⏩ Skipping {file_name} (not 'Filename.csv')")
+        # Only process the matching file
+        if file_name.lower() != FILENAME_TO_PROCESS.lower():
+            print(f"⏩ Skipping {file_name} (not '{FILENAME_TO_PROCESS}')")
             continue
+
+        print(f"✅ Found target file: {file_name}")
 
         # ------------------------------------------------------
         # 📥 Download the file to a temporary location
@@ -39,14 +48,20 @@ def main():
         # ------------------------------------------------------
         # 🧠 Read data and process
         # ------------------------------------------------------
-        df = pd.read_csv(tmp_path, dtype=str)  # preserve text formatting
+        df = pd.read_csv(tmp_path, dtype=str)  # preserve all formatting
 
         if "Tenor" not in df.columns:
             raise ValueError(f"❌ Column 'Tenor' not found in file {file_name}")
 
-        # Split into Tenure (rightmost 2 chars) and Type (remaining part without 'VOL')
+        # Split logic
         df["Tenure"] = df["Tenor"].astype(str).str[-2:]
-        df["Type"] = df["Tenor"].astype(str).str[:-2].str.replace("VOL", "", regex=False).str.strip()
+        df["Type"] = (
+            df["Tenor"]
+            .astype(str)
+            .str[:-2]
+            .str.replace("VOL", "", regex=False)
+            .str.strip()
+        )
 
         # ------------------------------------------------------
         # 💾 Save processed file to output folder
@@ -60,9 +75,13 @@ def main():
             os.remove(tmp_file.name)
 
         os.remove(tmp_path)
+        processed = True
         print(f"✅ Processed and saved as: {output_filename}")
 
-    print("\n🏁 Completed processing all matching files.")
+    if not processed:
+        print(f"⚠️ No file named '{FILENAME_TO_PROCESS}' was found in the input folder.")
+    else:
+        print("\n🏁 Completed processing successfully.")
 
 
 # ------------------------------------------------------
