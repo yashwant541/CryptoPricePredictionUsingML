@@ -1,133 +1,67 @@
 import pandas as pd
 import dataiku
-import tempfile
-import os
 
 # ------------------------------------------------------
-# 🔧 Configuration — Replace with your Dataiku folder IDs
+# ⚙️ CONFIGURATION
 # ------------------------------------------------------
-input_folder = dataiku.Folder("IEHxZtxh")      # 📥 Input folder
-output_folder = dataiku.Folder("dyonHS8r")     # 📤 Output folder
+# Replace with your actual dataset names in Dataiku
+input_dataset = "MakerCheckerSuccess_Processed"   # e.g. name of the uploaded CSV dataset
+output_dataset = "CompletenesCheckResults"  # e.g. name of output dataset
 
-# ------------------------------------------------------
-# 🧩 Helper Functions
-# ------------------------------------------------------
-def fill_approval_dates(df):
-    """
-    Fill 'Approval Date' downward until the next Period value appears.
-    """
-    if "Period" not in df.columns or "Approval Date" not in df.columns:
-        return df
+# Define the start and end date range
+start_date = "2024-09-01"
+end_date = "2025-08-31"
 
-    current_date = None
-    for i in range(len(df)):
-        # When there's a new approval date, update it
-        if pd.notna(df.at[i, "Approval Date"]):
-            current_date = df.at[i, "Approval Date"]
+# Define the date column name in your CSV
+date_column = "FileDate"
 
-        # When there's a new Period, we start a new section but reuse current_date
-        if pd.notna(df.at[i, "Period"]):
-            # keep same date if not overwritten by a new one
-            if pd.isna(df.at[i, "Approval Date"]) and current_date is not None:
-                df.at[i, "Approval Date"] = current_date
-        else:
-            # continue filling down
-            if pd.isna(df.at[i, "Approval Date"]) and current_date is not None:
-                df.at[i, "Approval Date"] = current_date
-
-    return df
-
-
-def clean_table(df):
-    """Cleans, fills merged cells, and prepares final structured table"""
-
-    # Drop completely empty rows & columns
-    df = df.dropna(how="all").dropna(axis=1, how="all")
-
-    # Clean column names
-    df.columns = df.columns.astype(str).str.strip()
-
-    # 🔹 Forward-fill Period and Benchmark(s)
-    for col in ["Period", "Benchmark(s)"]:
-        if col in df.columns:
-            df[col] = df[col].ffill()
-
-    # 🔹 Fill Approval Date until next Period
-    if "Approval Date" in df.columns:
-        df = fill_approval_dates(df)
-
-    # 🔹 Drop rows where Tenor/MVT are blank
-    key_cols = [c for c in ["Tenor", "MVT", "MVT (Before)"] if c in df.columns]
-    if key_cols:
-        df = df.dropna(subset=key_cols, how="all")
-
-    return df
-
+# List of holidays (YYYY-MM-DD)
+holidays = [
+    '2024-09-18', '2024-10-01', '2024-10-11', '2024-12-25', '2024-12-26', '2025-01-01', '2025-01-29', 
+    '2025-01-30', '2025-01-31', '2025-04-04', '2025-04-18', '2025-04-19', '2025-04-21', '2025-05-01', 
+    '2025-05-05', '2025-05-31', '2025-07-01'
+]
 
 # ------------------------------------------------------
-# 🚀 Main Execution
+# 📥 READ INPUT DATASET
 # ------------------------------------------------------
-def main():
-    input_files = input_folder.list_paths_in_partition()
-    if not input_files:
-        raise FileNotFoundError("❌ No Excel files found in input folder!")
-
-    for file_path in input_files:
-        file_name = os.path.basename(file_path)
-        base_name = os.path.splitext(file_name)[0]
-        print(f"\n📄 Processing file: {file_name}")
-
-        # Download Excel file temporarily
-        with input_folder.get_download_stream(file_path) as stream:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-                tmp.write(stream.read())
-                tmp_path = tmp.name
-
-        # Load Excel workbook
-        xls = pd.ExcelFile(tmp_path, engine="openpyxl")
-        print(f"📘 Found sheets: {xls.sheet_names}")
-
-        for sheet_name in xls.sheet_names:
-            print(f"🔹 Reading sheet: {sheet_name}")
-
-            # Read Excel (skip first empty row)
-            df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, skiprows=1, engine="openpyxl")
-
-            # Drop first column if it's blank
-            if df_raw.shape[1] > 0 and df_raw.iloc[:, 0].isna().all():
-                df_raw = df_raw.drop(df_raw.columns[0], axis=1)
-
-            # Skip empty sheets
-            if df_raw.empty:
-                print(f"⚠️ Sheet '{sheet_name}' is empty, skipping.")
-                continue
-
-            # Clean and structure
-            df_clean = clean_table(df_raw)
-
-            if df_clean.empty:
-                print(f"⚠️ No valid data found in sheet '{sheet_name}', skipping.")
-                continue
-
-            # Output file name → filename + sheet name
-            safe_sheet_name = "".join(c if c.isalnum() else "_" for c in sheet_name)
-            output_filename = f"{base_name}_{safe_sheet_name}_cleaned.csv"
-
-            # Save cleaned output to Dataiku folder
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_csv:
-                df_clean.to_csv(tmp_csv.name, index=False)
-                tmp_csv.close()
-                with open(tmp_csv.name, "rb") as f:
-                    output_folder.upload_stream(output_filename, f)
-                os.remove(tmp_csv.name)
-
-            print(f"✅ Saved cleaned sheet → {output_filename}")
-
-        os.remove(tmp_path)
-        print(f"🏁 Completed processing file: {file_name}")
-
-    print("\n🎉 All Excel sheets processed and saved successfully!")
+df = dataiku.Dataset(input_dataset).get_dataframe()
 
 # ------------------------------------------------------
-if __name__ == "__main__":
-    main()
+# 🧮 PROCESS DATA
+# ------------------------------------------------------
+# Convert 'File Date' to date
+df[date_column] = pd.to_datetime(df[date_column], errors="coerce").dt.date
+
+# Generate full date range
+date_range = pd.date_range(start=start_date, end=end_date).date
+
+# Filter only weekdays and exclude holidays
+valid_dates = [
+    d for d in date_range
+    if d.weekday() < 5 and str(d) not in holidays
+]
+
+# Get list of available dates in the dataset
+file_dates = set(df[date_column].dropna())
+
+# Identify missing working dates
+missing_dates = [d for d in valid_dates if d not in file_dates]
+
+# Prepare result DataFrame
+result_df = pd.DataFrame(missing_dates, columns=["Missing Date"])
+
+# ------------------------------------------------------
+# 💾 WRITE OUTPUT DATASET
+# ------------------------------------------------------
+dataiku.Dataset(output_dataset).write_with_schema(result_df)
+
+# ------------------------------------------------------
+# 🪶 LOG OUTPUT
+# ------------------------------------------------------
+if result_df.empty:
+    print("\n🎉 No missing working-day dates found!")
+else:
+    print("\n📅 Missing non-weekend, non-holiday dates:")
+    for d in missing_dates:
+        print(d)
