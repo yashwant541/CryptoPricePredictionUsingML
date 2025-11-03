@@ -71,24 +71,16 @@ def main():
             print(f"\n📄 Processing sheet: {sheet_name}")
 
             # ------------------------------------------------------
-            # SPECIAL SHEETS (Bid/Ask)
+            # 🧩 Special Bid/Ask Sheet
             # ------------------------------------------------------
             if sheet_is_special(sheet_name):
                 print(f"⚙️  Detected special Bid/Ask structure in sheet '{sheet_name}'")
 
                 df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
 
-                # ✅ NEW: Capture label from row 7 (index 6)
-                label_from_row7 = None
-                if df_raw.shape[0] > 6:
-                    row7 = df_raw.iloc[6].dropna()
-                    if not row7.empty:
-                        label_from_row7 = str(row7.iloc[0]).strip()
-                        print(f"📛 Label found in row 7: {label_from_row7}")
-                    else:
-                        label_from_row7 = "Unknown_Label"
-                else:
-                    label_from_row7 = "Unknown_Label"
+                # Capture labels from row 7 (index 6)
+                label_row_index = 6
+                labels_row = df_raw.iloc[label_row_index]
 
                 # Start reading from row 10 (index 9)
                 df_data = df_raw.iloc[9:].reset_index(drop=True)
@@ -111,6 +103,14 @@ def main():
                         next_cols = df_data.iloc[:, col_index + 1:col_index + 3]
                         possible_cols = list(next_cols.columns)
 
+                        # Determine label based on header row (row 7)
+                        label_col = col_index + 1  # typically Bid starts next to Date
+                        label = None
+                        if label_col < len(labels_row):
+                            label = labels_row.iloc[label_col]
+                        if pd.isna(label):
+                            label = f"Label_{col_index}"
+
                         # Case A: Date, Bid, Ask present
                         if len(possible_cols) >= 2 and not df_data[possible_cols[0]].dropna().empty and not df_data[possible_cols[1]].dropna().empty:
                             has_bidask = True
@@ -120,11 +120,8 @@ def main():
                                 "Ask": df_data.iloc[:, col_index + 2],
                             })
                             temp_df = temp_df[temp_df["Date"].notna()]
-                            temp_df["Value"] = (
-                                pd.to_numeric(temp_df["Bid"], errors="coerce")
-                                + pd.to_numeric(temp_df["Ask"], errors="coerce")
-                            ) / 2
-                            print(f"✅ Found Bid/Ask columns — Doing average of Bid and Ask — Average value now is ≈ {round(temp_df['Value'].mean(skipna=True), 6)}")
+                            temp_df["Value"] = (pd.to_numeric(temp_df["Bid"], errors="coerce") + pd.to_numeric(temp_df["Ask"], errors="coerce")) / 2
+                            print(f"✅ Found Bid/Ask columns for '{label}' — Doing average of Bid and Ask — Average value now is ≈ {round(temp_df['Value'].mean(skipna=True), 6)}")
 
                         # Case B: Date, Value only
                         else:
@@ -133,10 +130,9 @@ def main():
                                 "Value": df_data.iloc[:, col_index + 1],
                             })
                             temp_df = temp_df[temp_df["Date"].notna()]
-                            print(f"⚠️ No Ask column found — using single Value column.")
+                            print(f"⚠️ No Ask column found for '{label}' — using single Value column.")
 
-                        # ✅ Use the label captured from row 7
-                        temp_df["Label"] = label_from_row7
+                        temp_df["Label"] = label
                         tidy_data_list.append(temp_df)
                         col_index += 3
                     else:
@@ -156,7 +152,7 @@ def main():
                     print(f"⚠️ Bid/Ask values not found — used single Value structure instead")
 
             # ------------------------------------------------------
-            # NORMAL SHEETS (unchanged)
+            # 📊 Normal Sheet
             # ------------------------------------------------------
             else:
                 df_raw = pd.read_excel(tmp_path, sheet_name=sheet_name, header=None, engine="openpyxl")
