@@ -2,6 +2,7 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
+import shutil
 
 # ------------------------------------------------------
 # 🔧 Configuration
@@ -10,59 +11,63 @@ input_folder = dataiku.Folder("XXXXXX")   # 📥 Folder containing the 3 MVT piv
 output_folder = dataiku.Folder("YYYYYY")  # 📤 Folder to save filtered outputs
 
 # ------------------------------------------------------
-# 🧠 Helper: Keep only first + change rows, sorted oldest → latest
+# 🧠 Helper: Keep only first + change rows
 # ------------------------------------------------------
 def keep_change_rows(df):
     df = df.copy()
+    df = df.sort_values(by="Date")
+    df = df.reset_index(drop=True)
 
-    # Parse and sort by date (handle formats like dd-mm-yyyy)
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True)
-    df = df.sort_values(by="Date").reset_index(drop=True)
-
-    # Compare each row with the previous row across tenor columns
+    # Compare each row with the previous row across all tenor columns
     change_mask = (df.iloc[:, 1:] != df.iloc[:, 1:].shift()).any(axis=1)
 
-    # Always keep first row + rows where MVT changed
+    # Always keep the first row + rows where any tenor MVT value changes
     keep_rows = change_mask | (df.index == 0)
-    filtered = df.loc[keep_rows].reset_index(drop=True)
-
-    # Format date back to string for output
-    filtered["Date"] = filtered["Date"].dt.strftime("%d-%m-%Y")
-
-    return filtered
+    return df.loc[keep_rows].reset_index(drop=True)
 
 # ------------------------------------------------------
-# 🚀 Process each file in input folder
+# Process each file
 # ------------------------------------------------------
-for file_info in input_folder.list_paths_in_partition():
-    filename = os.path.basename(file_info)
+for file_path in input_folder.list_paths_in_partition():
+    filename = os.path.basename(file_path)
 
-    # Process only Excel or CSV files
+    # Process only Excel or CSV pivot outputs
     if not (filename.lower().endswith(".xlsx") or filename.lower().endswith(".csv")):
         continue
 
     print(f"📄 Processing file: {filename}")
 
-    # Read input file
+    # --------------------------------------------------
+    # 📥 Read the file safely from Dataiku stream
+    # --------------------------------------------------
+    tmp_input = tempfile.NamedTemporaryFile(delete=False)
     with input_folder.get_download_stream(filename) as stream:
-        if filename.lower().endswith(".xlsx"):
-            df = pd.read_excel(stream, dtype=str)
-        else:
-            df = pd.read_csv(stream, dtype=str)
+        shutil.copyfileobj(stream, tmp_input)
+    tmp_input.close()
 
-    # Convert numeric columns (skip Date)
+    if filename.lower().endswith(".xlsx"):
+        df = pd.read_excel(tmp_input.name, dtype=str)
+    else:
+        df = pd.read_csv(tmp_input.name, dtype=str)
+
+    os.unlink(tmp_input.name)  # clean temp file
+
+    # --------------------------------------------------
+    # 🔢 Convert numeric columns (skip Date)
+    # --------------------------------------------------
     for col in df.columns[1:]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Apply change detection logic
+    # --------------------------------------------------
+    # 🧩 Apply change-detection logic
+    # --------------------------------------------------
     filtered_df = keep_change_rows(df)
 
     # --------------------------------------------------
     # 💾 Save filtered output
     # --------------------------------------------------
     output_filename = (
-        filename.replace(".xlsx", "_Filtered.xlsx")
-                .replace(".csv", "_Filtered.csv")
+        filename.replace(".xlsx", "_Filtered.xlsx").replace(".csv", "_Filtered.csv")
     )
     tmp_dir = tempfile.mkdtemp()
     tmp_path = os.path.join(tmp_dir, output_filename)
@@ -77,4 +82,4 @@ for file_info in input_folder.list_paths_in_partition():
 
     print(f"✅ Saved filtered output: {output_filename}")
 
-print("🎯 Completed filtering — oldest to latest, only change-date rows kept.")
+print("🎯 Completed filtering — only date-change rows kept.")
