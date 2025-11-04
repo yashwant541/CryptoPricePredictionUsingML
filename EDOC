@@ -1,41 +1,75 @@
 import os
 import zipfile
+import shutil
+import tempfile
+import py7zr
+import patoolib
 
 # ------------------------------------------------------------
 # 🧭 USER INPUTS (Interactive)
 # ------------------------------------------------------------
 source_folder = input("Enter the folder path containing ZIP files: ").strip()
 destination_folder = input("Enter the folder path where extracted Excel files should be saved: ").strip()
-keyword = "Origami"  # Keyword to search for in filenames
+keyword = "Origami"  # keyword to search in filenames
 
 # ------------------------------------------------------------
-# 🚀 PROCESS
+# 🛠️ Ensure destination exists
 # ------------------------------------------------------------
-# Validate source folder
-if not os.path.isdir(source_folder):
-    print("❌ The source folder path is invalid.")
-    exit()
-
-# Ensure destination exists
 os.makedirs(destination_folder, exist_ok=True)
 
-# Loop through all ZIP files in source folder
+# ------------------------------------------------------------
+# 🧩 Helper: Extract a single archive robustly
+# ------------------------------------------------------------
+def safe_extract(archive_path, extract_to):
+    """Try multiple extraction methods for ZIP/7z/RAR files."""
+    tmp_dir = tempfile.mkdtemp()
+    extracted_files = []
+
+    try:
+        # Try Python zipfile first
+        with zipfile.ZipFile(archive_path, "r") as zip_ref:
+            zip_ref.extractall(tmp_dir)
+            extracted_files = [os.path.join(tmp_dir, n) for n in zip_ref.namelist()]
+    except Exception as e_zip:
+        try:
+            # Try 7z extractor
+            with py7zr.SevenZipFile(archive_path, mode='r') as z:
+                z.extractall(path=tmp_dir)
+                # Collect all extracted files
+                for root, _, files in os.walk(tmp_dir):
+                    extracted_files.extend([os.path.join(root, f) for f in files])
+        except Exception as e_7z:
+            try:
+                # Try patool (universal fallback)
+                patoolib.extract_archive(archive_path, outdir=tmp_dir, verbosity=-1)
+                for root, _, files in os.walk(tmp_dir):
+                    extracted_files.extend([os.path.join(root, f) for f in files])
+            except Exception as e_patool:
+                print(f"❌ Could not extract {os.path.basename(archive_path)} using any method.")
+                print(f"   Errors: zip={e_zip}, 7z={e_7z}, patool={e_patool}")
+                shutil.rmtree(tmp_dir)
+                return []
+
+    return extracted_files
+
+
+# ------------------------------------------------------------
+# 🚀 PROCESS EACH ZIP FILE
+# ------------------------------------------------------------
 for file in os.listdir(source_folder):
     if file.lower().endswith(".zip"):
         zip_path = os.path.join(source_folder, file)
-        print(f"\n📦 Processing ZIP: {file}")
+        print(f"\n📦 Processing archive: {file}")
 
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                # Iterate through files inside ZIP
-                for member in zip_ref.namelist():
-                    # Check if it's an Excel file with the keyword
-                    if keyword.lower() in member.lower() and (member.lower().endswith('.xlsx') or member.lower().endswith('.xls')):
-                        # Extract to destination folder
-                        extracted_path = zip_ref.extract(member, destination_folder)
-                        print(f"✅ Extracted: {os.path.basename(extracted_path)}")
-        except Exception as e:
-            print(f"❌ Error processing {file}: {e}")
+        extracted_files = safe_extract(zip_path, destination_folder)
 
-print("\n🎉 Extraction complete! All Origami Excel files are saved in:")
+        for ef in extracted_files:
+            if keyword.lower() in os.path.basename(ef).lower() and (ef.lower().endswith(".xlsx") or ef.lower().endswith(".xls")):
+                try:
+                    shutil.copy2(ef, destination_folder)
+                    print(f"✅ Extracted: {os.path.basename(ef)}")
+                except Exception as e:
+                    print(f"⚠️ Could not copy {ef}: {e}")
+
+print("\n🎉 Extraction complete! All matching Origami Excel files are in:")
 print(destination_folder)
