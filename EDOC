@@ -49,3 +49,23 @@ def safe_extract(archive_path):
 
 # ------------------------------------------------------------
 # 🚀 PROCESS EACH ARCHIVE
+# ------------------------------------------------------------
+for file in os.listdir(source_folder):
+    if file.lower().endswith(".zip"):
+        zip_path = os.path.join(source_folder, file)
+        print(f"\n📦 Processing archive: {file}")
+
+        extracted_files = safe_extract(zip_path)
+
+        for ef in extracted_files:
+            if keyword.lower() in os.path.basename(ef).lower() and (
+                ef.lower().endswith(".xlsx") or ef.lower().endswith(".xls")
+            ):
+                try:
+                    shutil.copy2(ef, destination_folder)
+                    print(f"✅ Extracted: {os.path.basename(ef)}")
+                except Exception as e:
+                    print(f"⚠️ Could not copy {ef}: {e}")
+
+print("\n🎉 Extraction complete! All Origami Excel files are in:")
+print(destination_folder)
