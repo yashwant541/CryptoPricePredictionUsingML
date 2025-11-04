@@ -1,123 +1,41 @@
 import os
-import pandas as pd
-import numpy as np
+import zipfile
 
-# ------------------------------------------------------
-# ⚙️ Configuration
-# ------------------------------------------------------
+# ------------------------------------------------------------
+# 🧭 USER INPUTS (Interactive)
+# ------------------------------------------------------------
+source_folder = input("Enter the folder path containing ZIP files: ").strip()
+destination_folder = input("Enter the folder path where extracted Excel files should be saved: ").strip()
+keyword = "Origami"  # Keyword to search for in filenames
 
-dataiku_mode = False  # 🔄 Set True if running inside Dataiku
+# ------------------------------------------------------------
+# 🚀 PROCESS
+# ------------------------------------------------------------
+# Validate source folder
+if not os.path.isdir(source_folder):
+    print("❌ The source folder path is invalid.")
+    exit()
 
-if dataiku_mode:
-    import dataiku
-    input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")
-    output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")
-    input_path = input_folder.get_path()
-    output_path = output_folder.get_path()
-else:
-    # Local paths
-    input_path = r"C:\path\to\input_folder"
-    output_path = r"C:\path\to\output_folder"
+# Ensure destination exists
+os.makedirs(destination_folder, exist_ok=True)
 
-# Define mappings manually
-A_cols = ["A1_colname", "A2_colname", "A3_colname", "A4_colname"]
-B_cols = ["B1_colname", "B2_colname", "B3_colname", "B4_colname"]
+# Loop through all ZIP files in source folder
+for file in os.listdir(source_folder):
+    if file.lower().endswith(".zip"):
+        zip_path = os.path.join(source_folder, file)
+        print(f"\n📦 Processing ZIP: {file}")
 
-# List of tuples for C columns (column name, category column name)
-C_cols = [
-    ("C1_colname", "C1_category_colname"),
-    ("C2_colname", "C2_category_colname"),
-    ("C3_colname", "C3_category_colname"),
-    ("C4_colname", "C4_category_colname")
-]
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                # Iterate through files inside ZIP
+                for member in zip_ref.namelist():
+                    # Check if it's an Excel file with the keyword
+                    if keyword.lower() in member.lower() and (member.lower().endswith('.xlsx') or member.lower().endswith('.xls')):
+                        # Extract to destination folder
+                        extracted_path = zip_ref.extract(member, destination_folder)
+                        print(f"✅ Extracted: {os.path.basename(extracted_path)}")
+        except Exception as e:
+            print(f"❌ Error processing {file}: {e}")
 
-# ------------------------------------------------------
-# 🧠 Helper Functions
-# ------------------------------------------------------
-
-def pick_value(a_val, b_val):
-    """Pick A if valid, else B. Return (value, source_tag)."""
-    if pd.notna(a_val) and str(a_val).strip().upper() not in ["N/A", "NA", "NONE", "NULL", ""]:
-        return a_val, "D-1"
-    elif pd.notna(b_val) and str(b_val).strip().upper() not in ["N/A", "NA", "NONE", "NULL", ""]:
-        return b_val, "D-4"
-    else:
-        return np.nan, np.nan
-
-def process_file(file_path, output_folder):
-    """Process one input file and save the transformed output."""
-    filename = os.path.basename(file_path)
-    print(f"🔹 Processing: {filename}")
-
-    # Read file (csv or excel)
-    if file_path.lower().endswith(".csv"):
-        df = pd.read_csv(file_path)
-    elif file_path.lower().endswith((".xlsx", ".xls")):
-        df = pd.read_excel(file_path)
-    else:
-        print(f"⚠️ Skipped unsupported file type: {filename}")
-        return
-
-    # Ensure Category and Tenor exist
-    if not all(col in df.columns for col in ["Category", "Tenor"]):
-        print(f"⚠️ Skipped (missing 'Category' or 'Tenor'): {filename}")
-        return
-
-    # Create new dataframe
-    output_df = df[["Category", "Tenor"]].copy()
-
-    # Compare A/B columns
-    for i, (a_col, b_col) in enumerate(zip(A_cols, B_cols), start=1):
-        if a_col not in df.columns or b_col not in df.columns:
-            print(f"⚠️ Missing A/B columns ({a_col}, {b_col}) in {filename}")
-            output_df[f"AB{i}"] = np.nan
-            output_df[f"AB{i} Category"] = np.nan
-            continue
-
-        values, sources = zip(*[pick_value(a, b) for a, b in zip(df[a_col], df[b_col])])
-        output_df[f"AB{i}"] = values
-        output_df[f"AB{i} Category"] = sources
-
-    # Add C columns
-    for i, (c_val, c_cat) in enumerate(C_cols, start=1):
-        if c_val in df.columns and c_cat in df.columns:
-            output_df[f"C{i}"] = df[c_val]
-            output_df[f"C{i} Category"] = df[c_cat]
-        else:
-            output_df[f"C{i}"] = np.nan
-            output_df[f"C{i} Category"] = np.nan
-
-    # Save output
-    output_file = os.path.join(
-        output_folder,
-        os.path.splitext(filename)[0] + "_final" + os.path.splitext(filename)[1]
-    )
-
-    if output_file.lower().endswith(".csv"):
-        output_df.to_csv(output_file, index=False)
-    else:
-        output_df.to_excel(output_file, index=False)
-
-    print(f"✅ Saved: {output_file}")
-
-
-# ------------------------------------------------------
-# 🚀 Main Runner
-# ------------------------------------------------------
-
-def main():
-    os.makedirs(output_path, exist_ok=True)
-    files = [f for f in os.listdir(input_path) if f.lower().endswith((".csv", ".xlsx", ".xls"))]
-
-    if not files:
-        print("⚠️ No input files found.")
-        return
-
-    for f in files:
-        process_file(os.path.join(input_path, f), output_path)
-
-    print("\n🎉 All files processed successfully!")
-
-
-if __name__ == "__main__":
-    main()
+print("\n🎉 Extraction complete! All Origami Excel files are saved in:")
+print(destination_folder)
