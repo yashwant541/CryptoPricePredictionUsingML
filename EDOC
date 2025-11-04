@@ -1,75 +1,73 @@
+import dataiku
 import os
-import zipfile
-import shutil
 import tempfile
+import shutil
 import py7zr
-import patoolib
 
-# ------------------------------------------------------------
-# 🧭 USER INPUTS (Interactive)
-# ------------------------------------------------------------
-source_folder = input("Enter the folder path containing ZIP files: ").strip()
-destination_folder = input("Enter the folder path where extracted Excel files should be saved: ").strip()
-keyword = "Origami"  # keyword to search in filenames
+# ---------------------------
+# Configure Dataiku Folders
+# ---------------------------
+input_folder = dataiku.Folder("YOUR_INPUT_FOLDER_ID")   # e.g. "Tw4EvbUb"
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID") # e.g. "pwBGEpop"
 
-# ------------------------------------------------------------
-# 🛠️ Ensure destination exists
-# ------------------------------------------------------------
-os.makedirs(destination_folder, exist_ok=True)
+# ---------------------------
+# Temporary Working Directory
+# ---------------------------
+temp_dir = tempfile.mkdtemp()
 
-# ------------------------------------------------------------
-# 🧩 Helper: Extract a single archive robustly
-# ------------------------------------------------------------
-def safe_extract(archive_path, extract_to):
-    """Try multiple extraction methods for ZIP/7z/RAR files."""
-    tmp_dir = tempfile.mkdtemp()
-    extracted_files = []
+try:
+    input_files = input_folder.list_paths_in_partition()
+    archive_files = [f for f in input_files if f.lower().endswith(('.zip', '.7z'))]
 
-    try:
-        # Try Python zipfile first
-        with zipfile.ZipFile(archive_path, "r") as zip_ref:
-            zip_ref.extractall(tmp_dir)
-            extracted_files = [os.path.join(tmp_dir, n) for n in zip_ref.namelist()]
-    except Exception as e_zip:
-        try:
-            # Try 7z extractor
-            with py7zr.SevenZipFile(archive_path, mode='r') as z:
-                z.extractall(path=tmp_dir)
-                # Collect all extracted files
-                for root, _, files in os.walk(tmp_dir):
-                    extracted_files.extend([os.path.join(root, f) for f in files])
-        except Exception as e_7z:
+    if not archive_files:
+        print("No ZIP or 7z files found in input folder.")
+    else:
+        for archive_path in archive_files:
+            archive_name = os.path.basename(archive_path)
+            print(f"Processing: {archive_name}")
+
+            # Download archive locally
+            local_archive_path = os.path.join(temp_dir, archive_name)
+            with open(local_archive_path, 'wb') as f:
+                f.write(input_folder.get_download_stream(archive_path).read())
+
+            # Extract using py7zr (works even for .zip made by 7-Zip)
+            extract_path = os.path.join(temp_dir, os.path.splitext(archive_name)[0])
+            os.makedirs(extract_path, exist_ok=True)
+
             try:
-                # Try patool (universal fallback)
-                patoolib.extract_archive(archive_path, outdir=tmp_dir, verbosity=-1)
-                for root, _, files in os.walk(tmp_dir):
-                    extracted_files.extend([os.path.join(root, f) for f in files])
-            except Exception as e_patool:
-                print(f"❌ Could not extract {os.path.basename(archive_path)} using any method.")
-                print(f"   Errors: zip={e_zip}, 7z={e_7z}, patool={e_patool}")
-                shutil.rmtree(tmp_dir)
-                return []
+                with py7zr.SevenZipFile(local_archive_path, mode='r') as archive:
+                    archive.extractall(path=extract_path)
+            except Exception as e:
+                print(f"⚠️ Could not extract {archive_name}: {e}")
+                continue
 
-    return extracted_files
+            # Find Excel files inside
+            excel_files = []
+            for root, _, files in os.walk(extract_path):
+                for file in files:
+                    if file.lower().endswith(('.xlsx', '.xls')):
+                        excel_files.append(os.path.join(root, file))
 
+            if not excel_files:
+                print(f"No Excel file found in {archive_name}. Skipping.")
+                continue
 
-# ------------------------------------------------------------
-# 🚀 PROCESS EACH ZIP FILE
-# ------------------------------------------------------------
-for file in os.listdir(source_folder):
-    if file.lower().endswith(".zip"):
-        zip_path = os.path.join(source_folder, file)
-        print(f"\n📦 Processing archive: {file}")
+            if len(excel_files) > 1:
+                print(f"Multiple Excel files found in {archive_name}. Taking the first one.")
 
-        extracted_files = safe_extract(zip_path, destination_folder)
+            excel_file_path = excel_files[0]
 
-        for ef in extracted_files:
-            if keyword.lower() in os.path.basename(ef).lower() and (ef.lower().endswith(".xlsx") or ef.lower().endswith(".xls")):
-                try:
-                    shutil.copy2(ef, destination_folder)
-                    print(f"✅ Extracted: {os.path.basename(ef)}")
-                except Exception as e:
-                    print(f"⚠️ Could not copy {ef}: {e}")
+            # Rename output to match archive name (optional but neat)
+            archive_base = os.path.splitext(archive_name)[0]
+            ext = os.path.splitext(excel_file_path)[1]
+            out_filename = f"{archive_base}{ext}"
 
-print("\n🎉 Extraction complete! All matching Origami Excel files are in:")
-print(destination_folder)
+            # Upload to output folder
+            with open(excel_file_path, 'rb') as f:
+                output_folder.upload_stream(out_filename, f)
+
+            print(f"✅ Saved: {out_filename} to output folder")
+
+finally:
+    shutil.rmtree(temp_dir, ignore_errors=True)
