@@ -1,71 +1,54 @@
 import os
-import zipfile
-import shutil
-import tempfile
-import py7zr
+from pdf2image import convert_from_path
+import easyocr
+from docx import Document
 
-# ------------------------------------------------------------
-# 🧭 USER INPUTS (Interactive)
-# ------------------------------------------------------------
-source_folder = input("Enter the folder path containing ZIP files: ").strip()
-destination_folder = input("Enter the folder path where extracted Excel files should be saved: ").strip()
-keyword = "Origami"  # keyword to search in filenames
+# ----------------------------------------------------------
+# 🔧 User Configuration
+# ----------------------------------------------------------
+input_folder = r"C:\path\to\input_pdfs"     # 📥 Folder with scanned PDFs
+output_folder = r"C:\path\to\output_texts"  # 📤 Folder for extracted text
+os.makedirs(output_folder, exist_ok=True)
 
-# ------------------------------------------------------------
-# 🛠️ Ensure destination exists
-# ------------------------------------------------------------
-os.makedirs(destination_folder, exist_ok=True)
+# ----------------------------------------------------------
+# 🧠 Initialize OCR reader
+# ----------------------------------------------------------
+reader = easyocr.Reader(['en'], gpu=False)  # Set gpu=True if you have GPU
 
-# ------------------------------------------------------------
-# 🧩 Helper: Robust extraction function
-# ------------------------------------------------------------
-def safe_extract(archive_path):
-    """Try to extract archive using zipfile, then py7zr fallback."""
-    tmp_dir = tempfile.mkdtemp()
-    extracted_files = []
+# ----------------------------------------------------------
+# 🔁 Process each PDF
+# ----------------------------------------------------------
+for filename in os.listdir(input_folder):
+    if filename.lower().endswith(".pdf"):
+        pdf_path = os.path.join(input_folder, filename)
+        base_name = os.path.splitext(filename)[0]
+        print(f"🔍 Processing: {filename}")
 
-    try:
-        with zipfile.ZipFile(archive_path, 'r') as zf:
-            zf.extractall(tmp_dir)
-            extracted_files = [
-                os.path.join(tmp_dir, name)
-                for name in zf.namelist()
-                if not name.endswith('/')
-            ]
-    except Exception as e_zip:
-        try:
-            with py7zr.SevenZipFile(archive_path, mode='r') as z:
-                z.extractall(path=tmp_dir)
-                for root, _, files in os.walk(tmp_dir):
-                    for f in files:
-                        extracted_files.append(os.path.join(root, f))
-        except Exception as e_7z:
-            print(f"❌ Unable to extract {os.path.basename(archive_path)} — {e_zip} / {e_7z}")
-            shutil.rmtree(tmp_dir)
-            return []
+        # Convert each page to image
+        pages = convert_from_path(pdf_path, dpi=300)
 
-    return extracted_files
+        full_text = ""
+        for page_num, page in enumerate(pages, start=1):
+            print(f"   📄 OCR on page {page_num}/{len(pages)}...")
+            results = reader.readtext(page, detail=0)
+            page_text = "\n".join(results)
+            full_text += f"\n--- Page {page_num} ---\n{page_text}\n"
 
+        # ----------------------------------------------------------
+        # 💾 Save as .txt
+        # ----------------------------------------------------------
+        txt_path = os.path.join(output_folder, f"{base_name}.txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(full_text)
+        print(f"   ✅ Saved text: {txt_path}")
 
-# ------------------------------------------------------------
-# 🚀 PROCESS EACH ARCHIVE
-# ------------------------------------------------------------
-for file in os.listdir(source_folder):
-    if file.lower().endswith(".zip"):
-        zip_path = os.path.join(source_folder, file)
-        print(f"\n📦 Processing archive: {file}")
+        # ----------------------------------------------------------
+        # 💾 Save as .docx
+        # ----------------------------------------------------------
+        doc = Document()
+        doc.add_paragraph(full_text)
+        docx_path = os.path.join(output_folder, f"{base_name}.docx")
+        doc.save(docx_path)
+        print(f"   ✅ Saved Word: {docx_path}\n")
 
-        extracted_files = safe_extract(zip_path)
-
-        for ef in extracted_files:
-            if keyword.lower() in os.path.basename(ef).lower() and (
-                ef.lower().endswith(".xlsx") or ef.lower().endswith(".xls")
-            ):
-                try:
-                    shutil.copy2(ef, destination_folder)
-                    print(f"✅ Extracted: {os.path.basename(ef)}")
-                except Exception as e:
-                    print(f"⚠️ Could not copy {ef}: {e}")
-
-print("\n🎉 Extraction complete! All Origami Excel files are in:")
-print(destination_folder)
+print("🎯 All PDFs processed successfully!")
