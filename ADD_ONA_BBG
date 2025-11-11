@@ -2,95 +2,122 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
-import shutil
 
 # ------------------------------------------------------
-# 🔧 Global configuration
+# 🔧 Configuration (replace with your Dataiku folder IDs)
 # ------------------------------------------------------
-
-# 📄 The exact filename you want to process
-INPUT_FILENAME = "your_file_name.csv"   # <-- Change this as needed
-
-# 1️⃣ Merge rules — average Rate for these Type pairs
-TYPE_MERGE_RULES = {
-    "ATM": ["ATM Ask", "ATM Bid"],
-}
-
-# 2️⃣ Rename mapping — global Type renaming
-TYPE_RENAME_MAP = {
-    "RR25": "RR",
-    "DDR25": "DDRR",
-    "BF10": "BF",
-    "ATM": "ATM"
-}
+input_folder = dataiku.Folder("O9zgmRQh")      # Folder containing MakerChecker_Success.csv
+output_folder = dataiku.Folder("FbpQvhvC")     # Folder to save consolidated output
 
 # ------------------------------------------------------
-# 🔄 Processing logic
+# 🧠 Helper Function
 # ------------------------------------------------------
-def merge_and_average_types(df):
-    merged_list = []
+def consolidate_maker_checker(df):
+    """
+    Consolidate maker-checker info:
+    - Keep USER columns for Calculated, Proposed, Approved, Submitted
+    - Create Maker and Checker columns
+    - Add descriptive Flag column based on user combinations
+    """
 
-    for new_type, merge_types in TYPE_MERGE_RULES.items():
-        subset = df[df["Type"].isin(merge_types)]
-        if not subset.empty:
-            grouped = (
-                subset.groupby(["Tenor", "Category", "FileDate"], as_index=False)
-                .agg({"Rate": "mean"})
-            )
-            grouped["Type"] = new_type
-            merged_list.append(grouped)
+    # Pivot the data
+    pivot_df = df.pivot_table(
+        index=["FileName", "FileDate", "Benchmark", "Date (in file)"],
+        columns="Status",
+        values=["USER", "Status Time"],
+        aggfunc='first'
+    )
 
-    remaining_df = df[~df["Type"].isin([t for v in TYPE_MERGE_RULES.values() for t in v])]
-    combined_df = pd.concat([remaining_df] + merged_list, ignore_index=True)
-    return combined_df
+    pivot_df.columns = [f"{col[0]} {col[1]}".strip() for col in pivot_df.columns.values]
+    pivot_df = pivot_df.reset_index()
 
+    # Maker and Checker
+    pivot_df['Maker'] = pivot_df['USER Calculated'].combine_first(pivot_df['USER Proposed'])
+    pivot_df['Checker'] = pivot_df['USER Approved'].combine_first(pivot_df['USER Submitted'])
 
-def rename_types(df):
-    df["Type"] = df["Type"].replace(TYPE_RENAME_MAP)
-    return df
+    # Rename status time columns
+    pivot_df = pivot_df.rename(columns={
+        'Status Time Calculated': 'Calculated Status Time',
+        'Status Time Proposed': 'Proposed Status Time',
+        'Status Time Approved': 'Approved Status Time',
+        'Status Time Submitted': 'Submitted Status Time'
+    })
 
+    # Add USER column (blank, for consistency)
+    pivot_df['USER'] = ""
+
+    # 🧩 Add Flag column based on maker/checker logic
+    def get_flag(row):
+        calc = str(row.get('USER Calculated', '') or '').strip()
+        prop = str(row.get('USER Proposed', '') or '').strip()
+        appr = str(row.get('USER Approved', '') or '').strip()
+        subm = str(row.get('USER Submitted', '') or '').strip()
+        maker = str(row.get('Maker', '') or '').strip()
+        checker = str(row.get('Checker', '') or '').strip()
+
+        # Case 1: Maker == Checker → Not successful
+        if maker and checker and maker == checker:
+            return "Maker Checker Not Successful"
+
+        # Case 2: Maker success (both sides match)
+        if calc == prop and appr == subm:
+            return "Maker-Checker Success"
+
+        # Case 3: Maker mismatch, Checker ok
+        if calc != prop and appr == subm:
+            return "Maker Checker Successful but User Calculated different than User Proposed"
+
+        # Case 4: Maker ok, Checker mismatch
+        if calc == prop and appr != subm:
+            return "Maker Checker Successful but User Approved different than User Submitted"
+
+        # Case 5: Both mismatch
+        if calc != prop and appr != subm:
+            return "Maker Checker Successful but both Maker and Checker users differ"
+
+        return "Maker Checker Not Successful"
+
+    pivot_df['Flag'] = pivot_df.apply(get_flag, axis=1)
+
+    # Reorder columns
+    cols = [
+        'FileName', 'FileDate', 'USER', 'Benchmark', 'Date (in file)',
+        'USER Calculated', 'USER Proposed', 'USER Approved', 'USER Submitted',
+        'Maker', 'Checker',
+        'Calculated Status Time', 'Proposed Status Time',
+        'Approved Status Time', 'Submitted Status Time',
+        'Flag'
+    ]
+    pivot_df = pivot_df.reindex(columns=cols)
+
+    return pivot_df
 
 # ------------------------------------------------------
-# 🧾 Dataiku I/O logic
+# 🚀 Main Execution
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXX")     # Replace with your input folder ID
-output_folder = dataiku.Folder("XXXXXX")    # Replace with your output folder ID
+def main():
+    print("🔍 Reading MakerChecker_Success.csv from Dataiku input folder...")
 
-# 🔍 Locate the target file in the input folder
-input_files = input_folder.list_paths_in_partition()
-target_file_path = None
-for f in input_files:
-    if os.path.basename(f) == INPUT_FILENAME:
-        target_file_path = f
-        break
+    files = [f for f in input_folder.list_paths_in_partition() if "MakerChecker_Success" in f]
+    if not files:
+        raise Exception("❌ MakerChecker_Success.csv not found in input folder.")
+    success_path = files[0]
 
-if not target_file_path:
-    raise FileNotFoundError(f"❌ File '{INPUT_FILENAME}' not found in the input folder.")
+    with input_folder.get_download_stream(success_path) as stream:
+        df_success = pd.read_csv(stream)
 
-# ------------------------------------------------------
-# 📥 Download file from Dataiku folder
-# ------------------------------------------------------
-with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-    with input_folder.get_download_stream(target_file_path) as stream:
-        shutil.copyfileobj(stream, tmp)  # ✅ Dataiku download stream → temp file
-    tmp_path = tmp.name
+    df_consolidated = consolidate_maker_checker(df_success)
 
-# Read CSV data
-df = pd.read_csv(tmp_path)
+    # Save consolidated output
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
+        df_consolidated.to_csv(tmp_file.name, index=False)
+        with open(tmp_file.name, "rb") as f:
+            output_folder.upload_stream("MakerChecker_Success_Consolidated.csv", f)
+        os.remove(tmp_file.name)
+
+    print(f"✅ Consolidation complete: {len(df_consolidated)} rows created.")
+    print("📄 Output file: MakerChecker_Success_Consolidated.csv")
 
 # ------------------------------------------------------
-# ⚙️ Data processing
-# ------------------------------------------------------
-df_merged = merge_and_average_types(df)
-final_df = rename_types(df_merged)
-
-# ------------------------------------------------------
-# 📤 Upload file back to Dataiku output folder
-# ------------------------------------------------------
-with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_output:
-    final_df.to_csv(tmp_output.name, index=False, encoding="utf-8")
-    # ✅ Upload stream — sends temp file → Dataiku output folder
-    with open(tmp_output.name, "rb") as f_out:
-        output_folder.upload_stream(INPUT_FILENAME, f_out)
-
-print(f"✅ Processing complete. File '{INPUT_FILENAME}' saved to the output folder.")
+if __name__ == "__main__":
+    main()
