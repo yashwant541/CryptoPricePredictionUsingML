@@ -2,20 +2,18 @@ import pandas as pd
 import dataiku
 import tempfile
 import os
+import shutil
 
 # ------------------------------------------------------
 # 🔧 Global configuration
 # ------------------------------------------------------
 
-# 📄 The exact filename you want to process from the Dataiku input folder
-INPUT_FILENAME = "your_file_name.csv"   # <-- 🔁 Change this value as needed
+# 📄 The exact filename you want to process
+INPUT_FILENAME = "your_file_name.csv"   # <-- Change this as needed
 
 # 1️⃣ Merge rules — average Rate for these Type pairs
 TYPE_MERGE_RULES = {
     "ATM": ["ATM Ask", "ATM Bid"],
-    # Add more if needed, for example:
-    # "RR25": ["RR25 Call", "RR25 Put"],
-    # "BF10": ["BF10 Call", "BF10 Put"]
 }
 
 # 2️⃣ Rename mapping — global Type renaming
@@ -32,7 +30,6 @@ TYPE_RENAME_MAP = {
 def merge_and_average_types(df):
     merged_list = []
 
-    # Merge rules — average rate for matching Tenor + Category + FileDate
     for new_type, merge_types in TYPE_MERGE_RULES.items():
         subset = df[df["Type"].isin(merge_types)]
         if not subset.empty:
@@ -43,10 +40,7 @@ def merge_and_average_types(df):
             grouped["Type"] = new_type
             merged_list.append(grouped)
 
-    # Keep remaining rows not merged
     remaining_df = df[~df["Type"].isin([t for v in TYPE_MERGE_RULES.values() for t in v])]
-
-    # Combine
     combined_df = pd.concat([remaining_df] + merged_list, ignore_index=True)
     return combined_df
 
@@ -59,14 +53,11 @@ def rename_types(df):
 # ------------------------------------------------------
 # 🧾 Dataiku I/O logic
 # ------------------------------------------------------
-# 📥 Input and output folders (replace with your actual folder IDs)
-input_folder = dataiku.Folder("XXXXXX")     # Input folder ID
-output_folder = dataiku.Folder("XXXXXX")    # Output folder ID
+input_folder = dataiku.Folder("XXXXXX")     # Replace with your input folder ID
+output_folder = dataiku.Folder("XXXXXX")    # Replace with your output folder ID
 
-# List all files in input folder
+# 🔍 Locate the target file in the input folder
 input_files = input_folder.list_paths_in_partition()
-
-# Find the specific file to process
 target_file_path = None
 for f in input_files:
     if os.path.basename(f) == INPUT_FILENAME:
@@ -76,24 +67,30 @@ for f in input_files:
 if not target_file_path:
     raise FileNotFoundError(f"❌ File '{INPUT_FILENAME}' not found in the input folder.")
 
-# Read that specific CSV file
+# ------------------------------------------------------
+# 📥 Download file from Dataiku folder
+# ------------------------------------------------------
 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-    input_folder.get_download_stream(target_file_path).readinto(tmp)
+    with input_folder.get_download_stream(target_file_path) as stream:
+        shutil.copyfileobj(stream, tmp)  # ✅ Dataiku download stream → temp file
     tmp_path = tmp.name
 
+# Read CSV data
 df = pd.read_csv(tmp_path)
 
 # ------------------------------------------------------
-# ⚙️ Processing
+# ⚙️ Data processing
 # ------------------------------------------------------
 df_merged = merge_and_average_types(df)
 final_df = rename_types(df_merged)
 
 # ------------------------------------------------------
-# 📤 Save output to Dataiku output folder
+# 📤 Upload file back to Dataiku output folder
 # ------------------------------------------------------
 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_output:
     final_df.to_csv(tmp_output.name, index=False, encoding="utf-8")
-    output_folder.upload_stream(INPUT_FILENAME, open(tmp_output.name, "rb"))
+    # ✅ Upload stream — sends temp file → Dataiku output folder
+    with open(tmp_output.name, "rb") as f_out:
+        output_folder.upload_stream(INPUT_FILENAME, f_out)
 
 print(f"✅ Processing complete. File '{INPUT_FILENAME}' saved to the output folder.")
