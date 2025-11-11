@@ -5,10 +5,10 @@ import os
 import re
 
 # ------------------------------------------------------
-# 🔧 Configuration — Replace with your Dataiku folder IDs
+# 🔧 Configuration — Replace with your Dataiku dataset & folder IDs
 # ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXX")      # 📥 Input folder with CSV files
-output_folder = dataiku.Folder("XXXXXXX")     # 📤 Output folder for processed CSVs
+input_dataset = dataiku.Dataset("YOUR_INPUT_DATASET_NAME")   # 📥 Input Dataiku dataset (CSV)
+output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")      # 📤 Output Dataiku folder
 
 # ------------------------------------------------------
 # ⚙️ Helper function to clean the Benchmark column
@@ -16,42 +16,36 @@ output_folder = dataiku.Folder("XXXXXXX")     # 📤 Output folder for processed
 def clean_benchmark(value):
     if pd.isna(value):
         return value
-    # Remove substring starting from '_' up to the next space
-    # Example: FDRA_IN IN -> FDRA IN
+    # Remove substring from '_' up to the next space
+    # Example: "FDRA_IN IN" → "FDRA IN"
     return re.sub(r'_[^ ]*', '', value)
 
 # ------------------------------------------------------
-# 🚀 Process each CSV file in the input folder
+# 🚀 Read input dataset as DataFrame
 # ------------------------------------------------------
-available_paths = input_folder.list_paths_in_partition()
+df = input_dataset.get_dataframe(infer_with_pandas=True, parse_dates=False, dtypes=str)
 
-for file_path in available_paths:
-    if not file_path.lower().endswith(".csv"):
-        continue
+print(f"✅ Loaded dataset with {len(df)} rows and {len(df.columns)} columns")
 
-    filename = os.path.basename(file_path)
-    print(f"📄 Processing file: {filename}")
+# ------------------------------------------------------
+# 🧹 Process Benchmark column if it exists
+# ------------------------------------------------------
+if "Benchmark" in df.columns:
+    df["Benchmark"] = df["Benchmark"].apply(clean_benchmark)
+    print("✅ Cleaned 'Benchmark' column successfully")
+else:
+    print("⚠️ 'Benchmark' column not found in dataset — no changes applied.")
 
-    # --- Read CSV file from Dataiku folder ---
-    with input_folder.get_download_stream(file_path) as stream:
-        df = pd.read_csv(stream, dtype=str, encoding="utf-8")
+# ------------------------------------------------------
+# 💾 Save output CSV into the Dataiku output folder
+# ------------------------------------------------------
+tmp_dir = tempfile.mkdtemp()
+output_path = os.path.join(tmp_dir, "cleaned_benchmark.csv")
 
-    # --- Check and clean Benchmark column ---
-    if "Benchmark" in df.columns:
-        df["Benchmark"] = df["Benchmark"].apply(clean_benchmark)
-        print(f"✅ Cleaned 'Benchmark' column in {filename}")
-    else:
-        print(f"⚠️ 'Benchmark' column not found in {filename}, skipping.")
+df.to_csv(output_path, index=False, encoding="utf-8")
 
-    # --- Save the cleaned DataFrame to temporary CSV ---
-    tmp_dir = tempfile.mkdtemp()
-    tmp_path = os.path.join(tmp_dir, filename)
-    df.to_csv(tmp_path, index=False, encoding="utf-8")
+# Upload to Dataiku managed folder
+with open(output_path, "rb") as f:
+    output_folder.upload_stream("cleaned_benchmark.csv", f)
 
-    # --- Upload the cleaned file to the output Dataiku folder ---
-    with open(tmp_path, "rb") as f:
-        output_folder.upload_stream(filename, f)
-
-    print(f"📤 Saved cleaned file: {filename}")
-
-print("🎉 All files processed successfully!")
+print("🎉 Cleaned file saved successfully to Dataiku folder.")
