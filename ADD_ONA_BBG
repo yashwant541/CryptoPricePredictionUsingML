@@ -110,23 +110,33 @@ def main():
 
     # ------------------------------------------------------
     # 🕒 Keep only latest submission for Maker-Checker Success per date & benchmark
+    #     Compare only the HH:MM:SS part (ignore GMT offset since it’s same)
     # ------------------------------------------------------
     if 'Submitted Status Time' in df_consolidated.columns:
-        df_consolidated['Submitted Status Time'] = pd.to_datetime(
-            df_consolidated['Submitted Status Time'], errors='coerce'
-        )
-
         success_df = df_consolidated[df_consolidated['Flag'] == "Maker-Checker Success"].copy()
         others_df = df_consolidated[df_consolidated['Flag'] != "Maker-Checker Success"].copy()
-
-        # Sort success rows by submission time (latest first)
+    
+        # Extract time portion like '09:28:00' from '09:28:00(GMT +05:00)'
+        success_df['Submission_Time_Only'] = (
+            success_df['Submitted Status Time']
+            .astype(str)
+            .str.extract(r'(\d{2}:\d{2}:\d{2})')[0]
+        )
+    
+        # Convert to time format for sorting
+        success_df['Submission_Time_Only'] = pd.to_datetime(
+            success_df['Submission_Time_Only'], format='%H:%M:%S', errors='coerce'
+        )
+    
+        # Sort by time descending and keep the latest one per date+benchmark
         success_df = (
-            success_df.sort_values('Submitted Status Time', ascending=False)
+            success_df.sort_values('Submission_Time_Only', ascending=False)
                       .drop_duplicates(subset=['Date (in file)', 'Benchmark'], keep='first')
         )
-
+    
         # Merge back success and non-success rows
         df_consolidated = pd.concat([success_df, others_df], ignore_index=True)
+
 
     # ------------------------------------------------------
     # 💾 Save consolidated output to Dataiku folder
