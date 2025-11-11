@@ -6,8 +6,8 @@ import os
 # ------------------------------------------------------
 # 🔧 Configuration (replace with your Dataiku folder IDs)
 # ------------------------------------------------------
-input_folder = dataiku.Folder("O9zgmRQh")      # Folder containing MakerChecker_Success.csv
-output_folder = dataiku.Folder("FbpQvhvC")     # Folder to save consolidated output
+input_folder = dataiku.Folder("XXXXXXXXX")      # Folder containing MakerChecker_Success.csv
+output_folder = dataiku.Folder("XXXXXXXXX")     # Folder to save consolidated output
 
 # ------------------------------------------------------
 # 🧠 Helper Function
