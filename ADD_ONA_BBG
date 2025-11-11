@@ -108,7 +108,29 @@ def main():
 
     df_consolidated = consolidate_maker_checker(df_success)
 
-    # Save consolidated output
+    # ------------------------------------------------------
+    # 🕒 Keep only latest submission for Maker-Checker Success per date & benchmark
+    # ------------------------------------------------------
+    if 'Submitted Status Time' in df_consolidated.columns:
+        df_consolidated['Submitted Status Time'] = pd.to_datetime(
+            df_consolidated['Submitted Status Time'], errors='coerce'
+        )
+
+        success_df = df_consolidated[df_consolidated['Flag'] == "Maker-Checker Success"].copy()
+        others_df = df_consolidated[df_consolidated['Flag'] != "Maker-Checker Success"].copy()
+
+        # Sort success rows by submission time (latest first)
+        success_df = (
+            success_df.sort_values('Submitted Status Time', ascending=False)
+                      .drop_duplicates(subset=['Date (in file)', 'Benchmark'], keep='first')
+        )
+
+        # Merge back success and non-success rows
+        df_consolidated = pd.concat([success_df, others_df], ignore_index=True)
+
+    # ------------------------------------------------------
+    # 💾 Save consolidated output to Dataiku folder
+    # ------------------------------------------------------
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
         df_consolidated.to_csv(tmp_file.name, index=False)
         with open(tmp_file.name, "rb") as f:
