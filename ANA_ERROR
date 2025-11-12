@@ -1,51 +1,86 @@
-import pandas as pd
-import dataiku
-import tempfile
-import os
-import re
+C:\Users\2011747\Desktop\Python\pdf_onnx_easyocr>python main.py
+[INFO] ✅ ONNX and ONNXRuntime imported successfully.
+[INFO] Starting PDF layout detection...
+[INFO] Loading pretrained ONNX model from path: C:\Users\2011747\Desktop\Python\pdf_onnx_easyocr\wybxcDocLayout-YOLO-DocStructBench-onnx\doclayout_yolo_docstructbench_imgsz1024.onnx
+[INFO] Initializing LayoutYoloOnnxModel with model path: C:\Users\2011747\Desktop\Python\pdf_onnx_easyocr\wybxcDocLayout-YOLO-DocStructBench-onnx\doclayout_yolo_docstructbench_imgsz1024.onnx
+[INFO] Loading ONNX model file...
+[INFO] ✅ ONNX model file loaded successfully.
+[INFO] Reading model metadata...
+[DEBUG] Metadata found: {'description': 'Ultralytics YOLOv10m-doclayout model trained on /mnt/petrelfs/zhaozhiyuan/layout/yolov10/ultralytics/cfg/datasets/0830_mixed.yaml', 'author': 'Ultralytics', 'date': '2024-11-22T20:09:25.769454', 'version': '0.0.2', 'license': 'AGPL-3.0 License (https://doclayout_yolo.com/license)', 'docs': 'https://docs.doclayout_yolo.com', 'stride': '32', 'task': 'detect', 'batch': '1', 'imgsz': '[1024, 1024]', 'names': "{0: 'title', 1: 'plain text', 2: 'abandon', 3: 'figure', 4: 'figure_caption', 5: 'table', 6: 'table_caption', 7: 'table_footnote', 8: 'isolate_formula', 9: 'formula_caption'}"}
+[INFO] Model stride: 32, Number of classes: 10
+[INFO] Creating ONNX Runtime inference session (CPU provider only)...
+[INFO] ✅ ONNX Runtime session created successfully.
+[INFO] Extracting 112 pages from PDF...
+Neither CUDA nor MPS are available - defaulting to CPU. Note: This module is much faster with a GPU.
+Downloading detection model, please wait. This may take several minutes depending upon your network connection.
+Traceback (most recent call last):
+  File "C:\Program Files\Python313\Lib\urllib\request.py", line 1319, in do_open
+    h.request(req.get_method(), req.selector, req.data, headers,
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+              encode_chunked=req.has_header('Transfer-encoding'))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python313\Lib\http\client.py", line 1338, in request
+    self._send_request(method, url, body, headers, encode_chunked)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python313\Lib\http\client.py", line 1384, in _send_request
+    self.endheaders(body, encode_chunked=encode_chunked)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python313\Lib\http\client.py", line 1333, in endheaders
+    self._send_output(message_body, encode_chunked=encode_chunked)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python313\Lib\http\client.py", line 1093, in _send_output
+    self.send(msg)
+    ~~~~~~~~~^^^^^
+  File "C:\Program Files\Python313\Lib\http\client.py", line 1037, in send
+    self.connect()
+    ~~~~~~~~~~~~^^
+  File "C:\Program Files\Python313\Lib\http\client.py", line 1472, in connect
+    super().connect()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Program Files\Python313\Lib\http\client.py", line 1003, in connect
+    self.sock = self._create_connection(
+                ~~~~~~~~~~~~~~~~~~~~~~~^
+        (self.host,self.port), self.timeout, self.source_address)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python313\Lib\socket.py", line 840, in create_connection
+    for res in getaddrinfo(host, port, 0, SOCK_STREAM):
+               ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python313\Lib\socket.py", line 977, in getaddrinfo
+    for res in _socket.getaddrinfo(host, port, family, type, proto, flags):
+               ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+socket.gaierror: [Errno 11001] getaddrinfo failed
 
-# ------------------------------------------------------
-# 🔧 Configuration — Replace with your Dataiku dataset & folder IDs
-# ------------------------------------------------------
-input_dataset = dataiku.Dataset("YOUR_INPUT_DATASET_NAME")   # 📥 Input Dataiku dataset (CSV)
-output_folder = dataiku.Folder("YOUR_OUTPUT_FOLDER_ID")      # 📤 Output Dataiku folder
+During handling of the above exception, another exception occurred:
 
-# ------------------------------------------------------
-# ⚙️ Helper function to clean the Benchmark column
-# ------------------------------------------------------
-def clean_benchmark(value):
-    if pd.isna(value):
-        return value
-    # Remove substring from '_' up to the next space
-    # Example: "FDRA_IN IN" → "FDRA IN"
-    return re.sub(r'_[^ ]*', '', value)
-
-# ------------------------------------------------------
-# 🚀 Read input dataset as DataFrame
-# ------------------------------------------------------
-df = input_dataset.get_dataframe(infer_with_pandas=True, parse_dates=False, dtypes=str)
-
-print(f"✅ Loaded dataset with {len(df)} rows and {len(df.columns)} columns")
-
-# ------------------------------------------------------
-# 🧹 Process Benchmark column if it exists
-# ------------------------------------------------------
-if "Benchmark" in df.columns:
-    df["Benchmark"] = df["Benchmark"].apply(clean_benchmark)
-    print("✅ Cleaned 'Benchmark' column successfully")
-else:
-    print("⚠️ 'Benchmark' column not found in dataset — no changes applied.")
-
-# ------------------------------------------------------
-# 💾 Save output CSV into the Dataiku output folder
-# ------------------------------------------------------
-tmp_dir = tempfile.mkdtemp()
-output_path = os.path.join(tmp_dir, "cleaned_benchmark.csv")
-
-df.to_csv(output_path, index=False, encoding="utf-8")
-
-# Upload to Dataiku managed folder
-with open(output_path, "rb") as f:
-    output_folder.upload_stream("cleaned_benchmark.csv", f)
-
-print("🎉 Cleaned file saved successfully to Dataiku folder.")
+Traceback (most recent call last):
+  File "C:\Users\2011747\Desktop\Python\pdf_onnx_easyocr\main.py", line 166, in <module>
+    reader = easyocr.Reader(['en'])
+  File "C:\Users\2011747\AppData\Roaming\Python\Python313\site-packages\easyocr\easyocr.py", line 92, in __init__
+    detector_path = self.getDetectorPath(detect_network)
+  File "C:\Users\2011747\AppData\Roaming\Python\Python313\site-packages\easyocr\easyocr.py", line 253, in getDetectorPath
+    download_and_unzip(self.detection_models[self.detect_network]['url'], self.detection_models[self.detect_network]['filename'], self.model_storage_directory, self.verbose)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\2011747\AppData\Roaming\Python\Python313\site-packages\easyocr\utils.py", line 628, in download_and_unzip
+    urlretrieve(url, zip_path, reporthook=reporthook)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python313\Lib\urllib\request.py", line 214, in urlretrieve
+    with contextlib.closing(urlopen(url, data)) as fp:
+                            ~~~~~~~^^^^^^^^^^^
+  File "C:\Program Files\Python313\Lib\urllib\request.py", line 189, in urlopen
+    return opener.open(url, data, timeout)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python313\Lib\urllib\request.py", line 489, in open
+    response = self._open(req, data)
+  File "C:\Program Files\Python313\Lib\urllib\request.py", line 506, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+                              '_open', req)
+  File "C:\Program Files\Python313\Lib\urllib\request.py", line 466, in _call_chain
+    result = func(*args)
+  File "C:\Program Files\Python313\Lib\urllib\request.py", line 1367, in https_open
+    return self.do_open(http.client.HTTPSConnection, req,
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        context=self._context)
+                        ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python313\Lib\urllib\request.py", line 1322, in do_open
+    raise URLError(err)
+urllib.error.URLError: <urlopen error [Errno 11001] getaddrinfo failed>
