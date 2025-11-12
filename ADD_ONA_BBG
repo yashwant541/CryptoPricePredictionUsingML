@@ -1,155 +1,232 @@
-import pandas as pd
-import dataiku
-import tempfile
-import os
+"""
+Document layout detection and model interface for PDF translation pipeline.
+Provides base classes and ONNX-based YOLO model for layout detection.
+"""
 
-# ------------------------------------------------------
-# 🔧 Configuration (replace with your Dataiku folder IDs)
-# ------------------------------------------------------
-input_folder = dataiku.Folder("XXXXXXXXX")      # Folder containing MakerChecker_Success.csv
-output_folder = dataiku.Folder("XXXXXXXXX")     # Folder to save consolidated output
+import abc
+from typing import List, Optional, Tuple
+import os.path
+import cv2
+import numpy as np
+import ast
+import fitz  # PyMuPDF for PDF reading
+import easyocr  # Added for OCR
 
-# ------------------------------------------------------
-# 🧠 Helper Function
-# ------------------------------------------------------
-def consolidate_maker_checker(df):
-    """
-    Consolidate maker-checker info:
-    - Keep USER columns for Calculated, Proposed, Approved, Submitted
-    - Create Maker and Checker columns
-    - Add descriptive Flag column based on user combinations
-    """
-
-    # Pivot the data
-    pivot_df = df.pivot_table(
-        index=["FileName", "FileDate", "Benchmark", "Date (in file)"],
-        columns="Status",
-        values=["USER", "Status Time"],
-        aggfunc='first'
-    )
-
-    pivot_df.columns = [f"{col[0]} {col[1]}".strip() for col in pivot_df.columns.values]
-    pivot_df = pivot_df.reset_index()
-
-    # Maker and Checker
-    pivot_df['Maker'] = pivot_df['USER Calculated'].combine_first(pivot_df['USER Proposed'])
-    pivot_df['Checker'] = pivot_df['USER Approved'].combine_first(pivot_df['USER Submitted'])
-
-    # Rename status time columns
-    pivot_df = pivot_df.rename(columns={
-        'Status Time Calculated': 'Calculated Status Time',
-        'Status Time Proposed': 'Proposed Status Time',
-        'Status Time Approved': 'Approved Status Time',
-        'Status Time Submitted': 'Submitted Status Time'
-    })
-
-    # Add USER column (blank, for consistency)
-    pivot_df['USER'] = ""
-
-    # 🧩 Add Flag column based on maker/checker logic
-    def get_flag(row):
-        calc = str(row.get('USER Calculated', '') or '').strip()
-        prop = str(row.get('USER Proposed', '') or '').strip()
-        appr = str(row.get('USER Approved', '') or '').strip()
-        subm = str(row.get('USER Submitted', '') or '').strip()
-        maker = str(row.get('Maker', '') or '').strip()
-        checker = str(row.get('Checker', '') or '').strip()
-
-        # Case 1: Maker == Checker → Not successful
-        if maker and checker and maker == checker:
-            return "Maker Checker Not Successful"
-
-        # Case 2: Maker success (both sides match)
-        if calc == prop and appr == subm:
-            return "Maker-Checker Success"
-
-        # Case 3: Maker mismatch, Checker ok
-        if calc != prop and appr == subm:
-            return "Maker Checker Successful but User Calculated different than User Proposed"
-
-        # Case 4: Maker ok, Checker mismatch
-        if calc == prop and appr != subm:
-            return "Maker Checker Successful but User Approved different than User Submitted"
-
-        # Case 5: Both mismatch
-        if calc != prop and appr != subm:
-            return "Maker Checker Successful but both Maker and Checker users differ"
-
-        return "Maker Checker Not Successful"
-
-    pivot_df['Flag'] = pivot_df.apply(get_flag, axis=1)
-
-    # Reorder columns
-    cols = [
-        'FileName', 'FileDate', 'USER', 'Benchmark', 'Date (in file)',
-        'USER Calculated', 'USER Proposed', 'USER Approved', 'USER Submitted',
-        'Maker', 'Checker',
-        'Calculated Status Time', 'Proposed Status Time',
-        'Approved Status Time', 'Submitted Status Time',
-        'Flag'
-    ]
-    pivot_df = pivot_df.reindex(columns=cols)
-
-    return pivot_df
-
-# ------------------------------------------------------
-# 🚀 Main Execution
-# ------------------------------------------------------
-def main():
-    print("🔍 Reading MakerChecker_Success.csv from Dataiku input folder...")
-
-    files = [f for f in input_folder.list_paths_in_partition() if "MakerChecker_Success" in f]
-    if not files:
-        raise Exception("❌ MakerChecker_Success.csv not found in input folder.")
-    success_path = files[0]
-
-    with input_folder.get_download_stream(success_path) as stream:
-        df_success = pd.read_csv(stream)
-
-    df_consolidated = consolidate_maker_checker(df_success)
-
-    # ------------------------------------------------------
-    # 🕒 Keep only latest submission for Maker-Checker Success per date & benchmark
-    #     Compare only the HH:MM:SS part (ignore GMT offset since it’s same)
-    # ------------------------------------------------------
-    if 'Submitted Status Time' in df_consolidated.columns:
-        success_df = df_consolidated[df_consolidated['Flag'] == "Maker-Checker Success"].copy()
-        others_df = df_consolidated[df_consolidated['Flag'] != "Maker-Checker Success"].copy()
-    
-        # Extract time portion like '09:28:00' from '09:28:00(GMT +05:00)'
-        success_df['Submission_Time_Only'] = (
-            success_df['Submitted Status Time']
-            .astype(str)
-            .str.extract(r'(\d{2}:\d{2}:\d{2})')[0]
-        )
-    
-        # Convert to time format for sorting
-        success_df['Submission_Time_Only'] = pd.to_datetime(
-            success_df['Submission_Time_Only'], format='%H:%M:%S', errors='coerce'
-        )
-    
-        # Sort by time descending and keep the latest one per date+benchmark
-        success_df = (
-            success_df.sort_values('Submission_Time_Only', ascending=False)
-                      .drop_duplicates(subset=['Date (in file)', 'Benchmark'], keep='first')
-        )
-    
-        # Merge back success and non-success rows
-        df_consolidated = pd.concat([success_df, others_df], ignore_index=True)
+try:
+    import onnx
+    import onnxruntime
+    print("[INFO] ✅ ONNX and ONNXRuntime imported successfully.")
+except ImportError as e:
+    if "DLL load failed" in str(e):
+        raise OSError(
+            "Microsoft Visual C++ Redistributable is not installed. "
+            "Download it at https://aka.ms/vs/17/release/vc_redist.x64.exe"
+        ) from e
+    raise
 
 
-    # ------------------------------------------------------
-    # 💾 Save consolidated output to Dataiku folder
-    # ------------------------------------------------------
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline='', encoding="utf-8") as tmp_file:
-        df_consolidated.to_csv(tmp_file.name, index=False)
-        with open(tmp_file.name, "rb") as f:
-            output_folder.upload_stream("MakerChecker_Success_Consolidated.csv", f)
-        os.remove(tmp_file.name)
+# ========================== MODEL CLASSES (unchanged) ==========================
 
-    print(f"✅ Consolidation complete: {len(df_consolidated)} rows created.")
-    print("📄 Output file: MakerChecker_Success_Consolidated.csv")
+class LayoutDetectionBox:
+    def __init__(self, data: List[float]):
+        self.coordinates: List[float] = data[:4]
+        self.confidence: float = data[-2]
+        self.class_id: int = int(data[-1])
 
-# ------------------------------------------------------
+
+class LayoutDetectionResult:
+    def __init__(self, detected_boxes: List[List[float]], class_names: List[str]):
+        self.boxes: List[LayoutDetectionBox] = [LayoutDetectionBox(data=box) for box in detected_boxes]
+        self.boxes.sort(key=lambda x: x.confidence, reverse=True)
+        self.class_names = class_names
+
+
+class LayoutModelBase(abc.ABC):
+    @staticmethod
+    def load_onnx_model() -> 'LayoutYoloOnnxModel':
+        print("[INFO] Loading ONNX model using LayoutModelBase.load_onnx_model()...")
+        model = LayoutYoloOnnxModel.load_from_pretrained()
+        print("[INFO] ✅ ONNX model successfully loaded via LayoutModelBase.")
+        return model
+
+    @staticmethod
+    def load_any_available() -> 'LayoutYoloOnnxModel':
+        print("[INFO] Trying to load any available layout model...")
+        return LayoutModelBase.load_onnx_model()
+
+    @property
+    @abc.abstractmethod
+    def stride(self) -> int:
+        pass
+
+    @abc.abstractmethod
+    def predict(self, image: np.ndarray, input_size: int = 1024, **kwargs) -> List['LayoutDetectionResult']:
+        pass
+
+
+class LayoutYoloOnnxModel(LayoutModelBase):
+    def __init__(self, model_path: str):
+        print(f"[INFO] Initializing LayoutYoloOnnxModel with model path: {model_path}")
+        self.model_path: str = model_path
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"[ERROR] Model file not found: {model_path}")
+
+        print("[INFO] Loading ONNX model file...")
+        model = onnx.load(model_path)
+        print("[INFO] ✅ ONNX model file loaded successfully.")
+
+        print("[INFO] Reading model metadata...")
+        metadata = {d.key: d.value for d in model.metadata_props}
+        print(f"[DEBUG] Metadata found: {metadata}")
+
+        self._stride: int = ast.literal_eval(metadata.get("stride", "32"))
+        self._class_names: List[str] = ast.literal_eval(metadata.get("names", "[]"))
+        print(f"[INFO] Model stride: {self._stride}, Number of classes: {len(self._class_names)}")
+
+        print("[INFO] Creating ONNX Runtime inference session (CPU provider only)...")
+        self.model = onnxruntime.InferenceSession(model.SerializeToString(), providers=["CPUExecutionProvider"])
+        print("[INFO] ✅ ONNX Runtime session created successfully.")
+
+    @staticmethod
+    def load_from_pretrained() -> 'LayoutYoloOnnxModel':
+        model_path: str = r"C:\Users\2011747\Desktop\Python\pdf_onnx_easyocr\wybxcDocLayout-YOLO-DocStructBench-onnx\doclayout_yolo_docstructbench_imgsz1024.onnx"
+        print(f"[INFO] Loading pretrained ONNX model from path: {model_path}")
+        return LayoutYoloOnnxModel(model_path)
+
+    @property
+    def stride(self) -> int:
+        return self._stride
+
+    def resize_and_pad(self, image: np.ndarray, new_shape: Tuple[int, int]) -> np.ndarray:
+        if isinstance(new_shape, int):
+            new_shape = (new_shape, new_shape)
+        h, w = image.shape[:2]
+        new_h, new_w = new_shape
+        r = min(new_h / h, new_w / w)
+        resized_h, resized_w = int(round(h * r)), int(round(w * r))
+        image = cv2.resize(image, (resized_w, resized_h), interpolation=cv2.INTER_LINEAR)
+        pad_w = (new_w - resized_w) % self.stride
+        pad_h = (new_h - resized_h) % self.stride
+        top, bottom = pad_h // 2, pad_h - pad_h // 2
+        left, right = pad_w // 2, pad_w - pad_w // 2
+        image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
+        return image
+
+    def scale_boxes_to_original(self, processed_shape: Tuple[int, int], boxes: np.ndarray, original_shape: Tuple[int, int]) -> np.ndarray:
+        gain = min(processed_shape[0] / original_shape[0], processed_shape[1] / original_shape[1])
+        pad_x = round((processed_shape[1] - original_shape[1] * gain) / 2 - 0.1)
+        pad_y = round((processed_shape[0] - original_shape[0] * gain) / 2 - 0.1)
+        boxes[..., :4] = (boxes[..., :4] - [pad_x, pad_y, pad_x, pad_y]) / gain
+        return boxes
+
+    def predict(self, image: np.ndarray, input_size: int = 1024, **kwargs) -> List['LayoutDetectionResult']:
+        print("[INFO] Starting layout prediction...")
+        orig_h, orig_w = image.shape[:2]
+        processed_img = self.resize_and_pad(image, new_shape=input_size)
+        processed_img = np.transpose(processed_img, (2, 0, 1))
+        processed_img = np.expand_dims(processed_img, axis=0)
+        processed_img = processed_img.astype(np.float32) / 255.0
+        new_h, new_w = processed_img.shape[2:]
+        print(f"[INFO] Processed image shape: {processed_img.shape}")
+
+        print("[INFO] Running ONNX model inference...")
+        predictions = self.model.run(None, {"images": processed_img})[0]
+        print(f"[INFO] Model produced {len(predictions)} predictions")
+
+        predictions = predictions[predictions[..., 4] > 0.25]
+        print(f"[INFO] Filtered predictions count: {len(predictions)}")
+
+        predictions[..., :4] = self.scale_boxes_to_original((new_h, new_w), predictions[..., :4], (orig_h, orig_w))
+        print("[INFO] Scaled boxes back to original image dimensions.")
+        return [LayoutDetectionResult(detected_boxes=predictions, class_names=self._class_names)]
+
+
+class LayoutModelState:
+    value: Optional[LayoutYoloOnnxModel] = None
+
+
+# ========================== PDF DETECTION LOGIC (added only below) ==========================
+
 if __name__ == "__main__":
-    main()
+    print("[INFO] Starting PDF layout detection...")
+
+    pdf_path = r"C:\Users\2011747\Desktop\Python\pdf_onnx_easyocr\Euronet MSA ATM, POS, and Switching.pdf"
+    output_folder = r"C:\Users\2011747\Desktop\Python"
+    os.makedirs(output_folder, exist_ok=True)
+    ocr_text_path = os.path.join(output_folder, "ocr_results.txt")
+
+    # Step 1: Load model
+    model = LayoutYoloOnnxModel.load_from_pretrained()
+
+    # Step 2: Open PDF and convert each page to image
+    doc = fitz.open(pdf_path)
+    print(f"[INFO] Extracting {len(doc)} pages from PDF...")
+
+    reader = easyocr.Reader(['en'])
+    all_text = []
+
+    for page_index in range(len(doc)):
+        page = doc.load_page(page_index)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # high-res render
+        img_data = np.frombuffer(pix.tobytes("png"), dtype=np.uint8)
+        image = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
+
+        print(f"[INFO] Processing page {page_index + 1}...")
+        results = model.predict(image)
+        result = results[0]
+
+        # Draw bounding boxes
+        for box in result.boxes:
+            x0, y0, x1, y1 = map(int, box.coordinates)
+            conf = round(float(box.confidence), 2)
+            class_name = result.class_names[box.class_id] if box.class_id < len(result.class_names) else "unknown"
+            cv2.rectangle(image, (x0, y0), (x1, y1), (0, 255, 0), 2)
+            cv2.putText(image, f"{class_name} ({conf})", (x0, max(y0 - 10, 15)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+        # Save annotated image
+        save_path = os.path.join(output_folder, f"page_{page_index + 1}_detected.jpg")
+        cv2.imwrite(save_path, image)
+        print(f"[SAVED] Annotated page saved at: {save_path}")
+
+        # OCR extraction only for 'title' and 'plain text', sorted by top y-coordinate
+        regions = []
+        for box in result.boxes:
+            x0, y0, x1, y1 = map(int, box.coordinates)
+            class_name = result.class_names[box.class_id] if box.class_id < len(result.class_names) else "unknown"
+            class_name = class_name.replace(' ', '_').lower()
+            if class_name in ["title", "plain_text"]:
+                regions.append((y0, class_name, x0, y0, x1, y1))
+        # Sort regions by y0 (top of box)
+        regions.sort()
+        page_texts = []
+        for _, class_name, x0, y0, x1, y1 in regions:
+            crop = image[y0:y1, x0:x1]
+            ocr_result = reader.readtext(crop)
+            text = " ".join([item[1] for item in ocr_result]).strip()
+            if text:
+                if class_name == "title":
+                    page_texts.append(f"[title] {text}")
+                elif class_name == "plain_text":
+                    page_texts.append(f"[text] {text}")
+        # Save combined title and text for each page in a single file, line by line, in layout order
+        combined_file = os.path.join(output_folder, f"page_{page_index + 1}.txt")
+        with open(combined_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(page_texts))
+        print(f"[SAVED] Combined title and text saved at: {combined_file}")
+
+        # OCR extraction
+        ocr_result = reader.readtext(image)
+        page_text = f"--- Page {page_index + 1} ---\n"
+        for item in ocr_result:
+            page_text += item[1] + "\n"
+        all_text.append(page_text)
+
+    # Save all OCR text to a single file
+    with open(ocr_text_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(all_text))
+    print(f"[SAVED] OCR results saved at: {ocr_text_path}")
+
+    print(f"\n[DONE] ✅ All pages processed. Annotated images and OCR text saved in: {output_folder}")
+
