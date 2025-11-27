@@ -1,86 +1,143 @@
-C:\Users\2011747\Desktop\Python\pdf_onnx_easyocr>python main.py
-[INFO] ✅ ONNX and ONNXRuntime imported successfully.
-[INFO] Starting PDF layout detection...
-[INFO] Loading pretrained ONNX model from path: C:\Users\2011747\Desktop\Python\pdf_onnx_easyocr\wybxcDocLayout-YOLO-DocStructBench-onnx\doclayout_yolo_docstructbench_imgsz1024.onnx
-[INFO] Initializing LayoutYoloOnnxModel with model path: C:\Users\2011747\Desktop\Python\pdf_onnx_easyocr\wybxcDocLayout-YOLO-DocStructBench-onnx\doclayout_yolo_docstructbench_imgsz1024.onnx
-[INFO] Loading ONNX model file...
-[INFO] ✅ ONNX model file loaded successfully.
-[INFO] Reading model metadata...
-[DEBUG] Metadata found: {'description': 'Ultralytics YOLOv10m-doclayout model trained on /mnt/petrelfs/zhaozhiyuan/layout/yolov10/ultralytics/cfg/datasets/0830_mixed.yaml', 'author': 'Ultralytics', 'date': '2024-11-22T20:09:25.769454', 'version': '0.0.2', 'license': 'AGPL-3.0 License (https://doclayout_yolo.com/license)', 'docs': 'https://docs.doclayout_yolo.com', 'stride': '32', 'task': 'detect', 'batch': '1', 'imgsz': '[1024, 1024]', 'names': "{0: 'title', 1: 'plain text', 2: 'abandon', 3: 'figure', 4: 'figure_caption', 5: 'table', 6: 'table_caption', 7: 'table_footnote', 8: 'isolate_formula', 9: 'formula_caption'}"}
-[INFO] Model stride: 32, Number of classes: 10
-[INFO] Creating ONNX Runtime inference session (CPU provider only)...
-[INFO] ✅ ONNX Runtime session created successfully.
-[INFO] Extracting 112 pages from PDF...
-Neither CUDA nor MPS are available - defaulting to CPU. Note: This module is much faster with a GPU.
-Downloading detection model, please wait. This may take several minutes depending upon your network connection.
-Traceback (most recent call last):
-  File "C:\Program Files\Python313\Lib\urllib\request.py", line 1319, in do_open
-    h.request(req.get_method(), req.selector, req.data, headers,
-    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-              encode_chunked=req.has_header('Transfer-encoding'))
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\http\client.py", line 1338, in request
-    self._send_request(method, url, body, headers, encode_chunked)
-    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\http\client.py", line 1384, in _send_request
-    self.endheaders(body, encode_chunked=encode_chunked)
-    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\http\client.py", line 1333, in endheaders
-    self._send_output(message_body, encode_chunked=encode_chunked)
-    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\http\client.py", line 1093, in _send_output
-    self.send(msg)
-    ~~~~~~~~~^^^^^
-  File "C:\Program Files\Python313\Lib\http\client.py", line 1037, in send
-    self.connect()
-    ~~~~~~~~~~~~^^
-  File "C:\Program Files\Python313\Lib\http\client.py", line 1472, in connect
-    super().connect()
-    ~~~~~~~~~~~~~~~^^
-  File "C:\Program Files\Python313\Lib\http\client.py", line 1003, in connect
-    self.sock = self._create_connection(
-                ~~~~~~~~~~~~~~~~~~~~~~~^
-        (self.host,self.port), self.timeout, self.source_address)
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\socket.py", line 840, in create_connection
-    for res in getaddrinfo(host, port, 0, SOCK_STREAM):
-               ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\socket.py", line 977, in getaddrinfo
-    for res in _socket.getaddrinfo(host, port, family, type, proto, flags):
-               ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-socket.gaierror: [Errno 11001] getaddrinfo failed
+# ============================================================
+#      NOMINEE NAME VALIDATION (DATAIKU VERSION)
+#   WITH RELATIONSHIP NO & ACCOUNT NO RETAINED
+# ============================================================
 
-During handling of the above exception, another exception occurred:
+import dataiku
+import pandas as pd
+import re
 
-Traceback (most recent call last):
-  File "C:\Users\2011747\Desktop\Python\pdf_onnx_easyocr\main.py", line 166, in <module>
-    reader = easyocr.Reader(['en'])
-  File "C:\Users\2011747\AppData\Roaming\Python\Python313\site-packages\easyocr\easyocr.py", line 92, in __init__
-    detector_path = self.getDetectorPath(detect_network)
-  File "C:\Users\2011747\AppData\Roaming\Python\Python313\site-packages\easyocr\easyocr.py", line 253, in getDetectorPath
-    download_and_unzip(self.detection_models[self.detect_network]['url'], self.detection_models[self.detect_network]['filename'], self.model_storage_directory, self.verbose)
-    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\2011747\AppData\Roaming\Python\Python313\site-packages\easyocr\utils.py", line 628, in download_and_unzip
-    urlretrieve(url, zip_path, reporthook=reporthook)
-    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\urllib\request.py", line 214, in urlretrieve
-    with contextlib.closing(urlopen(url, data)) as fp:
-                            ~~~~~~~^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\urllib\request.py", line 189, in urlopen
-    return opener.open(url, data, timeout)
-           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\urllib\request.py", line 489, in open
-    response = self._open(req, data)
-  File "C:\Program Files\Python313\Lib\urllib\request.py", line 506, in _open
-    result = self._call_chain(self.handle_open, protocol, protocol +
-                              '_open', req)
-  File "C:\Program Files\Python313\Lib\urllib\request.py", line 466, in _call_chain
-    result = func(*args)
-  File "C:\Program Files\Python313\Lib\urllib\request.py", line 1367, in https_open
-    return self.do_open(http.client.HTTPSConnection, req,
-           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                        context=self._context)
-                        ^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files\Python313\Lib\urllib\request.py", line 1322, in do_open
-    raise URLError(err)
-urllib.error.URLError: <urlopen error [Errno 11001] getaddrinfo failed>
+# ------------------------------------------------------------
+# READ DATAIKU INPUT DATASET
+# ------------------------------------------------------------
+input_ds = dataiku.Dataset("input_dataset")     # <-- change dataset name
+df = input_ds.get_dataframe()
+
+# Ensure Relationship No & Account No exist
+REL_COL = "relationship_no"
+ACC_COL = "account_no"
+
+# ------------------------------------------------------------
+# VALIDATION HELPERS
+# ------------------------------------------------------------
+
+def is_one_word_name(name):
+    if not isinstance(name, str):
+        return False
+    cleaned = name.strip()
+    tokens = cleaned.split()
+    if len(tokens) == 1:
+        token = tokens[0]
+        if len(token) >= 2 and re.search(r"[A-Za-z]", token):
+            return True
+    return False
+
+
+RANDOM_WORDS = {
+    "nomination", "nominee", "nominatn", "nominated",
+    "qwerty", "asdf", "zxcv", "xyz", "abc", "abcd", "lmnop"
+}
+
+GIBBERISH_PATTERN = re.compile(r"^[A-Za-z]{5,}$")
+VOWEL_RATIO_THRESHOLD = 0.10
+
+def is_random_or_nonsense(name):
+    if not isinstance(name, str):
+        return False
+    
+    cleaned = name.strip().lower()
+
+    if cleaned in RANDOM_WORDS:
+        return True
+
+    if len(set(cleaned)) == 1 and len(cleaned) >= 3:
+        return True
+
+    if GIBBERISH_PATTERN.match(cleaned):
+        vowels = sum(ch in "aeiou" for ch in cleaned)
+        if vowels / (len(cleaned) + 1e-6) < VOWEL_RATIO_THRESHOLD:
+            return True
+
+    return False
+
+
+# ------------------------------------------------------------
+# MAIN VALIDATION FUNCTION
+# ------------------------------------------------------------
+
+def validate_nominee_name(name):
+    issues = []
+
+    if not isinstance(name, str) or not name.strip():
+        issues.append("Missing or empty name")
+        return issues
+
+    cleaned = name.strip()
+
+    PLACEHOLDERS = ["na", "n/a", "-", "--", "none", "unknown", "nil", "self"]
+    if cleaned.lower() in PLACEHOLDERS:
+        issues.append("Placeholder / invalid word")
+
+    if re.search(r"\d", cleaned):
+        issues.append("Contains digits")
+
+    if re.search(r"[^\w\s.'-]", cleaned):
+        issues.append("Contains special characters")
+
+    if re.search(r"@\w+\.\w+", cleaned):
+        issues.append("Contains email-like pattern")
+
+    if re.search(r"\b\d{8,}\b", cleaned):
+        issues.append("Contains phone number")
+
+    REL_WORDS = ["mother", "father", "son", "daughter", "wife", "husband"]
+    if cleaned.lower() in REL_WORDS:
+        issues.append("Relationship word instead of name")
+
+    if re.fullmatch(r"[A-Za-z]\.?$", cleaned):
+        issues.append("Initials only")
+
+    if is_one_word_name(cleaned):
+        issues.append("One-word name (possibly incomplete)")
+
+    if is_random_or_nonsense(cleaned):
+        issues.append("Random / nonsensical name")
+
+    if len(cleaned) < 2:
+        issues.append("Name too short")
+
+    if len(cleaned) > 70:
+        issues.append("Name too long")
+
+    return issues
+
+
+# ------------------------------------------------------------
+# APPLY VALIDATION TO DATAFRAME
+# ------------------------------------------------------------
+column = "name"
+
+df["nominee_issues"] = df[column].apply(validate_nominee_name)
+df["issue_count"] = df["nominee_issues"].apply(len)
+
+# Boolean flags for easier filtering
+df["is_missing"]           = df["nominee_issues"].apply(lambda x: "Missing or empty name" in x)
+df["has_digits"]           = df["nominee_issues"].apply(lambda x: "Contains digits" in x)
+df["has_special_chars"]    = df["nominee_issues"].apply(lambda x: "Contains special characters" in x)
+df["is_one_word"]          = df["nominee_issues"].apply(lambda x: "One-word name (possibly incomplete)" in x)
+df["is_nonsense"]          = df["nominee_issues"].apply(lambda x: "Random or nonsensical name" in x)
+df["is_initial_only"]      = df["nominee_issues"].apply(lambda x: "Initials only" in x)
+df["is_placeholder"]       = df["nominee_issues"].apply(lambda x: "Placeholder / invalid word" in x)
+df["is_relationship_word"] = df["nominee_issues"].apply(lambda x: "Relationship word instead of name" in x)
+df["has_phone"]            = df["nominee_issues"].apply(lambda x: "Contains phone number" in x)
+df["has_email"]            = df["nominee_issues"].apply(lambda x: "Contains email-like pattern" in x)
+
+# Relationship No & Account No automatically preserved in df
+# They will appear next to issues in the output
+
+
+# ------------------------------------------------------------
+# WRITE OUTPUT DATASET TO DATAIKU
+# ------------------------------------------------------------
+output_ds = dataiku.Dataset("output_dataset")   # <-- change dataset name
+output_ds.write_with_schema(df)
