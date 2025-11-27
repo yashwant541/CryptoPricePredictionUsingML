@@ -1,6 +1,9 @@
 # ============================================================
 #      NOMINEE NAME VALIDATION (DATAIKU VERSION)
-#      FULL VERSION WITH FUZZY NAME SIMILARITY AS SEPARATE COLUMN
+#      FULL VERSION WITH:
+#        - FUZZY NAME SIMILARITY (SEPARATE COLUMN)
+#        - IMPROVED NOM/NOMINATION DETECTION
+#        - SINGLE ISSUE LABEL FOR RELATIONSHIP WORDS
 # ============================================================
 
 import dataiku
@@ -138,15 +141,15 @@ def validate_nominee_name(nominee_name):
             issues.append(f"Random keyboard-like text found ({kb})")
             break
 
-    # NOM wildcard pattern
-    if "nom" in lower_name:
-        issues.append("Contains 'NOM' pattern (*nom*)")
+    # Improved NOM / NOMINATION detection
+    if re.search(r"(?:^|\s|[.,;:!?])nom(?:$|\s|[.,;:!?])", lower_name, re.IGNORECASE) \
+       or re.search(r"(?:^|\s|[.,;:!?])nomination(?:$|\s|[.,;:!?])", lower_name, re.IGNORECASE):
+        issues.append("Contains 'NOM' or 'NOMINATION' pattern (as separate word or with boundary)")
 
-    # Relationship words
-    for rel in RELATIONSHIP_WORDS:
-        if re.search(rf"\b{rel}\b", lower_name):
-            issues.append(f"Relationship word used instead of name ({rel})")
-            break
+    # Relationship words – always flag as single issue label
+    relationship_found = [rel for rel in RELATIONSHIP_WORDS if re.search(rf"\b{rel}\b", lower_name)]
+    if relationship_found:
+        issues.append("Relationship word used instead of name")
 
     # Length checks
     if len(clean_name) < 2:
