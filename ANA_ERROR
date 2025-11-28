@@ -1,1 +1,1 @@
-pattern = r"(?i)\bnom\w*\b"
+pattern = r"(?i)\b(nom|nomination|nominated|nominee|nominationheld|nomheld|nominationheld)\b"
