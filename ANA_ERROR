@@ -1,8 +1,12 @@
-# Flag 3: one word, alphabets only, only when flag1 and flag2 are false
-pattern_one_word_alpha = r"(?i)^[A-Za-z]+$"
+pattern_nom_held = r"""(?ix)              # ignore case, verbose
+    (?:\b|^)                              # start at word boundary or start
+    nom(?:ination)?                       # nom or nomination
+    \s*                                   # optional spaces (zero allowed)
+    (?:held|heldon|helddated|held\s*on|held\s*dated)  # held variants (concatenated or spaced)
+    \s*                                   # optional spaces
+    (?:\d{4,8})?                          # optional date/number (4-8 digits)
+    (?:\b|$)                              # word boundary or end
+"""
 
-df["flag_one_word_alpha"] = (
-    ~df["flag_exact_keywords"] &
-    ~df["flag_nomination_patterns"] &
-    df["text"].str.match(pattern_one_word_alpha, na=False)
-)
+# Use contains to search *anywhere* inside the string
+df["flag_nomination_patterns"] = df["text"].str.contains(pattern_nom_held, regex=True, na=False)
