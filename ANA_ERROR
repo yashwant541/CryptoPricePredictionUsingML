@@ -1,6 +1,1 @@
-import pandas as pd
-
-# regex: any word containing 'nom' + anything + 'held'
-pattern = r"(?i)(nom\w*.*held|held.*nom\w*)"
-
-df["flag_nom_held"] = df["text"].str.contains(pattern, regex=True, na=False)
+pattern = r"(?i)\bnom\w*\b"
