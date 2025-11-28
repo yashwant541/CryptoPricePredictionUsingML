@@ -1,17 +1,51 @@
-NOM
-HELD
-NOMA
-nom held
-MANOMAIN
-NOMOBTAINED
-NOMINATION HD
-NOMINATIONHELD
-NOMINATION HEL
-NOMINATION HELD
-NOMINATION HLED
-NOMINATION  HELD
-nomination heldl
-NOMINATION HELDP
-NOMINATION IN HELD
-NOMINATION OBTAINED
-(NOMINATION REGISTERED)
+import pandas as pd
+import re
+
+# ---- FLAG 1: Exact keyword matches ----
+exact_keywords = [
+    "NOM",
+    "HELD",
+    "NOMA",
+    "nom held",
+    "MANOMAIN",
+    "NOMOBTAINED",
+    "NOMINATION HD",
+    "NOMINATIONHELD",
+    "NOMINATION HEL",
+    "NOMINATION HELD",
+    "NOMINATION HLED",
+    "NOMINATION  HELD",
+    "nomination heldl",
+    "NOMINATION HELDP",
+    "NOMINATION IN HELD",
+    "NOMINATION OBTAINED",
+    "(NOMINATION REGISTERED)"
+]
+
+pattern_exact = r"(?i)^(" + "|".join([re.escape(k) for k in exact_keywords]) + r")$"
+df["flag_exact_keywords"] = df["text"].str.match(pattern_exact, na=False)
+
+
+
+# ---- FLAG 2: Pattern-based flexible matches ----
+# Matches:
+#   - nom or nomination at start
+#   - any number of optional spaces
+#   - "held" OR "held on" OR "held dated"
+#   - optional number/date
+#   - optional continuous concatenations
+
+pattern_nom_held = r"""
+(?i)                             # case-insensitive
+\b(nom|nomination)               # NOM or NOMINATION
+\s*                              # optional spaces
+(?:held|held\s+on|held\s+dated)? # held / held on / held dated (optional)
+\s*                              # optional spaces
+\d{4,8}?                         # optional date or number (4-8 digits)
+"""
+
+df["flag_nomination_patterns"] = df["text"].str.contains(
+    pattern_nom_held, 
+    regex=True, 
+    na=False
+)
