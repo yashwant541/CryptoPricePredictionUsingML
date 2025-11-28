@@ -1,3 +1,1 @@
-pattern = r'^nom.*\d+$'
-
-df['flag_nom_number'] = df['your_column_name'].str.strip().str.lower().str.match(pattern)
+df_filtered = df[df['col'].str.contains(r'^[A-Za-z]+\d+[A-Za-z]+$', na=False)]
