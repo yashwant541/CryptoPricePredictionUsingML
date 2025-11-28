@@ -1,1 +1,5 @@
-df_filtered = df[df['col'].str.contains(r'^[A-Za-z]+\d+[A-Za-z]+$', na=False)]
+df_filtered = df[df['col'].str.contains(
+    r'^[A-Za-z]+ *\d+ *[A-Za-z]+$',
+    case=False,
+    na=False
+)]
