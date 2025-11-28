@@ -1,5 +1,6 @@
+# Regex: letters/spaces → digits → letters/spaces/hyphen
 df_filtered = df[df['col'].str.contains(
-    r'^[A-Za-z]+ *\d+ *[A-Za-z]+$',
+    r'^[A-Za-z ]+\d+[A-Za-z \-]+$',
     case=False,
     na=False
 )]
