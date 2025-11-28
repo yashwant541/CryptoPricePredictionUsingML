@@ -1,12 +1,3 @@
-pattern_nom_held = r"""(?ix)              # ignore case, verbose
-    (?:\b|^)                              # start at word boundary or start
-    nom(?:ination)?                       # nom or nomination
-    \s*                                   # optional spaces (zero allowed)
-    (?:held|heldon|helddated|held\s*on|held\s*dated)  # held variants (concatenated or spaced)
-    \s*                                   # optional spaces
-    (?:\d{4,8})?                          # optional date/number (4-8 digits)
-    (?:\b|$)                              # word boundary or end
-"""
+pattern = r'^nom.*\d+$'
 
-# Use contains to search *anywhere* inside the string
-df["flag_nomination_patterns"] = df["text"].str.contains(pattern_nom_held, regex=True, na=False)
+df['flag_nom_number'] = df['your_column_name'].str.strip().str.lower().str.match(pattern)
