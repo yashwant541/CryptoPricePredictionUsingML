@@ -1,30 +1,15 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Dataiku Webapp Test</title>
-</head>
-<body>
+# -*- coding: utf-8 -*-
+from dataiku import api_client
+from flask import request, jsonify
 
-<h2>Webapp Test</h2>
-<button onclick="runTest()">Run Test</button>
-
-<p id="result"></p>
-
-<script>
-function runTest() {
-    fetch(getWebAppBackendUrl("/test"))
-        .then(response => response.json())
-        .then(data => {
-            document.getElementById("result").innerHTML =
-                "Backend Response: " + JSON.stringify(data);
-        })
-        .catch(error => {
-            document.getElementById("result").innerHTML =
-                "Error: " + error;
-        });
-}
-</script>
-
-</body>
-</html>
-
+@app.route('/test', methods=['GET'])
+def test_endpoint():
+    """Simple backend test endpoint"""
+    return jsonify({
+        "status": "success",
+        "message": "Backend is working!",
+        "data": {
+            "sample_number": 123,
+            "sample_list": ["apple", "banana", "cherry"]
+        }
+    })
