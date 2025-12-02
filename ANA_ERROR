@@ -1,6 +1,30 @@
-# Regex: letters/spaces → digits → letters/spaces/hyphen
-df_filtered = df[df['col'].str.contains(
-    r'^[A-Za-z ]+\d+[A-Za-z \-]+$',
-    case=False,
-    na=False
-)]
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dataiku Webapp Test</title>
+</head>
+<body>
+
+<h2>Webapp Test</h2>
+<button onclick="runTest()">Run Test</button>
+
+<p id="result"></p>
+
+<script>
+function runTest() {
+    fetch(getWebAppBackendUrl("/test"))
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById("result").innerHTML =
+                "Backend Response: " + JSON.stringify(data);
+        })
+        .catch(error => {
+            document.getElementById("result").innerHTML =
+                "Error: " + error;
+        });
+}
+</script>
+
+</body>
+</html>
+
