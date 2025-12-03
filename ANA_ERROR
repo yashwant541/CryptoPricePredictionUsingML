@@ -1,10 +1,8 @@
 # ============================================================
 #   ENHANCED NOMINATION CLASSIFICATION SCRIPT
-#   - Comprehensive classification with priority ordering
-#   - Detailed metrics and logging
-#   - Enhanced pattern matching
-#   - Data validation and overlap checking
-#   - Externalized configuration
+#   - Maintains exact dataset structure as specified
+#   - Enhanced logging, validation, and error handling
+#   - Comprehensive metrics and overlap checking
 # ============================================================
 
 import dataiku
@@ -18,29 +16,26 @@ from datetime import datetime
 # CONFIGURATION
 # ------------------------------------------------------------
 CONFIG = {
+    # Input dataset
     "input_dataset": "AccRelNo_AgainstNominationChecks",
+    
+    # Column names
     "nomination_column": "name",
     "relationship_column": "relationshipno",
     "account_column": "accountno",
     
     # Classification thresholds
     "min_name_length": 2,
-    "max_single_letter_count": 1,
     
     # Pattern configurations
     "patterns": {
-        "ug_patterns": ["u/g", "u-g", "u\\g", "u g", "ug"],
+        "ug_patterns": ["u/g", "u-g", "u\\g", "u g"],
         "sns_pattern": r"[A-Za-z]+\s+[A-Za-z]+\s+\d{2,}\s+[A-Za-z]+",
         "nom_ending_number": r"nom\w*\s*\d{2,}$",
         "digit_only": r"^\d+$",
-        "single_letter": r"^[A-Za-z]$",
-        "repeated_chars": r"^(.)\1{2,}$",
-        "special_char_excessive": r"[!@#$%^&*()_+=\[\]{}|;:,.<>?/~`-]{3,}",
-        "all_caps_with_digits": r"^[A-Z0-9\s]{3,}$",
-        "test_pattern": r"\btest\b|\btesting\b|\bdemo\b|\bsample\b"
     },
     
-    # Word lists
+    # Word lists (expanded for better detection)
     "forbidden_words": [
         "sdu", "no held", "nomheld", "held", "nominee", 
         "nomination", "not held", "none", "null", "na", 
@@ -57,7 +52,7 @@ CONFIG = {
         "son/dtr", "son/daughter", "s/o", "d/o", "w/o",
         
         # Spouse
-        "wife", "husband", "spouse", "partner", "better half",
+        "wife", "husband", "spouse", "partner",
         
         # Siblings
         "brother", "sister", "sibling", "sis", "bro", "bhai", "didi",
@@ -68,25 +63,11 @@ CONFIG = {
         "granny", "gramps", "nana", "granddad",
         
         # Guardians
-        "guardian", "caretaker", "caregiver", "guard",
+        "guardian", "caretaker", "caregiver",
         
         # General
-        "cousin", "relative", "family", "familymember"
+        "cousin", "relative", "family"
     ],
-    
-    # Output datasets
-    "output_datasets": {
-        "success": "SuccessNomination",
-        "empty": "EmptyNomination",
-        "fail_base": "FailAllNomination",
-        "fail_categories": [
-            "FailUG", "FailSNSPattern", "FailNOMOneWord",
-            "FailForbiddenWords", "FailRelationship",
-            "FailNOMEndingNumber", "FailOneWord", "FailDigitOnly",
-            "FailSingleLetter", "FailAllCapsSpecial", "FailTestNames",
-            "FailOthers"
-        ]
-    }
 }
 
 # ------------------------------------------------------------
@@ -97,46 +78,60 @@ class ClassificationLogger:
         self.metrics = {
             "start_time": datetime.now(),
             "counts": {},
-            "errors": []
+            "errors": [],
+            "warnings": []
         }
     
     def log(self, message: str, level: str = "INFO"):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{timestamp}] [{level}] {message}")
-    
-    def record_error(self, error: str, row_data: Optional[Dict] = None):
-        self.metrics["errors"].append({
-            "error": error,
-            "row_data": row_data,
-            "timestamp": datetime.now()
-        })
-        self.log(f"Error: {error}", "ERROR")
+        
+        if level == "WARNING":
+            self.metrics["warnings"].append(message)
+        elif level == "ERROR":
+            self.metrics["errors"].append(message)
     
     def record_count(self, category: str, count: int):
         self.metrics["counts"][category] = count
     
     def print_summary(self):
-        total = sum(self.metrics["counts"].values())
+        total_records = sum(self.metrics["counts"].get(cat, 0) for cat in ["Success", "Empty", "TotalFailures"])
         duration = datetime.now() - self.metrics["start_time"]
         
         print("\n" + "="*60)
         print("CLASSIFICATION SUMMARY")
         print("="*60)
         print(f"Total processing time: {duration}")
-        print(f"Total records processed: {total}")
-        print(f"Errors encountered: {len(self.metrics['errors'])}")
+        print(f"Total records processed: {total_records}")
+        print(f"Warnings: {len(self.metrics['warnings'])}")
+        print(f"Errors: {len(self.metrics['errors'])}")
         
-        if self.metrics["counts"]:
-            print("\nCategory Breakdown:")
-            for category, count in sorted(self.metrics["counts"].items()):
-                percentage = (count / total * 100) if total > 0 else 0
+        print("\nCategory Breakdown:")
+        for category in ["Success", "Empty", "TotalFailures"]:
+            count = self.metrics["counts"].get(category, 0)
+            if total_records > 0:
+                percentage = (count / total_records * 100)
                 print(f"  {category}: {count} ({percentage:.1f}%)")
         
-        if self.metrics["errors"]:
-            print(f"\nTop 5 Errors:")
-            for error in self.metrics["errors"][:5]:
-                print(f"  - {error['error']}")
+        # Show failure breakdown if available
+        fail_categories = [
+            "FailUG", "FailSNSPattern", "FailNOMOneWord", "FailForbiddenWords",
+            "FailRelationship", "FailNOMEndingNumber", "FailOneWord", 
+            "FailDigitOnly", "FailOthers"
+        ]
+        
+        fail_counts = {cat: self.metrics["counts"].get(cat, 0) for cat in fail_categories}
+        total_fails = sum(fail_counts.values())
+        
+        if total_fails > 0:
+            print("\nFailure Breakdown:")
+            for category in fail_categories:
+                count = fail_counts[category]
+                if count > 0:
+                    percentage = (count / total_fails * 100)
+                    print(f"  {category}: {count} ({percentage:.1f}%)")
 
+# Initialize logger
 logger = ClassificationLogger()
 
 # ------------------------------------------------------------
@@ -150,7 +145,7 @@ def clean_text(text: Any) -> str:
     text = str(text).strip()
     # Replace multiple spaces, tabs, newlines with single space
     text = re.sub(r"\s+", " ", text)
-    # Remove extra whitespace and convert to lowercase
+    # Convert to lowercase for case-insensitive matching
     return text.lower()
 
 def is_one_word_name(text: str) -> bool:
@@ -158,17 +153,13 @@ def is_one_word_name(text: str) -> bool:
     text = text.strip()
     return len(text.split()) == 1 and len(text) >= CONFIG["min_name_length"]
 
-def contains_pattern(text: str, pattern: str) -> bool:
-    """Check if text contains a regex pattern"""
-    try:
-        return bool(re.search(pattern, text, re.IGNORECASE))
-    except re.error:
-        return False
+def contains_any(text: str, word_list: List[str]) -> bool:
+    """Check if text contains any of the words in the list"""
+    text_lower = text.lower()
+    return any(word.lower() in text_lower for word in word_list)
 
 def validate_input_data(df: pd.DataFrame) -> bool:
-    """Validate input data structure and quality"""
-    issues = []
-    
+    """Validate input data structure"""
     required_columns = [
         CONFIG["nomination_column"],
         CONFIG["relationship_column"],
@@ -176,114 +167,100 @@ def validate_input_data(df: pd.DataFrame) -> bool:
         "nominee_issues"
     ]
     
-    for col in required_columns:
-        if col not in df.columns:
-            issues.append(f"Missing required column: {col}")
+    missing_columns = [col for col in required_columns if col not in df.columns]
     
-    if issues:
-        for issue in issues:
-            logger.log(issue, "ERROR")
+    if missing_columns:
+        logger.log(f"Missing required columns: {missing_columns}", "ERROR")
         return False
     
-    # Check for null values in critical columns
-    null_counts = df[CONFIG["nomination_column"]].isna().sum()
-    if null_counts > 0:
-        logger.log(f"Found {null_counts} null values in nomination column", "WARNING")
-    
-    # Check nominee_issues data type
-    non_list_issues = df["nominee_issues"].apply(lambda x: not isinstance(x, list)).sum()
-    if non_list_issues > 0:
-        logger.log(f"Found {non_list_issues} rows with non-list nominee_issues", "WARNING")
+    # Check for unexpected nulls
+    null_nom_count = df[CONFIG["nomination_column"]].isna().sum()
+    if null_nom_count > 0:
+        logger.log(f"Found {null_nom_count} null values in nomination column", "WARNING")
     
     return True
 
 # ------------------------------------------------------------
-# ENHANCED CLASSIFICATION LOGIC
+# CLASSIFICATION LOGIC (PRIORITY ORDER)
 # ------------------------------------------------------------
 def classify_nomination(row: pd.Series) -> str:
-    """Classify a nomination row into categories"""
+    """
+    Classify nomination with priority order:
+    1. Success (no issues)
+    2. Empty (missing/empty name)
+    3. FailUG
+    4. FailSNSPattern
+    5. FailNOMOneWord
+    6. FailForbiddenWords
+    7. FailRelationship
+    8. FailNOMEndingNumber
+    9. FailOneWord
+    10. FailDigitOnly
+    11. FailOthers
+    """
     try:
-        # Extract and clean data
+        # Extract data
         issues = row.get("nominee_issues", [])
-        raw_name = row.get(CONFIG["nomination_column"], "")
+        raw_name = str(row.get(CONFIG["nomination_column"], "")).strip()
         cleaned_name = clean_text(raw_name)
         
-        # Handle edge cases
+        # Handle non-list issues
         if not isinstance(issues, list):
-            logger.record_error(f"Invalid nominee_issues type: {type(issues)}", {"row": row.to_dict()})
-            issues = []
+            try:
+                issues = list(issues) if issues else []
+            except:
+                issues = []
         
-        # Top level classifications
+        # 1. Success - no issues
         if issues == []:
             return "Success"
         
+        # 2. Empty - missing or empty name
         if issues == ["Missing or empty name"] or not cleaned_name:
             return "Empty"
         
-        # Convert issues to lowercase for comparison
+        # Convert issues to lowercase for consistency
         issues_lower = [str(i).lower() for i in issues]
         
-        # PRIORITY ORDER FOR FAIL CATEGORIES (highest to lowest)
-        
-        # 1) U/G cases
-        ug_patterns = CONFIG["patterns"]["ug_patterns"]
-        if any(pattern in cleaned_name for pattern in ug_patterns):
+        # 3. FailUG - U/G cases
+        if contains_any(cleaned_name, CONFIG["patterns"]["ug_patterns"]):
             return "FailUG"
         
-        # 2) SNS pattern (String String Number String)
-        if contains_pattern(raw_name, CONFIG["patterns"]["sns_pattern"]):
+        # 4. FailSNSPattern - String String Number String pattern
+        if re.search(CONFIG["patterns"]["sns_pattern"], raw_name, re.IGNORECASE):
             return "FailSNSPattern"
         
-        # 3) Test/Demo names
-        if contains_pattern(cleaned_name, CONFIG["patterns"]["test_pattern"]):
-            return "FailTestNames"
-        
-        # 4) All caps with special characters/digits
-        if (raw_name.isupper() and 
-            (contains_pattern(raw_name, CONFIG["patterns"]["special_char_excessive"]) or
-             contains_pattern(raw_name, CONFIG["patterns"]["all_caps_with_digits"]))):
-            return "FailAllCapsSpecial"
-        
-        # 5) NOM word + one word
+        # 5. FailNOMOneWord - Contains "NOM" and is single word
         if "nom" in cleaned_name and is_one_word_name(raw_name):
             return "FailNOMOneWord"
         
-        # 6) Forbidden words
-        forbidden_words = CONFIG["forbidden_words"]
-        if any(word in cleaned_name for word in forbidden_words):
+        # 6. FailForbiddenWords - Contains forbidden words
+        if contains_any(cleaned_name, CONFIG["forbidden_words"]):
             return "FailForbiddenWords"
         
-        # 7) Relationship words
-        relationship_words = CONFIG["relationship_words"]
-        if any(rel_word in cleaned_name for rel_word in relationship_words):
+        # 7. FailRelationship - Contains relationship words
+        if contains_any(cleaned_name, CONFIG["relationship_words"]):
             return "FailRelationship"
         
-        # 8) NOM ending with number
-        if contains_pattern(cleaned_name, CONFIG["patterns"]["nom_ending_number"]):
+        # 8. FailNOMEndingNumber - NOM ending with numbers
+        if re.search(CONFIG["patterns"]["nom_ending_number"], cleaned_name):
             return "FailNOMEndingNumber"
         
-        # 9) Single letter names
-        if contains_pattern(raw_name.strip(), CONFIG["patterns"]["single_letter"]):
-            return "FailSingleLetter"
-        
-        # 10) One-word name
+        # 9. FailOneWord - Single word names
         if is_one_word_name(raw_name):
             return "FailOneWord"
         
-        # 11) Digit-only name
-        if contains_pattern(raw_name.strip(), CONFIG["patterns"]["digit_only"]):
+        # 10. FailDigitOnly - Digit-only names
+        if re.match(CONFIG["patterns"]["digit_only"], raw_name):
             return "FailDigitOnly"
         
-        # 12) Repeated characters
-        if contains_pattern(cleaned_name, CONFIG["patterns"]["repeated_chars"]):
-            return "FailOthers"
-        
-        # 13) Catch-all others
+        # 11. FailOthers - Catch-all for remaining cases
         return "FailOthers"
         
     except Exception as e:
-        error_msg = f"Error in classification: {str(e)}"
-        logger.record_error(error_msg, {"row": row.to_dict() if isinstance(row, pd.Series) else {}})
+        error_msg = f"Classification error for row: {str(e)}"
+        logger.log(error_msg, "ERROR")
+        # Return FailOthers as safe default
         return "FailOthers"
 
 # ------------------------------------------------------------
@@ -311,7 +288,7 @@ def process_nomination_classification():
         return
     
     # --------------------------------------------------------
-    # CLEAN NAME COLUMN
+    # PREPARE DATA
     # --------------------------------------------------------
     df["name_clean"] = df[CONFIG["nomination_column"]].apply(clean_text)
     
@@ -322,140 +299,211 @@ def process_nomination_classification():
     df["NominationCase"] = df.apply(classify_nomination, axis=1)
     
     # --------------------------------------------------------
-    # SPLIT DATASETS
+    # SPLIT INTO DATASETS (AS SPECIFIED)
     # --------------------------------------------------------
-    # Success and Empty datasets
-    success_mask = df["NominationCase"] == "Success"
-    empty_mask = df["NominationCase"] == "Empty"
+    logger.log("Splitting data into specified datasets...")
     
-    success_df = df[success_mask].copy()
-    empty_df = df[empty_mask].copy()
+    # 1️⃣ Independent top-level datasets
+    success_df = df[df["NominationCase"] == "Success"].copy()
+    empty_df = df[df["NominationCase"] == "Empty"].copy()
     
-    # Failed datasets
+    # 2️⃣ All failed cases combined
     fail_mask = df["NominationCase"].str.startswith("Fail")
-    fail_df = df[fail_mask].copy()
+    fail_all_df = df[fail_mask].copy()
     
     # Record counts
     logger.record_count("Success", len(success_df))
     logger.record_count("Empty", len(empty_df))
-    logger.record_count("TotalFailures", len(fail_df))
+    logger.record_count("TotalFailures", len(fail_all_df))
     
     # --------------------------------------------------------
     # WRITE OUTPUT DATASETS
     # --------------------------------------------------------
     logger.log("Writing output datasets...")
     
-    # Main datasets
-    dataiku.Dataset(CONFIG["output_datasets"]["success"]).write_with_schema(success_df)
-    dataiku.Dataset(CONFIG["output_datasets"]["empty"]).write_with_schema(empty_df)
-    dataiku.Dataset(CONFIG["output_datasets"]["fail_base"]).write_with_schema(fail_df)
+    # Write top-level datasets
+    dataiku.Dataset("SuccessNomination").write_with_schema(success_df)
+    dataiku.Dataset("EmptyNomination").write_with_schema(empty_df)
+    dataiku.Dataset("FailAllNomination").write_with_schema(fail_all_df)
     
-    # Individual fail category datasets
-    for case in CONFIG["output_datasets"]["fail_categories"]:
-        # Extract base category name (remove 'Fail' prefix)
-        base_case = case[4:] if case.startswith("Fail") else case
-        subset = fail_df[fail_df["NominationCase"] == f"Fail{base_case}"]
+    # 3️⃣ Mutually exclusive fail category datasets
+    fail_categories = [
+        "FailUG", "FailSNSPattern", "FailNOMOneWord", "FailForbiddenWords",
+        "FailRelationship", "FailNOMEndingNumber", "FailOneWord", 
+        "FailDigitOnly", "FailOthers"
+    ]
+    
+    for category in fail_categories:
+        subset = fail_all_df[fail_all_df["NominationCase"] == category].copy()
+        dataset_name = f"{category}Nomination"
         
         if not subset.empty:
-            dataset_name = f"{case}Nomination"
             dataiku.Dataset(dataset_name).write_with_schema(subset)
-            logger.record_count(case, len(subset))
+            logger.record_count(category, len(subset))
+        else:
+            logger.record_count(category, 0)
     
     # --------------------------------------------------------
-    # VALIDATION AND OVERLAP CHECKING
+    # VALIDATION AND OVERLAP CHECKS
     # --------------------------------------------------------
     logger.log("Performing validation checks...")
     
-    # 1. Check all rows are accounted for
-    total_classified = len(success_df) + len(empty_df) + len(fail_df)
+    # Check 1: Ensure all rows are accounted for
+    total_classified = len(success_df) + len(empty_df) + len(fail_all_df)
     if total_classified != len(df):
-        logger.log(f"WARNING: {len(df) - total_classified} rows not classified!", "WARNING")
+        missing = len(df) - total_classified
+        logger.log(f"WARNING: {missing} rows not classified!", "WARNING")
     
-    # 2. Check for overlaps between Success and Empty
+    # Check 2: Ensure no overlap between Success, Empty, and Fail
     rel_col = CONFIG["relationship_column"]
     acc_col = CONFIG["account_column"]
     
     success_keys = set(zip(success_df[rel_col], success_df[acc_col]))
     empty_keys = set(zip(empty_df[rel_col], empty_df[acc_col]))
-    overlap_keys = success_keys.intersection(empty_keys)
+    fail_keys = set(zip(fail_all_df[rel_col], fail_all_df[acc_col]))
     
-    if overlap_keys:
-        logger.log(f"WARNING: {len(overlap_keys)} overlaps between Success and Empty datasets", "WARNING")
+    # Check overlaps between different categories
+    success_empty_overlap = success_keys.intersection(empty_keys)
+    success_fail_overlap = success_keys.intersection(fail_keys)
+    empty_fail_overlap = empty_keys.intersection(fail_keys)
     
-    # 3. Check for duplicates within fail categories
-    all_fail_subsets = []
-    for case in CONFIG["output_datasets"]["fail_categories"]:
-        base_case = case[4:] if case.startswith("Fail") else case
-        subset = fail_df[fail_df["NominationCase"] == f"Fail{base_case}"]
-        all_fail_subsets.append(subset)
+    if success_empty_overlap:
+        logger.log(f"WARNING: {len(success_empty_overlap)} overlaps between Success and Empty", "WARNING")
     
-    if all_fail_subsets:
-        combined_fails = pd.concat(all_fail_subsets)
+    if success_fail_overlap:
+        logger.log(f"WARNING: {len(success_fail_overlap)} overlaps between Success and Fail", "WARNING")
+    
+    if empty_fail_overlap:
+        logger.log(f"WARNING: {len(empty_fail_overlap)} overlaps between Empty and Fail", "WARNING")
+    
+    # Check 3: Ensure fail categories are mutually exclusive
+    fail_category_dfs = []
+    for category in fail_categories:
+        subset = fail_all_df[fail_all_df["NominationCase"] == category]
+        fail_category_dfs.append(subset)
+    
+    if fail_category_dfs:
+        # Combine all fail category subsets
+        combined_fails = pd.concat(fail_category_dfs)
         
-        # Check for duplicates by RelationshipNo + AccountNo
+        # Check for duplicates across categories
         overlap_check = combined_fails.groupby([rel_col, acc_col]).size()
         overlaps = overlap_check[overlap_check > 1]
         
         if not overlaps.empty:
-            logger.log(f"WARNING: {len(overlaps)} overlaps detected in fail categories", "WARNING")
-            logger.log("Sample overlaps:", "WARNING")
-            for idx, (key, count) in enumerate(overlaps.head(5).items()):
-                logger.log(f"  {key}: {count} occurrences", "WARNING")
+            logger.log(f"WARNING: {len(overlaps)} overlaps detected across fail categories", "WARNING")
+            logger.log("Sample of overlapping records:", "WARNING")
+            
+            # Get sample of overlapping records
+            overlap_samples = []
+            for (rel, acc), count in overlaps.head(3).items():
+                records = combined_fails[(combined_fails[rel_col] == rel) & 
+                                        (combined_fails[acc_col] == acc)]
+                categories = records["NominationCase"].unique()
+                overlap_samples.append(f"  Rel={rel}, Acc={acc}: {count} entries in {categories}")
+            
+            for sample in overlap_samples:
+                logger.log(sample, "WARNING")
         else:
-            logger.log("✅ No overlaps detected in fail categories")
+            logger.log("✅ All fail categories are mutually exclusive (no overlaps)")
     
-    # 4. Data quality summary
-    logger.log("\nData Quality Summary:")
-    logger.log(f"  - Success nominations: {len(success_df)}")
-    logger.log(f"  - Empty nominations: {len(empty_df)}")
-    logger.log(f"  - Failed nominations: {len(fail_df)}")
-    
-    if len(fail_df) > 0:
-        failure_breakdown = fail_df["NominationCase"].value_counts()
-        logger.log("  - Failure breakdown:")
-        for case, count in failure_breakdown.items():
-            percentage = (count / len(fail_df)) * 100
-            logger.log(f"    {case}: {count} ({percentage:.1f}%)")
+    # Check 4: Verify all fail rows are in exactly one category
+    total_fail_by_category = sum(len(fail_all_df[fail_all_df["NominationCase"] == cat]) for cat in fail_categories)
+    if total_fail_by_category != len(fail_all_df):
+        missing_fails = len(fail_all_df) - total_fail_by_category
+        logger.log(f"WARNING: {missing_fails} fail rows not assigned to any specific category", "WARNING")
     
     # --------------------------------------------------------
-    # CREATE SUMMARY REPORT DATASET
+    # DATA QUALITY METRICS
+    # --------------------------------------------------------
+    logger.log("\n" + "="*60)
+    logger.log("DATA QUALITY METRICS")
+    logger.log("="*60)
+    
+    # Calculate percentages
+    total_records = len(df)
+    success_pct = (len(success_df) / total_records * 100) if total_records > 0 else 0
+    empty_pct = (len(empty_df) / total_records * 100) if total_records > 0 else 0
+    fail_pct = (len(fail_all_df) / total_records * 100) if total_records > 0 else 0
+    
+    logger.log(f"Total Records: {total_records}")
+    logger.log(f"Success Nominations: {len(success_df)} ({success_pct:.1f}%)")
+    logger.log(f"Empty Nominations: {len(empty_df)} ({empty_pct:.1f}%)")
+    logger.log(f"Failed Nominations: {len(fail_all_df)} ({fail_pct:.1f}%)")
+    
+    if len(fail_all_df) > 0:
+        logger.log("\nTop Failure Categories:")
+        fail_breakdown = fail_all_df["NominationCase"].value_counts().head(5)
+        for case, count in fail_breakdown.items():
+            pct = (count / len(fail_all_df)) * 100
+            logger.log(f"  {case}: {count} ({pct:.1f}%)")
+    
+    # --------------------------------------------------------
+    # CREATE AUDIT LOG
     # --------------------------------------------------------
     try:
-        summary_data = []
-        for case in df["NominationCase"].unique():
-            count = len(df[df["NominationCase"] == case])
-            percentage = (count / len(df)) * 100
-            
-            # Determine category type
-            if case == "Success":
-                category_type = "Valid"
-            elif case == "Empty":
-                category_type = "Empty"
-            else:
-                category_type = "Invalid"
-            
-            summary_data.append({
-                "Category": case,
-                "Count": count,
-                "Percentage": round(percentage, 2),
-                "Type": category_type,
-                "ProcessingTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        audit_data = []
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Add summary stats
+        audit_data.append({
+            "Timestamp": timestamp,
+            "Category": "SUMMARY",
+            "Metric": "Total Records",
+            "Value": str(total_records),
+            "Details": "Input dataset row count"
+        })
+        
+        audit_data.append({
+            "Timestamp": timestamp,
+            "Category": "SUMMARY",
+            "Metric": "Success Rate",
+            "Value": f"{success_pct:.1f}%",
+            "Details": f"{len(success_df)} successful nominations"
+        })
+        
+        # Add counts for each category
+        for category in ["Success", "Empty"] + fail_categories:
+            count = len(df[df["NominationCase"] == category])
+            audit_data.append({
+                "Timestamp": timestamp,
+                "Category": "CLASSIFICATION",
+                "Metric": category,
+                "Value": str(count),
+                "Details": f"Rows classified as {category}"
             })
         
-        summary_df = pd.DataFrame(summary_data)
-        summary_df = summary_df.sort_values("Count", ascending=False)
+        # Add warnings/errors
+        for i, warning in enumerate(self.metrics["warnings"][:10]):  # Limit to 10 warnings
+            audit_data.append({
+                "Timestamp": timestamp,
+                "Category": "WARNING",
+                "Metric": f"Warning_{i+1}",
+                "Value": "⚠",
+                "Details": warning[:200]  # Truncate long messages
+            })
         
-        # Write summary dataset
-        dataiku.Dataset("NominationClassificationSummary").write_with_schema(summary_df)
-        logger.log("Summary dataset created successfully")
+        audit_df = pd.DataFrame(audit_data)
+        dataiku.Dataset("NominationClassificationAudit").write_with_schema(audit_df)
+        logger.log("Audit log created successfully")
         
     except Exception as e:
-        logger.log(f"Failed to create summary dataset: {e}", "WARNING")
+        logger.log(f"Could not create audit log: {e}", "WARNING")
     
     # --------------------------------------------------------
-    # FINAL LOGGING
+    # FINAL SUMMARY
     # --------------------------------------------------------
-    logger.log("\nClassification process completed")
+    logger.log("\n" + "="*60)
+    logger.log("PROCESS COMPLETED SUCCESSFULLY")
+    logger.log("="*60)
+    logger.log(f"Output datasets created:")
+    logger.log(f"  1. SuccessNomination")
+    logger.log(f"  2. EmptyNomination")
+    logger.log(f"  3. FailAllNomination")
+    for category in fail_categories:
+        logger.log(f"  4. {category}Nomination")
+    
+    # Print final summary
     logger.print_summary()
 
 # ------------------------------------------------------------
@@ -464,9 +512,10 @@ def process_nomination_classification():
 if __name__ == "__main__":
     try:
         process_nomination_classification()
-        logger.log("Script execution completed successfully")
+        logger.log("\nScript execution completed successfully!")
     except KeyboardInterrupt:
-        logger.log("Script interrupted by user", "WARNING")
+        logger.log("\nScript interrupted by user", "WARNING")
     except Exception as e:
-        logger.log(f"Unexpected error: {e}", "ERROR")
+        logger.log(f"\nUnexpected error in main execution: {e}", "ERROR")
+        # Re-raise to see full traceback in Dataiku logs
         raise
