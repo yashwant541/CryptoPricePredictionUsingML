@@ -1,31 +1,129 @@
-👍 Success
+# ============================================================
+#   FINAL NOMINATION CLASSIFICATION SCRIPT (UPDATED NAMES)
+# ============================================================
 
-SuccessNomination
+import dataiku
+import pandas as pd
+import re
 
-👍 Empty
+# ------------------------------------------------------------
+# READ THE FLAGGED DATASET
+# ------------------------------------------------------------
+df = dataiku.Dataset("AccRelNo_AgainstNominationChecks").get_dataframe()
 
-EmptyNomination
+NOM_COL = "name"
 
-👎 Fail — All
+# Clean text function
+def clean_text(x):
+    if not isinstance(x, str):
+        return ""
+    return re.sub(r"\s+", " ", x).strip().lower()
 
-FailAllNomination
+df["name_clean"] = df[NOM_COL].apply(clean_text)
 
-👎 Fail — Individual Buckets
+# Relationship word list
+RELATIONSHIP_WORDS = [
+    "mother","mom","mummy","mamma","ma",
+    "father","dad","daddy","papa",
+    "son","daughter","child","children",
+    "wife","husband","spouse",
+    "brother","sister","sibling",
+    "uncle","aunty","aunt","nephew","niece",
+    "grandmother","grandfather","grandma","grandpa",
+    "guardian","caretaker"
+]
 
-FailUGNomination
+def is_one_word_name(name):
+    if not isinstance(name, str):
+        return False
+    parts = name.strip().split()
+    return len(parts) == 1 and len(parts[0]) >= 2
 
-FailSNSPatternNomination
 
-FailForbiddenWordsNomination
+# ============================================================
+# CLASSIFICATION LOGIC
+# ============================================================
+def classify_nomination(row):
+    issues = row["nominee_issues"]
+    raw = row[NOM_COL]
+    name = row["name_clean"]
 
-FailNOMOneWordNomination
+    # ---------------- TOP LEVEL -----------------
 
-FailRelationshipNomination
+    if issues == []:
+        return "Success"
 
-FailNOMEndingNumberNomination
+    if issues == ["Missing or empty name"]:
+        return "Empty"
 
-FailOneWordNomination
+    # ---------------- FAIL CONDITIONS -----------------
 
-FailDigitOnlyNomination
+    # 1) U/G cases
+    if "u/g" in name or "u-g" in name or "u\\g" in name:
+        return "FailUG"
 
-FailOthersNomination
+    # 2) Forbidden words
+    forbidden_words = ["sdu", "no held", "nomheld", "held", "nominee", "nomination"]
+
+    if any(w in name for w in forbidden_words):
+
+        # 2A SNS pattern (String String Number String)
+        if re.search(r"[A-Za-z]+\s+[A-Za-z]+\s+\d{2,}\s+[A-Za-z]+", raw, re.IGNORECASE):
+            return "FailSNSPattern"
+
+        # 2B NOM + one word
+        if "nom" in name and len(name.split()) == 1:
+            return "FailNOMOneWord"
+
+        return "FailForbiddenWords"
+
+    # 3) Relationship words
+    if any(rel in name for rel in RELATIONSHIP_WORDS):
+        return "FailRelationship"
+
+    # 4) NOM ending with number
+    if re.search(r"nom\w*\s*\d{2,}$", name):
+        return "FailNOMEndingNumber"
+
+    # 5) One-word name
+    if is_one_word_name(raw):
+        return "FailOneWord"
+
+    # 6) Digit-only
+    if re.fullmatch(r"\d+", raw.strip()):
+        return "FailDigitOnly"
+
+    # 7) Other failures
+    return "FailOthers"
+
+
+# ============================================================
+# APPLY CLASSIFICATION
+# ============================================================
+df["NominationCase"] = df.apply(classify_nomination, axis=1)
+
+
+# ============================================================
+# WRITE OUTPUT DATASETS
+# ============================================================
+
+# Success
+dataiku.Dataset("SuccessNomination").write_with_schema(
+    df[df["NominationCase"] == "Success"]
+)
+
+# Empty
+dataiku.Dataset("EmptyNomination").write_with_schema(
+    df[df["NominationCase"] == "Empty"]
+)
+
+# All failures
+fail_df = df[df["NominationCase"].str.startswith("Fail")]
+dataiku.Dataset("FailAllNomination").write_with_schema(fail_df)
+
+# Individual Fail Buckets
+for case in fail_df["NominationCase"].unique():
+    dataset_name = f"{case}Nomination"   # e.g. FailUGNomination
+    dataiku.Dataset(dataset_name).write_with_schema(
+        fail_df[fail_df["NominationCase"] == case]
+    )
