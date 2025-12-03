@@ -1,5 +1,5 @@
 # ============================================================
-#   FINAL NOMINATION CLASSIFICATION SCRIPT (UPDATED NAMES)
+#   FINAL NOMINATION CLASSIFICATION SCRIPT (ERROR-PROOF)
 # ============================================================
 
 import dataiku
@@ -15,8 +15,9 @@ NOM_COL = "name"
 
 # Clean text function
 def clean_text(x):
-    if not isinstance(x, str):
+    if x is None:
         return ""
+    x = str(x)                      # <-- fixes float errors
     return re.sub(r"\s+", " ", x).strip().lower()
 
 df["name_clean"] = df[NOM_COL].apply(clean_text)
@@ -45,7 +46,7 @@ def is_one_word_name(name):
 # ============================================================
 def classify_nomination(row):
     issues = row["nominee_issues"]
-    raw = row[NOM_COL]
+    raw = str(row[NOM_COL])         # <-- convert to string ALWAYS
     name = row["name_clean"]
 
     # ---------------- TOP LEVEL -----------------
@@ -62,16 +63,18 @@ def classify_nomination(row):
     if "u/g" in name or "u-g" in name or "u\\g" in name:
         return "FailUG"
 
-    # 2) Forbidden words
+    # 2) Forbidden word list
     forbidden_words = ["sdu", "no held", "nomheld", "held", "nominee", "nomination"]
 
-    if any(w in name for w in forbidden_words):
+    contains_forbidden = any(w in name for w in forbidden_words)
 
-        # 2A SNS pattern (String String Number String)
+    if contains_forbidden:
+
+        # 2A SNS pattern: WORD WORD NUMBER WORD
         if re.search(r"[A-Za-z]+\s+[A-Za-z]+\s+\d{2,}\s+[A-Za-z]+", raw, re.IGNORECASE):
             return "FailSNSPattern"
 
-        # 2B NOM + one word
+        # 2B NOM + one-word name
         if "nom" in name and len(name.split()) == 1:
             return "FailNOMOneWord"
 
@@ -81,7 +84,7 @@ def classify_nomination(row):
     if any(rel in name for rel in RELATIONSHIP_WORDS):
         return "FailRelationship"
 
-    # 4) NOM ending with number
+    # 4) NOM ending with a number
     if re.search(r"nom\w*\s*\d{2,}$", name):
         return "FailNOMEndingNumber"
 
@@ -101,7 +104,6 @@ def classify_nomination(row):
 # APPLY CLASSIFICATION
 # ============================================================
 df["NominationCase"] = df.apply(classify_nomination, axis=1)
-
 
 # ============================================================
 # WRITE OUTPUT DATASETS
