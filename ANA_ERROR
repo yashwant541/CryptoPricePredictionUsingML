@@ -1,5 +1,5 @@
 # ============================================================
-#   FINAL NOMINATION CLASSIFICATION SCRIPT (ERROR-PROOF)
+#   FINAL NOMINATION CLASSIFICATION SCRIPT (USING nominee_issues)
 # ============================================================
 
 import dataiku
@@ -7,7 +7,7 @@ import pandas as pd
 import re
 
 # ------------------------------------------------------------
-# READ THE FLAGGED DATASET
+# READ DATASET
 # ------------------------------------------------------------
 df = dataiku.Dataset("AccRelNo_AgainstNominationChecks").get_dataframe()
 
@@ -17,12 +17,11 @@ NOM_COL = "name"
 def clean_text(x):
     if x is None:
         return ""
-    x = str(x)                      # <-- fixes float errors
+    x = str(x)
     return re.sub(r"\s+", " ", x).strip().lower()
 
 df["name_clean"] = df[NOM_COL].apply(clean_text)
 
-# Relationship word list
 RELATIONSHIP_WORDS = [
     "mother","mom","mummy","mamma","ma",
     "father","dad","daddy","papa",
@@ -34,69 +33,97 @@ RELATIONSHIP_WORDS = [
     "guardian","caretaker"
 ]
 
-def is_one_word_name(name):
-    if not isinstance(name, str):
-        return False
-    parts = name.strip().split()
-    return len(parts) == 1 and len(parts[0]) >= 2
+def is_one_word_name(x):
+    x = str(x).strip()
+    return len(x.split()) == 1 and len(x) >= 2
 
 
-# ============================================================
-# CLASSIFICATION LOGIC
-# ============================================================
+# ===================================================================
+#                 CLASSIFICATION LOGIC (UPDATED)
+# ===================================================================
 def classify_nomination(row):
+
     issues = row["nominee_issues"]
-    raw = str(row[NOM_COL])         # <-- convert to string ALWAYS
+    raw = str(row[NOM_COL])             # Safe conversion
     name = row["name_clean"]
 
-    # ---------------- TOP LEVEL -----------------
+    # ----------------------------------------------------------
+    # TOP LEVEL – ISSUE LIST DECIDES FIRST
+    # ----------------------------------------------------------
 
+    # If no issues at all
     if issues == []:
         return "Success"
 
+    # Empty / missing name comes directly from issues list
     if issues == ["Missing or empty name"]:
         return "Empty"
 
-    # ---------------- FAIL CONDITIONS -----------------
+    # Example: Dataiku may produce issues like:
+    # ['Contains digits', 'Invalid characters']
+    # ['Contains relationship terms']
+    # ['Name too short']
+    issues_lower = [i.lower() for i in issues]
 
-    # 1) U/G cases
+    # ----------------------------------------------------------
+    # Direct mapping from nominee_issues
+    # ----------------------------------------------------------
+
+    # 1) Relationship detected by algorithm
+    if any("relationship" in i for i in issues_lower):
+        return "FailRelationship"
+
+    # 2) Contains digits only (AI detected)
+    if "digit only name" in issues_lower or "digits only" in issues_lower:
+        return "FailDigitOnly"
+
+    # 3) Invalid / special characters detected
+    if any("invalid" in i for i in issues_lower):
+        # avoid misclassification
+        return "FailOthers"
+
+    # 4) Name too short from issue list
+    if any("too short" in i for i in issues_lower):
+        return "FailOneWord"
+
+    # ----------------------------------------------------------
+    # NAME PATTERN LOGIC (SECONDARY FILTER)
+    # ----------------------------------------------------------
+
+    # 1) U/G guardian cases
     if "u/g" in name or "u-g" in name or "u\\g" in name:
         return "FailUG"
 
-    # 2) Forbidden word list
     forbidden_words = ["sdu", "no held", "nomheld", "held", "nominee", "nomination"]
-
     contains_forbidden = any(w in name for w in forbidden_words)
 
     if contains_forbidden:
 
-        # 2A SNS pattern: WORD WORD NUMBER WORD
+        # 2A SNS (String String Number String)
         if re.search(r"[A-Za-z]+\s+[A-Za-z]+\s+\d{2,}\s+[A-Za-z]+", raw, re.IGNORECASE):
             return "FailSNSPattern"
 
-        # 2B NOM + one-word name
-        if "nom" in name and len(name.split()) == 1:
+        # 2B NOM + one word
+        if "nom" in name and is_one_word_name(raw):
             return "FailNOMOneWord"
 
         return "FailForbiddenWords"
 
-    # 3) Relationship words
-    if any(rel in name for rel in RELATIONSHIP_WORDS):
-        return "FailRelationship"
-
-    # 4) NOM ending with a number
+    # 3) NOM ending with a number
     if re.search(r"nom\w*\s*\d{2,}$", name):
         return "FailNOMEndingNumber"
 
-    # 5) One-word name
+    # 4) One-word name (fallback)
     if is_one_word_name(raw):
         return "FailOneWord"
 
-    # 6) Digit-only
+    # 5) Only digits (fallback)
     if re.fullmatch(r"\d+", raw.strip()):
         return "FailDigitOnly"
 
-    # 7) Other failures
+    # ----------------------------------------------------------
+    # Fallthrough case
+    # ----------------------------------------------------------
     return "FailOthers"
 
 
@@ -105,27 +132,24 @@ def classify_nomination(row):
 # ============================================================
 df["NominationCase"] = df.apply(classify_nomination, axis=1)
 
+
 # ============================================================
 # WRITE OUTPUT DATASETS
 # ============================================================
-
-# Success
 dataiku.Dataset("SuccessNomination").write_with_schema(
     df[df["NominationCase"] == "Success"]
 )
 
-# Empty
 dataiku.Dataset("EmptyNomination").write_with_schema(
     df[df["NominationCase"] == "Empty"]
 )
 
-# All failures
 fail_df = df[df["NominationCase"].str.startswith("Fail")]
 dataiku.Dataset("FailAllNomination").write_with_schema(fail_df)
 
-# Individual Fail Buckets
+# Individual fail buckets
 for case in fail_df["NominationCase"].unique():
-    dataset_name = f"{case}Nomination"   # e.g. FailUGNomination
+    dataset_name = f"{case}Nomination"
     dataiku.Dataset(dataset_name).write_with_schema(
         fail_df[fail_df["NominationCase"] == case]
     )
