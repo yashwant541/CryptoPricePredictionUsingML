@@ -1,521 +1,232 @@
 # ============================================================
-#   ENHANCED NOMINATION CLASSIFICATION SCRIPT
-#   - Maintains exact dataset structure as specified
-#   - Enhanced logging, validation, and error handling
-#   - Comprehensive metrics and overlap checking
+#      NOMINEE NAME VALIDATION (DATAIKU VERSION)
+#      FINAL VERSION WITH SPECIAL NOMINATION-PATTERN DETECTION
 # ============================================================
 
 import dataiku
 import pandas as pd
 import re
-import numpy as np
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+from rapidfuzz import fuzz
 
 # ------------------------------------------------------------
-# CONFIGURATION
+# READ INPUT DATASET
 # ------------------------------------------------------------
-CONFIG = {
-    # Input dataset
-    "input_dataset": "AccRelNo_AgainstNominationChecks",
-    
-    # Column names
-    "nomination_column": "name",
-    "relationship_column": "relationshipno",
-    "account_column": "accountno",
-    
-    # Classification thresholds
-    "min_name_length": 2,
-    
-    # Pattern configurations
-    "patterns": {
-        "ug_patterns": ["u/g", "u-g", "u\\g", "u g"],
-        "sns_pattern": r"[A-Za-z]+\s+[A-Za-z]+\s+\d{2,}\s+[A-Za-z]+",
-        "nom_ending_number": r"nom\w*\s*\d{2,}$",
-        "digit_only": r"^\d+$",
-    },
-    
-    # Word lists (expanded for better detection)
-    "forbidden_words": [
-        "sdu", "no held", "nomheld", "held", "nominee", 
-        "nomination", "not held", "none", "null", "na", 
-        "n/a", "nil", "blank", "no nominee", "nom not held"
-    ],
-    
-    "relationship_words": [
-        # Parents
-        "mother", "mom", "mummy", "mamma", "ma", "mam", "mommy",
-        "father", "dad", "daddy", "papa", "pappa", "pop", "dada",
-        
-        # Children
-        "son", "daughter", "child", "children", "kid", "kids",
-        "son/dtr", "son/daughter", "s/o", "d/o", "w/o",
-        
-        # Spouse
-        "wife", "husband", "spouse", "partner",
-        
-        # Siblings
-        "brother", "sister", "sibling", "sis", "bro", "bhai", "didi",
-        
-        # Extended family
-        "uncle", "aunty", "aunt", "auntie", "nephew", "niece",
-        "grandmother", "grandfather", "grandma", "grandpa", 
-        "granny", "gramps", "nana", "granddad",
-        
-        # Guardians
-        "guardian", "caretaker", "caregiver",
-        
-        # General
-        "cousin", "relative", "family"
-    ],
-}
+input_ds = dataiku.Dataset("DepAuditAcc_CASA_stacked_joined")
+df = input_ds.get_dataframe()
 
-# ------------------------------------------------------------
-# LOGGER SETUP
-# ------------------------------------------------------------
-class ClassificationLogger:
-    def __init__(self):
-        self.metrics = {
-            "start_time": datetime.now(),
-            "counts": {},
-            "errors": [],
-            "warnings": []
-        }
-    
-    def log(self, message: str, level: str = "INFO"):
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{timestamp}] [{level}] {message}")
-        
-        if level == "WARNING":
-            self.metrics["warnings"].append(message)
-        elif level == "ERROR":
-            self.metrics["errors"].append(message)
-    
-    def record_count(self, category: str, count: int):
-        self.metrics["counts"][category] = count
-    
-    def print_summary(self):
-        total_records = sum(self.metrics["counts"].get(cat, 0) for cat in ["Success", "Empty", "TotalFailures"])
-        duration = datetime.now() - self.metrics["start_time"]
-        
-        print("\n" + "="*60)
-        print("CLASSIFICATION SUMMARY")
-        print("="*60)
-        print(f"Total processing time: {duration}")
-        print(f"Total records processed: {total_records}")
-        print(f"Warnings: {len(self.metrics['warnings'])}")
-        print(f"Errors: {len(self.metrics['errors'])}")
-        
-        print("\nCategory Breakdown:")
-        for category in ["Success", "Empty", "TotalFailures"]:
-            count = self.metrics["counts"].get(category, 0)
-            if total_records > 0:
-                percentage = (count / total_records * 100)
-                print(f"  {category}: {count} ({percentage:.1f}%)")
-        
-        # Show failure breakdown if available
-        fail_categories = [
-            "FailUG", "FailSNSPattern", "FailNOMOneWord", "FailForbiddenWords",
-            "FailRelationship", "FailNOMEndingNumber", "FailOneWord", 
-            "FailDigitOnly", "FailOthers"
-        ]
-        
-        fail_counts = {cat: self.metrics["counts"].get(cat, 0) for cat in fail_categories}
-        total_fails = sum(fail_counts.values())
-        
-        if total_fails > 0:
-            print("\nFailure Breakdown:")
-            for category in fail_categories:
-                count = fail_counts[category]
-                if count > 0:
-                    percentage = (count / total_fails * 100)
-                    print(f"  {category}: {count} ({percentage:.1f}%)")
-
-# Initialize logger
-logger = ClassificationLogger()
+REL_COL = "relationshipno"
+ACC_COL = "accountno"
+NOM_COL = "name"
+ACC_HOLDER_COL = "shortname"
 
 # ------------------------------------------------------------
 # HELPER FUNCTIONS
 # ------------------------------------------------------------
-def clean_text(text: Any) -> str:
-    """Clean and normalize text"""
-    if text is None or pd.isna(text):
-        return ""
-    
-    text = str(text).strip()
-    # Replace multiple spaces, tabs, newlines with single space
-    text = re.sub(r"\s+", " ", text)
-    # Convert to lowercase for case-insensitive matching
-    return text.lower()
 
-def is_one_word_name(text: str) -> bool:
-    """Check if text contains only one word"""
-    text = text.strip()
-    return len(text.split()) == 1 and len(text) >= CONFIG["min_name_length"]
-
-def contains_any(text: str, word_list: List[str]) -> bool:
-    """Check if text contains any of the words in the list"""
-    text_lower = text.lower()
-    return any(word.lower() in text_lower for word in word_list)
-
-def validate_input_data(df: pd.DataFrame) -> bool:
-    """Validate input data structure"""
-    required_columns = [
-        CONFIG["nomination_column"],
-        CONFIG["relationship_column"],
-        CONFIG["account_column"],
-        "nominee_issues"
-    ]
-    
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    
-    if missing_columns:
-        logger.log(f"Missing required columns: {missing_columns}", "ERROR")
+def is_one_word_name(name):
+    if not isinstance(name, str):
         return False
-    
-    # Check for unexpected nulls
-    null_nom_count = df[CONFIG["nomination_column"]].isna().sum()
-    if null_nom_count > 0:
-        logger.log(f"Found {null_nom_count} null values in nomination column", "WARNING")
-    
-    return True
+    parts = name.strip().split()
+    return len(parts) == 1 and len(parts[0]) >= 2
+
+
+# RANDOM/NONSENSE RULES
+RANDOM_WORDS = {"nomination","nominee","nominatn","nominated",
+                "qwerty","asdf","zxcv","xyz","abc","abcd","lmnop"}
+GIBBERISH_PATTERN = re.compile(r"^[A-Za-z]{5,}$")
+VOWEL_RATIO_THRESHOLD = 0.10
+
+
+def is_random_or_nonsense(name):
+    if not isinstance(name, str):
+        return False
+
+    clean = name.strip().lower()
+
+    if clean in RANDOM_WORDS:
+        return True
+
+    # Same character repeated
+    if len(set(clean)) == 1 and len(clean) >= 3:
+        return True
+
+    # Low vowel ratio nonsense
+    if GIBBERISH_PATTERN.match(clean):
+        vowels = sum(ch in "aeiou" for ch in clean)
+        if vowels / (len(clean)+1e-6) < VOWEL_RATIO_THRESHOLD:
+            return True
+
+    return False
+
+
+# RELATIONSHIP WORDS LIST
+RELATIONSHIP_WORDS = [
+    "mother","mom","mummy","mamma","ma",
+    "father","dad","daddy","papa",
+    "son","daughter","child","children",
+    "wife","husband","spouse",
+    "brother","sister","sibling",
+    "uncle","aunty","aunt","nephew","niece",
+    "grandmother","grandfather","grandma","grandpa",
+    "guardian","caretaker"
+]
+
+KEYBOARD_RANDOM = ["qwerty","asdf","zxcv","xyz"]
+PLACEHOLDERS = ["na","n/a","none","null","-","--","nominee","self","unknown"]
+
 
 # ------------------------------------------------------------
-# CLASSIFICATION LOGIC (PRIORITY ORDER)
+# FUZZY SIMILARITY CHECK
 # ------------------------------------------------------------
-def classify_nomination(row: pd.Series) -> str:
-    """
-    Classify nomination with priority order:
-    1. Success (no issues)
-    2. Empty (missing/empty name)
-    3. FailUG
-    4. FailSNSPattern
-    5. FailNOMOneWord
-    6. FailForbiddenWords
-    7. FailRelationship
-    8. FailNOMEndingNumber
-    9. FailOneWord
-    10. FailDigitOnly
-    11. FailOthers
-    """
-    try:
-        # Extract data
-        issues = row.get("nominee_issues", [])
-        raw_name = str(row.get(CONFIG["nomination_column"], "")).strip()
-        cleaned_name = clean_text(raw_name)
-        
-        # Handle non-list issues
-        if not isinstance(issues, list):
-            try:
-                issues = list(issues) if issues else []
-            except:
-                issues = []
-        
-        # 1. Success - no issues
-        if issues == []:
-            return "Success"
-        
-        # 2. Empty - missing or empty name
-        if issues == ["Missing or empty name"] or not cleaned_name:
-            return "Empty"
-        
-        # Convert issues to lowercase for consistency
-        issues_lower = [str(i).lower() for i in issues]
-        
-        # 3. FailUG - U/G cases
-        if contains_any(cleaned_name, CONFIG["patterns"]["ug_patterns"]):
-            return "FailUG"
-        
-        # 4. FailSNSPattern - String String Number String pattern
-        if re.search(CONFIG["patterns"]["sns_pattern"], raw_name, re.IGNORECASE):
-            return "FailSNSPattern"
-        
-        # 5. FailNOMOneWord - Contains "NOM" and is single word
-        if "nom" in cleaned_name and is_one_word_name(raw_name):
-            return "FailNOMOneWord"
-        
-        # 6. FailForbiddenWords - Contains forbidden words
-        if contains_any(cleaned_name, CONFIG["forbidden_words"]):
-            return "FailForbiddenWords"
-        
-        # 7. FailRelationship - Contains relationship words
-        if contains_any(cleaned_name, CONFIG["relationship_words"]):
-            return "FailRelationship"
-        
-        # 8. FailNOMEndingNumber - NOM ending with numbers
-        if re.search(CONFIG["patterns"]["nom_ending_number"], cleaned_name):
-            return "FailNOMEndingNumber"
-        
-        # 9. FailOneWord - Single word names
-        if is_one_word_name(raw_name):
-            return "FailOneWord"
-        
-        # 10. FailDigitOnly - Digit-only names
-        if re.match(CONFIG["patterns"]["digit_only"], raw_name):
-            return "FailDigitOnly"
-        
-        # 11. FailOthers - Catch-all for remaining cases
-        return "FailOthers"
-        
-    except Exception as e:
-        error_msg = f"Classification error for row: {str(e)}"
-        logger.log(error_msg, "ERROR")
-        # Return FailOthers as safe default
-        return "FailOthers"
+def fuzzy_similarity_check(nominee_name, account_holder_name):
+    results = []
+
+    if not isinstance(nominee_name, str) or not isinstance(account_holder_name, str):
+        return results
+
+    nominee_clean = nominee_name.lower().strip()
+    account_clean = account_holder_name.lower().strip()
+    account_tokens = account_clean.split()
+
+    # Substring check
+    for token in account_tokens:
+        if token in nominee_clean:
+            results.append(f"Account holder token '{token}' found in nominee name")
+            break
+
+    # Fuzzy full similarity
+    ratio = fuzz.partial_ratio(account_clean, nominee_clean)
+    if ratio >= 80:
+        results.append(f"High similarity to account holder name ({ratio}%)")
+
+    # Token fuzzy similarity
+    for token in account_tokens:
+        score = fuzz.partial_ratio(token, nominee_clean)
+        if score >= 85:
+            results.append(f"Token-level fuzzy similarity ({token}: {score}%)")
+            break
+
+    return results
+
 
 # ------------------------------------------------------------
-# MAIN PROCESSING FUNCTION
+# SPECIAL PATTERN:
+# “SDU NOM 123112 Ramesh Kumar”
+# NOM + digits + real name
 # ------------------------------------------------------------
-def process_nomination_classification():
-    """Main processing function"""
-    logger.log("Starting nomination classification process")
-    
-    # --------------------------------------------------------
-    # READ DATASET
-    # --------------------------------------------------------
-    try:
-        df = dataiku.Dataset(CONFIG["input_dataset"]).get_dataframe()
-        logger.log(f"Loaded dataset with {len(df)} rows")
-    except Exception as e:
-        logger.log(f"Failed to load dataset: {e}", "ERROR")
-        return
-    
-    # --------------------------------------------------------
-    # VALIDATE INPUT DATA
-    # --------------------------------------------------------
-    if not validate_input_data(df):
-        logger.log("Input data validation failed. Exiting.", "ERROR")
-        return
-    
-    # --------------------------------------------------------
-    # PREPARE DATA
-    # --------------------------------------------------------
-    df["name_clean"] = df[CONFIG["nomination_column"]].apply(clean_text)
-    
-    # --------------------------------------------------------
-    # APPLY CLASSIFICATION
-    # --------------------------------------------------------
-    logger.log("Applying classification rules...")
-    df["NominationCase"] = df.apply(classify_nomination, axis=1)
-    
-    # --------------------------------------------------------
-    # SPLIT INTO DATASETS (AS SPECIFIED)
-    # --------------------------------------------------------
-    logger.log("Splitting data into specified datasets...")
-    
-    # 1️⃣ Independent top-level datasets
-    success_df = df[df["NominationCase"] == "Success"].copy()
-    empty_df = df[df["NominationCase"] == "Empty"].copy()
-    
-    # 2️⃣ All failed cases combined
-    fail_mask = df["NominationCase"].str.startswith("Fail")
-    fail_all_df = df[fail_mask].copy()
-    
-    # Record counts
-    logger.record_count("Success", len(success_df))
-    logger.record_count("Empty", len(empty_df))
-    logger.record_count("TotalFailures", len(fail_all_df))
-    
-    # --------------------------------------------------------
-    # WRITE OUTPUT DATASETS
-    # --------------------------------------------------------
-    logger.log("Writing output datasets...")
-    
-    # Write top-level datasets
-    dataiku.Dataset("SuccessNomination").write_with_schema(success_df)
-    dataiku.Dataset("EmptyNomination").write_with_schema(empty_df)
-    dataiku.Dataset("FailAllNomination").write_with_schema(fail_all_df)
-    
-    # 3️⃣ Mutually exclusive fail category datasets
-    fail_categories = [
-        "FailUG", "FailSNSPattern", "FailNOMOneWord", "FailForbiddenWords",
-        "FailRelationship", "FailNOMEndingNumber", "FailOneWord", 
-        "FailDigitOnly", "FailOthers"
+def is_nomination_statement_format(text):
+    if not isinstance(text, str):
+        return False
+    t = text.lower().strip()
+
+    # Remove punctuation so cases like "N.O.M 123112 Ram" also match
+    t = re.sub(r"[^a-z0-9 ]", " ", t)
+    t = re.sub(r"\s+", " ", t)
+
+    # Regex: NOM* + digits + name
+    pattern = r".*\bnom\w*\b\s*\d{3,}\s+[a-z]"
+    return bool(re.search(pattern, t))
+
+
+# ------------------------------------------------------------
+# MAIN VALIDATION FUNCTION
+# ------------------------------------------------------------
+def validate_nominee_name(nominee_name):
+    issues = []
+
+    if not isinstance(nominee_name, str) or not nominee_name.strip():
+        issues.append("Missing or empty name")
+        return issues
+
+    clean_name = nominee_name.strip()
+    lower_name = clean_name.lower()
+
+    # Normalized version for substring checks
+    lower_name_cleaned = re.sub(r'[^a-z0-9 ]', ' ', lower_name)
+    lower_name_cleaned = re.sub(r'\s+', ' ', lower_name_cleaned).strip()
+
+    # Placeholder
+    if lower_name in PLACEHOLDERS:
+        issues.append("Placeholder / invalid word")
+
+    # One-word name
+    if is_one_word_name(clean_name):
+        issues.append("One-word name (possibly incomplete)")
+
+    # Digits
+    if re.search(r"\d", clean_name):
+        issues.append("Contains digits")
+
+    # Special characters
+    if re.search(r"[^\w\s.'-]", clean_name):
+        issues.append("Contains special characters")
+
+    # Initial-only
+    if re.fullmatch(r"[A-Za-z]\.?", clean_name):
+        issues.append("Initials only")
+
+    # Random/nonsense
+    if is_random_or_nonsense(clean_name):
+        issues.append("Random or nonsensical name")
+
+    # Keyboard junk
+    for kb in KEYBOARD_RANDOM:
+        if kb in lower_name:
+            issues.append(f"Random keyboard-like text found ({kb})")
+            break
+
+    # ★ NEW SPECIAL RULE
+    if is_nomination_statement_format(clean_name):
+        issues.append("Nomination-statement pattern (NOM + digits + name)")
+
+    # Broad nomination detection
+    nom_keywords = [
+        "nom","nomi","nomine","nominee","nominat","nomination",
+        "nominee registered","registered nominee"
     ]
-    
-    for category in fail_categories:
-        subset = fail_all_df[fail_all_df["NominationCase"] == category].copy()
-        dataset_name = f"{category}Nomination"
-        
-        if not subset.empty:
-            dataiku.Dataset(dataset_name).write_with_schema(subset)
-            logger.record_count(category, len(subset))
-        else:
-            logger.record_count(category, 0)
-    
-    # --------------------------------------------------------
-    # VALIDATION AND OVERLAP CHECKS
-    # --------------------------------------------------------
-    logger.log("Performing validation checks...")
-    
-    # Check 1: Ensure all rows are accounted for
-    total_classified = len(success_df) + len(empty_df) + len(fail_all_df)
-    if total_classified != len(df):
-        missing = len(df) - total_classified
-        logger.log(f"WARNING: {missing} rows not classified!", "WARNING")
-    
-    # Check 2: Ensure no overlap between Success, Empty, and Fail
-    rel_col = CONFIG["relationship_column"]
-    acc_col = CONFIG["account_column"]
-    
-    success_keys = set(zip(success_df[rel_col], success_df[acc_col]))
-    empty_keys = set(zip(empty_df[rel_col], empty_df[acc_col]))
-    fail_keys = set(zip(fail_all_df[rel_col], fail_all_df[acc_col]))
-    
-    # Check overlaps between different categories
-    success_empty_overlap = success_keys.intersection(empty_keys)
-    success_fail_overlap = success_keys.intersection(fail_keys)
-    empty_fail_overlap = empty_keys.intersection(fail_keys)
-    
-    if success_empty_overlap:
-        logger.log(f"WARNING: {len(success_empty_overlap)} overlaps between Success and Empty", "WARNING")
-    
-    if success_fail_overlap:
-        logger.log(f"WARNING: {len(success_fail_overlap)} overlaps between Success and Fail", "WARNING")
-    
-    if empty_fail_overlap:
-        logger.log(f"WARNING: {len(empty_fail_overlap)} overlaps between Empty and Fail", "WARNING")
-    
-    # Check 3: Ensure fail categories are mutually exclusive
-    fail_category_dfs = []
-    for category in fail_categories:
-        subset = fail_all_df[fail_all_df["NominationCase"] == category]
-        fail_category_dfs.append(subset)
-    
-    if fail_category_dfs:
-        # Combine all fail category subsets
-        combined_fails = pd.concat(fail_category_dfs)
-        
-        # Check for duplicates across categories
-        overlap_check = combined_fails.groupby([rel_col, acc_col]).size()
-        overlaps = overlap_check[overlap_check > 1]
-        
-        if not overlaps.empty:
-            logger.log(f"WARNING: {len(overlaps)} overlaps detected across fail categories", "WARNING")
-            logger.log("Sample of overlapping records:", "WARNING")
-            
-            # Get sample of overlapping records
-            overlap_samples = []
-            for (rel, acc), count in overlaps.head(3).items():
-                records = combined_fails[(combined_fails[rel_col] == rel) & 
-                                        (combined_fails[acc_col] == acc)]
-                categories = records["NominationCase"].unique()
-                overlap_samples.append(f"  Rel={rel}, Acc={acc}: {count} entries in {categories}")
-            
-            for sample in overlap_samples:
-                logger.log(sample, "WARNING")
-        else:
-            logger.log("✅ All fail categories are mutually exclusive (no overlaps)")
-    
-    # Check 4: Verify all fail rows are in exactly one category
-    total_fail_by_category = sum(len(fail_all_df[fail_all_df["NominationCase"] == cat]) for cat in fail_categories)
-    if total_fail_by_category != len(fail_all_df):
-        missing_fails = len(fail_all_df) - total_fail_by_category
-        logger.log(f"WARNING: {missing_fails} fail rows not assigned to any specific category", "WARNING")
-    
-    # --------------------------------------------------------
-    # DATA QUALITY METRICS
-    # --------------------------------------------------------
-    logger.log("\n" + "="*60)
-    logger.log("DATA QUALITY METRICS")
-    logger.log("="*60)
-    
-    # Calculate percentages
-    total_records = len(df)
-    success_pct = (len(success_df) / total_records * 100) if total_records > 0 else 0
-    empty_pct = (len(empty_df) / total_records * 100) if total_records > 0 else 0
-    fail_pct = (len(fail_all_df) / total_records * 100) if total_records > 0 else 0
-    
-    logger.log(f"Total Records: {total_records}")
-    logger.log(f"Success Nominations: {len(success_df)} ({success_pct:.1f}%)")
-    logger.log(f"Empty Nominations: {len(empty_df)} ({empty_pct:.1f}%)")
-    logger.log(f"Failed Nominations: {len(fail_all_df)} ({fail_pct:.1f}%)")
-    
-    if len(fail_all_df) > 0:
-        logger.log("\nTop Failure Categories:")
-        fail_breakdown = fail_all_df["NominationCase"].value_counts().head(5)
-        for case, count in fail_breakdown.items():
-            pct = (count / len(fail_all_df)) * 100
-            logger.log(f"  {case}: {count} ({pct:.1f}%)")
-    
-    # --------------------------------------------------------
-    # CREATE AUDIT LOG
-    # --------------------------------------------------------
-    try:
-        audit_data = []
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Add summary stats
-        audit_data.append({
-            "Timestamp": timestamp,
-            "Category": "SUMMARY",
-            "Metric": "Total Records",
-            "Value": str(total_records),
-            "Details": "Input dataset row count"
-        })
-        
-        audit_data.append({
-            "Timestamp": timestamp,
-            "Category": "SUMMARY",
-            "Metric": "Success Rate",
-            "Value": f"{success_pct:.1f}%",
-            "Details": f"{len(success_df)} successful nominations"
-        })
-        
-        # Add counts for each category
-        for category in ["Success", "Empty"] + fail_categories:
-            count = len(df[df["NominationCase"] == category])
-            audit_data.append({
-                "Timestamp": timestamp,
-                "Category": "CLASSIFICATION",
-                "Metric": category,
-                "Value": str(count),
-                "Details": f"Rows classified as {category}"
-            })
-        
-        # Add warnings/errors
-        for i, warning in enumerate(self.metrics["warnings"][:10]):  # Limit to 10 warnings
-            audit_data.append({
-                "Timestamp": timestamp,
-                "Category": "WARNING",
-                "Metric": f"Warning_{i+1}",
-                "Value": "⚠",
-                "Details": warning[:200]  # Truncate long messages
-            })
-        
-        audit_df = pd.DataFrame(audit_data)
-        dataiku.Dataset("NominationClassificationAudit").write_with_schema(audit_df)
-        logger.log("Audit log created successfully")
-        
-    except Exception as e:
-        logger.log(f"Could not create audit log: {e}", "WARNING")
-    
-    # --------------------------------------------------------
-    # FINAL SUMMARY
-    # --------------------------------------------------------
-    logger.log("\n" + "="*60)
-    logger.log("PROCESS COMPLETED SUCCESSFULLY")
-    logger.log("="*60)
-    logger.log(f"Output datasets created:")
-    logger.log(f"  1. SuccessNomination")
-    logger.log(f"  2. EmptyNomination")
-    logger.log(f"  3. FailAllNomination")
-    for category in fail_categories:
-        logger.log(f"  4. {category}Nomination")
-    
-    # Print final summary
-    logger.print_summary()
+
+    if any(k in lower_name_cleaned for k in nom_keywords):
+        issues.append("Contains nomination-related pattern")
+
+    # Relationship words
+    if any(re.search(rf"\b{rel}\b", lower_name) for rel in RELATIONSHIP_WORDS):
+        issues.append("Relationship word used instead of name")
+
+    # Length checks
+    if len(clean_name) < 2:
+        issues.append("Name too short")
+    if len(clean_name) > 70:
+        issues.append("Name too long")
+
+    return issues
+
 
 # ------------------------------------------------------------
-# EXECUTION
+# APPLY VALIDATION
 # ------------------------------------------------------------
-if __name__ == "__main__":
-    try:
-        process_nomination_classification()
-        logger.log("\nScript execution completed successfully!")
-    except KeyboardInterrupt:
-        logger.log("\nScript interrupted by user", "WARNING")
-    except Exception as e:
-        logger.log(f"\nUnexpected error in main execution: {e}", "ERROR")
-        # Re-raise to see full traceback in Dataiku logs
-        raise
+df["nominee_issues"] = df[NOM_COL].apply(validate_nominee_name)
+df["issue_count"] = df["nominee_issues"].apply(len)
+
+df["fuzzy_similarity_issues"] = df.apply(
+    lambda x: fuzzy_similarity_check(x[NOM_COL], x[ACC_HOLDER_COL]), axis=1
+)
+
+# Boolean flags
+df["has_nom_pattern"]       = df["nominee_issues"].apply(lambda x: any("nomination" in i.lower() for i in x))
+df["has_relationship_word"] = df["nominee_issues"].apply(lambda x: any("Relationship word" in i for i in x))
+df["is_nonsense"]           = df["nominee_issues"].apply(lambda x: any("nonsensical" in i.lower() for i in x))
+df["is_one_word"]           = df["nominee_issues"].apply(lambda x: any("One-word" in i for i in x))
+df["has_digits"]            = df["nominee_issues"].apply(lambda x: any("Contains digits" in i for i in x))
+df["has_special_chars"]     = df["nominee_issues"].apply(lambda x: any("special characters" in i.lower() for i in x))
+df["is_initial_only"]       = df["nominee_issues"].apply(lambda x: any("Initials only" in i for i in x))
+df["is_placeholder"]        = df["nominee_issues"].apply(lambda x: any("Placeholder" in i for i in x))
+df["is_missing"]            = df["nominee_issues"].apply(lambda x: any("Missing" in i for i in x))
+df["is_nomination_statement"] = df["nominee_issues"].apply(
+    lambda x: any("Nomination-statement pattern" in i for i in x)
+)
+
+# ------------------------------------------------------------
+# WRITE OUTPUT
+# ------------------------------------------------------------
+output_ds = dataiku.Dataset("AccRelNo_AgainstNominationChecks")
+output_ds.write_with_schema(df)
