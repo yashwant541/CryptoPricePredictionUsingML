@@ -1,5 +1,9 @@
 # ============================================================
-#   FINAL NOMINATION CLASSIFICATION SCRIPT (USING nominee_issues)
+#   FINAL NOMINATION CLASSIFICATION SCRIPT (FULL VERSION)
+#   - Uses nominee_issues, cleaned name column
+#   - Mutually exclusive Fail*Nomination categories
+#   - Generates SuccessNomination, EmptyNomination
+#   - Includes internal overlap check
 # ============================================================
 
 import dataiku
@@ -12,8 +16,12 @@ import re
 df = dataiku.Dataset("AccRelNo_AgainstNominationChecks").get_dataframe()
 
 NOM_COL = "name"
+REL_COL = "relationshipno"
+ACC_COL = "accountno"
 
-# Clean text function
+# ------------------------------------------------------------
+# CLEAN NAME COLUMN
+# ------------------------------------------------------------
 def clean_text(x):
     if x is None:
         return ""
@@ -22,6 +30,9 @@ def clean_text(x):
 
 df["name_clean"] = df[NOM_COL].apply(clean_text)
 
+# ------------------------------------------------------------
+# HELPER FUNCTIONS
+# ------------------------------------------------------------
 RELATIONSHIP_WORDS = [
     "mother","mom","mummy","mamma","ma",
     "father","dad","daddy","papa",
@@ -37,119 +48,112 @@ def is_one_word_name(x):
     x = str(x).strip()
     return len(x.split()) == 1 and len(x) >= 2
 
-
-# ===================================================================
-#                 CLASSIFICATION LOGIC (UPDATED)
-# ===================================================================
+# ------------------------------------------------------------
+# CLASSIFICATION LOGIC
+# ------------------------------------------------------------
 def classify_nomination(row):
-
     issues = row["nominee_issues"]
-    raw = str(row[NOM_COL])             # Safe conversion
+    raw = str(row[NOM_COL])
     name = row["name_clean"]
 
-    # ----------------------------------------------------------
-    # TOP LEVEL – ISSUE LIST DECIDES FIRST
-    # ----------------------------------------------------------
-
-    # If no issues at all
+    # -------------------- TOP LEVEL -------------------------
     if issues == []:
         return "Success"
-
-    # Empty / missing name comes directly from issues list
     if issues == ["Missing or empty name"]:
         return "Empty"
 
-    # Example: Dataiku may produce issues like:
-    # ['Contains digits', 'Invalid characters']
-    # ['Contains relationship terms']
-    # ['Name too short']
     issues_lower = [i.lower() for i in issues]
 
-    # ----------------------------------------------------------
-    # Direct mapping from nominee_issues
-    # ----------------------------------------------------------
+    # -------------------- PRIORITY ORDER FOR FAILS -------------------------
 
-    # 1) Relationship detected by algorithm
-    if any("relationship" in i for i in issues_lower):
-        return "FailRelationship"
-
-    # 2) Contains digits only (AI detected)
-    if "digit only name" in issues_lower or "digits only" in issues_lower:
-        return "FailDigitOnly"
-
-    # 3) Invalid / special characters detected
-    if any("invalid" in i for i in issues_lower):
-        # avoid misclassification
-        return "FailOthers"
-
-    # 4) Name too short from issue list
-    if any("too short" in i for i in issues_lower):
-        return "FailOneWord"
-
-    # ----------------------------------------------------------
-    # NAME PATTERN LOGIC (SECONDARY FILTER)
-    # ----------------------------------------------------------
-
-    # 1) U/G guardian cases
+    # 1) U/G cases
     if "u/g" in name or "u-g" in name or "u\\g" in name:
         return "FailUG"
+
+    # 2) SNS pattern (String String Number String) e.g., SDU NOM 123112 Ramesh
+    if re.search(r"[A-Za-z]+\s+[A-Za-z]+\s+\d{2,}\s+[A-Za-z]+", raw, re.IGNORECASE):
+        return "FailSNSPattern"
 
     forbidden_words = ["sdu", "no held", "nomheld", "held", "nominee", "nomination"]
     contains_forbidden = any(w in name for w in forbidden_words)
 
+    # 3) NOM word + one word
+    if "nom" in name and is_one_word_name(raw):
+        return "FailNOMOneWord"
+
+    # 4) Forbidden words (excluding SNS pattern and NOM one word)
     if contains_forbidden:
-
-        # 2A SNS (String String Number String)
-        if re.search(r"[A-Za-z]+\s+[A-Za-z]+\s+\d{2,}\s+[A-Za-z]+", raw, re.IGNORECASE):
-            return "FailSNSPattern"
-
-        # 2B NOM + one word
-        if "nom" in name and is_one_word_name(raw):
-            return "FailNOMOneWord"
-
         return "FailForbiddenWords"
 
-    # 3) NOM ending with a number
+    # 5) Relationship words
+    if any(rel in name for rel in RELATIONSHIP_WORDS):
+        return "FailRelationship"
+
+    # 6) NOM ending with number (like Nom123)
     if re.search(r"nom\w*\s*\d{2,}$", name):
         return "FailNOMEndingNumber"
 
-    # 4) One-word name (fallback)
+    # 7) One-word name (fallback)
     if is_one_word_name(raw):
         return "FailOneWord"
 
-    # 5) Only digits (fallback)
+    # 8) Digit-only name
     if re.fullmatch(r"\d+", raw.strip()):
         return "FailDigitOnly"
 
-    # ----------------------------------------------------------
-    # Fallthrough case
-    # ----------------------------------------------------------
+    # 9) Catch-all others
     return "FailOthers"
 
-
-# ============================================================
+# ------------------------------------------------------------
 # APPLY CLASSIFICATION
-# ============================================================
+# ------------------------------------------------------------
 df["NominationCase"] = df.apply(classify_nomination, axis=1)
 
+# -------------------- CREATE SUCCESS AND EMPTY DATASETS --------------------
+success_df = df[df["NominationCase"] == "Success"]
+empty_df = df[df["NominationCase"] == "Empty"]
 
-# ============================================================
-# WRITE OUTPUT DATASETS
-# ============================================================
-dataiku.Dataset("SuccessNomination").write_with_schema(
-    df[df["NominationCase"] == "Success"]
-)
+dataiku.Dataset("SuccessNomination").write_with_schema(success_df)
+dataiku.Dataset("EmptyNomination").write_with_schema(empty_df)
 
-dataiku.Dataset("EmptyNomination").write_with_schema(
-    df[df["NominationCase"] == "Empty"]
-)
-
+# -------------------- FAILED BASE --------------------
 fail_df = df[df["NominationCase"].str.startswith("Fail")]
 dataiku.Dataset("FailAllNomination").write_with_schema(fail_df)
 
-# Individual fail buckets
-for case in fail_df["NominationCase"].unique():
+# -------------------- MUTUALLY EXCLUSIVE FAIL CATEGORIES --------------------
+fail_categories = [
+    "FailUG",
+    "FailSNSPattern",
+    "FailNOMOneWord",
+    "FailForbiddenWords",
+    "FailRelationship",
+    "FailNOMEndingNumber",
+    "FailOneWord",
+    "FailDigitOnly",
+    "FailOthers"
+]
+
+for case in fail_categories:
     dataset_name = f"{case}Nomination"
-    dataiku.Dataset(dataset_name).write_with_schema(
-        fail_df[fail_df["NominationCase"] == case]
-    )
+    subset = fail_df[fail_df["NominationCase"] == case]
+    dataiku.Dataset(dataset_name).write_with_schema(subset)
+
+# ------------------------------------------------------------
+# FINAL INTERNAL OVERLAP CHECK
+# ------------------------------------------------------------
+# Combine all fail category datasets
+all_fail = pd.concat([fail_df[fail_df["NominationCase"] == c] for c in fail_categories])
+
+# Check duplicates by RelationshipNo + AccountNo
+overlap_check = all_fail.groupby([REL_COL, ACC_COL]).size()
+overlaps = overlap_check[overlap_check > 1]
+
+if not overlaps.empty:
+    print("⚠ Overlaps detected for RelationshipNo + AccountNo combinations:")
+    print(overlaps)
+else:
+    print("✅ No overlaps detected. Each failed row is in exactly one category.")
+
+# ------------------------------------------------------------
+# END OF SCRIPT
+# ------------------------------------------------------------
