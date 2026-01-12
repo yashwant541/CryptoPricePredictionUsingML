@@ -1,232 +1,47 @@
-# ============================================================
-#      NOMINEE NAME VALIDATION (DATAIKU VERSION)
-#      FINAL VERSION WITH SPECIAL NOMINATION-PATTERN DETECTION
-# ============================================================
-
 import dataiku
-import pandas as pd
-import re
-from rapidfuzz import fuzz
 
-# ------------------------------------------------------------
-# READ INPUT DATASET
-# ------------------------------------------------------------
-input_ds = dataiku.Dataset("DepAuditAcc_CASA_stacked_joined")
-df = input_ds.get_dataframe()
+dataset = dataiku.Dataset("your_dataset_name")
+df = dataset.get_dataframe()
 
-REL_COL = "relationshipno"
-ACC_COL = "accountno"
-NOM_COL = "name"
-ACC_HOLDER_COL = "shortname"
+project = dataiku.api_client().get_project(dataiku.default_project_key())
 
-# ------------------------------------------------------------
-# HELPER FUNCTIONS
-# ------------------------------------------------------------
+sender = "your_email@company.com"
 
-def is_one_word_name(name):
-    if not isinstance(name, str):
-        return False
-    parts = name.strip().split()
-    return len(parts) == 1 and len(parts[0]) >= 2
+for _, row in df.iterrows():
+    name = row["name"]
+    email = row["email"]
+    metric = row["metric"]
 
+    html_body = f"""
+    <!DOCTYPE html>
+    <html>
+    <body>
+      <div style="font-family: Arial, sans-serif;">
+        <h2>Hello {name},</h2>
 
-# RANDOM/NONSENSE RULES
-RANDOM_WORDS = {"nomination","nominee","nominatn","nominated",
-                "qwerty","asdf","zxcv","xyz","abc","abcd","lmnop"}
-GIBBERISH_PATTERN = re.compile(r"^[A-Za-z]{5,}$")
-VOWEL_RATIO_THRESHOLD = 0.10
+        <p>Your latest score is <strong>{metric}</strong>.</p>
 
+        <a href="https://your-link.com"
+           style="padding:12px 18px;
+                  background:#1f77b4;
+                  color:#fff;
+                  text-decoration:none;
+                  border-radius:4px;">
+          View Details
+        </a>
 
-def is_random_or_nonsense(name):
-    if not isinstance(name, str):
-        return False
+        <p style="font-size:12px;color:#888;margin-top:30px;">
+          Automated email sent from Dataiku
+        </p>
+      </div>
+    </body>
+    </html>
+    """
 
-    clean = name.strip().lower()
-
-    if clean in RANDOM_WORDS:
-        return True
-
-    # Same character repeated
-    if len(set(clean)) == 1 and len(clean) >= 3:
-        return True
-
-    # Low vowel ratio nonsense
-    if GIBBERISH_PATTERN.match(clean):
-        vowels = sum(ch in "aeiou" for ch in clean)
-        if vowels / (len(clean)+1e-6) < VOWEL_RATIO_THRESHOLD:
-            return True
-
-    return False
-
-
-# RELATIONSHIP WORDS LIST
-RELATIONSHIP_WORDS = [
-    "mother","mom","mummy","mamma","ma",
-    "father","dad","daddy","papa",
-    "son","daughter","child","children",
-    "wife","husband","spouse",
-    "brother","sister","sibling",
-    "uncle","aunty","aunt","nephew","niece",
-    "grandmother","grandfather","grandma","grandpa",
-    "guardian","caretaker"
-]
-
-KEYBOARD_RANDOM = ["qwerty","asdf","zxcv","xyz"]
-PLACEHOLDERS = ["na","n/a","none","null","-","--","nominee","self","unknown"]
-
-
-# ------------------------------------------------------------
-# FUZZY SIMILARITY CHECK
-# ------------------------------------------------------------
-def fuzzy_similarity_check(nominee_name, account_holder_name):
-    results = []
-
-    if not isinstance(nominee_name, str) or not isinstance(account_holder_name, str):
-        return results
-
-    nominee_clean = nominee_name.lower().strip()
-    account_clean = account_holder_name.lower().strip()
-    account_tokens = account_clean.split()
-
-    # Substring check
-    for token in account_tokens:
-        if token in nominee_clean:
-            results.append(f"Account holder token '{token}' found in nominee name")
-            break
-
-    # Fuzzy full similarity
-    ratio = fuzz.partial_ratio(account_clean, nominee_clean)
-    if ratio >= 80:
-        results.append(f"High similarity to account holder name ({ratio}%)")
-
-    # Token fuzzy similarity
-    for token in account_tokens:
-        score = fuzz.partial_ratio(token, nominee_clean)
-        if score >= 85:
-            results.append(f"Token-level fuzzy similarity ({token}: {score}%)")
-            break
-
-    return results
-
-
-# ------------------------------------------------------------
-# SPECIAL PATTERN:
-# “SDU NOM 123112 Ramesh Kumar”
-# NOM + digits + real name
-# ------------------------------------------------------------
-def is_nomination_statement_format(text):
-    if not isinstance(text, str):
-        return False
-    t = text.lower().strip()
-
-    # Remove punctuation so cases like "N.O.M 123112 Ram" also match
-    t = re.sub(r"[^a-z0-9 ]", " ", t)
-    t = re.sub(r"\s+", " ", t)
-
-    # Regex: NOM* + digits + name
-    pattern = r".*\bnom\w*\b\s*\d{3,}\s+[a-z]"
-    return bool(re.search(pattern, t))
-
-
-# ------------------------------------------------------------
-# MAIN VALIDATION FUNCTION
-# ------------------------------------------------------------
-def validate_nominee_name(nominee_name):
-    issues = []
-
-    if not isinstance(nominee_name, str) or not nominee_name.strip():
-        issues.append("Missing or empty name")
-        return issues
-
-    clean_name = nominee_name.strip()
-    lower_name = clean_name.lower()
-
-    # Normalized version for substring checks
-    lower_name_cleaned = re.sub(r'[^a-z0-9 ]', ' ', lower_name)
-    lower_name_cleaned = re.sub(r'\s+', ' ', lower_name_cleaned).strip()
-
-    # Placeholder
-    if lower_name in PLACEHOLDERS:
-        issues.append("Placeholder / invalid word")
-
-    # One-word name
-    if is_one_word_name(clean_name):
-        issues.append("One-word name (possibly incomplete)")
-
-    # Digits
-    if re.search(r"\d", clean_name):
-        issues.append("Contains digits")
-
-    # Special characters
-    if re.search(r"[^\w\s.'-]", clean_name):
-        issues.append("Contains special characters")
-
-    # Initial-only
-    if re.fullmatch(r"[A-Za-z]\.?", clean_name):
-        issues.append("Initials only")
-
-    # Random/nonsense
-    if is_random_or_nonsense(clean_name):
-        issues.append("Random or nonsensical name")
-
-    # Keyboard junk
-    for kb in KEYBOARD_RANDOM:
-        if kb in lower_name:
-            issues.append(f"Random keyboard-like text found ({kb})")
-            break
-
-    # ★ NEW SPECIAL RULE
-    if is_nomination_statement_format(clean_name):
-        issues.append("Nomination-statement pattern (NOM + digits + name)")
-
-    # Broad nomination detection
-    nom_keywords = [
-        "nom","nomi","nomine","nominee","nominat","nomination",
-        "nominee registered","registered nominee"
-    ]
-
-    if any(k in lower_name_cleaned for k in nom_keywords):
-        issues.append("Contains nomination-related pattern")
-
-    # Relationship words
-    if any(re.search(rf"\b{rel}\b", lower_name) for rel in RELATIONSHIP_WORDS):
-        issues.append("Relationship word used instead of name")
-
-    # Length checks
-    if len(clean_name) < 2:
-        issues.append("Name too short")
-    if len(clean_name) > 70:
-        issues.append("Name too long")
-
-    return issues
-
-
-# ------------------------------------------------------------
-# APPLY VALIDATION
-# ------------------------------------------------------------
-df["nominee_issues"] = df[NOM_COL].apply(validate_nominee_name)
-df["issue_count"] = df["nominee_issues"].apply(len)
-
-df["fuzzy_similarity_issues"] = df.apply(
-    lambda x: fuzzy_similarity_check(x[NOM_COL], x[ACC_HOLDER_COL]), axis=1
-)
-
-# Boolean flags
-df["has_nom_pattern"]       = df["nominee_issues"].apply(lambda x: any("nomination" in i.lower() for i in x))
-df["has_relationship_word"] = df["nominee_issues"].apply(lambda x: any("Relationship word" in i for i in x))
-df["is_nonsense"]           = df["nominee_issues"].apply(lambda x: any("nonsensical" in i.lower() for i in x))
-df["is_one_word"]           = df["nominee_issues"].apply(lambda x: any("One-word" in i for i in x))
-df["has_digits"]            = df["nominee_issues"].apply(lambda x: any("Contains digits" in i for i in x))
-df["has_special_chars"]     = df["nominee_issues"].apply(lambda x: any("special characters" in i.lower() for i in x))
-df["is_initial_only"]       = df["nominee_issues"].apply(lambda x: any("Initials only" in i for i in x))
-df["is_placeholder"]        = df["nominee_issues"].apply(lambda x: any("Placeholder" in i for i in x))
-df["is_missing"]            = df["nominee_issues"].apply(lambda x: any("Missing" in i for i in x))
-df["is_nomination_statement"] = df["nominee_issues"].apply(
-    lambda x: any("Nomination-statement pattern" in i for i in x)
-)
-
-# ------------------------------------------------------------
-# WRITE OUTPUT
-# ------------------------------------------------------------
-output_ds = dataiku.Dataset("AccRelNo_AgainstNominationChecks")
-output_ds.write_with_schema(df)
+    project.send_email(
+        sender=sender,
+        to=[email],
+        subject=f"Hello {name} – Your Update",
+        message=html_body,
+        mime_type="text/html"
+    )
